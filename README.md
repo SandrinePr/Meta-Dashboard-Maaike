@@ -281,6 +281,39 @@ De tests gebruiken HTTP mocking, dus er worden geen echte Meta API-calls gedaan:
 pytest -q
 ```
 
+## Maaike-dashboard (React + FastAPI)
+
+Dit is de ontwikkelbasis voor Maaike. De Streamlit-ingang `app_maaike.py` blijft beschikbaar als terugval en gebruikt dezelfde SQLite-database `data/maaike_redrock.db`. De TAOL-app (`app.py`, `data/social_search.db`) blijft een apart programma.
+
+Start twee processen vanuit de projectmap. Meta- of AI-sleutels zijn niet nodig om het scherm te openen.
+
+Backend:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn maaike_web.app:app --host 127.0.0.1 --port 8000 --no-access-log
+```
+
+Frontend, in een tweede venster:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Open daarna http://127.0.0.1:5173
+
+Adressen staan in de omgeving, met deze standaardwaarden:
+
+- `MAAIKE_FRONTEND_URL=http://127.0.0.1:5173`
+- `MAAIKE_BACKEND_URL=http://127.0.0.1:8000`
+- `MAAIKE_CORS_ORIGINS=http://127.0.0.1:5173`
+- `MAAIKE_WEB_OAUTH_REDIRECT_URI=http://127.0.0.1:8000/api/meta/callback`
+
+De frontend leest `VITE_API_URL` (zie `frontend/.env.example`). Gebruik overal `127.0.0.1`, niet afwisselend met `localhost`, zodat de sessiecookie meegaat.
+
+De Streamlit-terugval start met `streamlit run app_maaike.py`. Die gebruikt een ander callback-adres: `http://127.0.0.1:8502/`.
+
 ## Huidige status
 
 - Dashboard: zoeken, performance per maand, social vergelijking.

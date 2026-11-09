@@ -16,13 +16,16 @@ from ui.comparison import PAGE_TITLE, render_comparison_page
 from ui.components import (
     MIN_QUERY_LENGTH,
     inject_styles,
+    render_ai_settings_sidebar_button,
     render_comparison_sidebar_button,
     render_filter_page_sidebar_button,
+    render_image_test_sidebar_button,
     render_performance_sidebar_button,
     render_results_section,
     render_search_form,
     render_sidebar_stats,
     render_sync_result,
+    render_weekly_report_sidebar_button,
 )
 from ui.performance import render_performance_tab
 
@@ -59,7 +62,13 @@ def main() -> None:
         st.session_state.dashboard_page = "search"
 
     page = st.session_state.dashboard_page
-    title = PAGE_TITLE if page == "comparison" else "Social Media Search Dashboard"
+    titles = {
+        "comparison": PAGE_TITLE,
+        "weekly": "Weekrapport",
+        "image_test": "Beeldtest",
+        "ai": "AI-koppeling",
+    }
+    title = titles.get(page, "Social Media Search Dashboard")
     st.markdown(
         f'<h1 class="rro-page-title">{title}</h1>',
         unsafe_allow_html=True,
@@ -141,11 +150,26 @@ def main() -> None:
         render_performance_sidebar_button(page == "performance")
         render_filter_page_sidebar_button(page == "search")
         render_comparison_sidebar_button(page == "comparison")
+        render_weekly_report_sidebar_button(page == "weekly")
+        render_image_test_sidebar_button(page == "image_test")
+        render_ai_settings_sidebar_button(page == "ai")
 
     if page == "performance":
         render_performance_tab()
     elif page == "comparison":
         render_comparison_page()
+    elif page == "weekly":
+        from ui.weekly_report import render_weekly_report_page
+
+        render_weekly_report_page()
+    elif page == "image_test":
+        from ui.image_test import render_image_test_page
+
+        render_image_test_page()
+    elif page == "ai":
+        from ui.ai_settings import render_ai_settings_page
+
+        render_ai_settings_page()
     else:
         _render_search_tab()
 

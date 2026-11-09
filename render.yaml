@@ -1,3 +1,6 @@
+# Reports and measurements live in the SQLite file from DATABASE_PATH.
+# This file does not attach a paid disk and does not change the current plan.
+# A lasting copy needs DATABASE_PATH on storage that survives redeploys.
 services:
   - type: web
     name: meta-dashboard

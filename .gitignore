@@ -2,8 +2,14 @@
 __pycache__/
 .pytest_cache/
 *.pyc
+frontend/node_modules/
+frontend/dist/
 
 .env
+frontend/.env
+frontend/.env.local
+frontend/.env.development.local
+data/local-https/
 data/*.db
 data/*.sqlite
 data/*.db-journal
@@ -12,3 +18,12 @@ data/backups/
 !data/seed_media.zip
 !data/seed_version.txt
 data/media/
+data/uploads/
+data/imports/
+data/report_pdfs/
+data/ai_trial_media/
+data/_last_client_report_gen.json
+data/_tmp_qa_search.db.seed_version
+
+# Local reference dump — too large for GitHub
+Original/

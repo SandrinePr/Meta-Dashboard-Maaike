@@ -486,6 +486,46 @@ class MetaClient:
             use_page_token=True,
         )
 
+    def get_instagram_comment_replies(
+        self,
+        comment_id: str,
+        *,
+        limit: int | None = 50,
+    ) -> list[dict[str, Any]]:
+        """Fetch replies under one Instagram comment. Does not invent missing replies."""
+        if not comment_id.strip():
+            raise MetaConfigError("comment_id is required for Instagram reply fetch.")
+        params: dict[str, Any] = {"fields": "id,text,timestamp,username"}
+        if limit is not None:
+            params["limit"] = limit
+        return self.get_paginated(
+            f"{comment_id.strip()}/replies",
+            params=params,
+            use_page_token=True,
+        )
+
+    def get_instagram_media_children(self, media_id: str) -> list[dict[str, Any]]:
+        """Fetch carousel children in API order, following next pages."""
+        if not media_id.strip():
+            raise MetaConfigError("media_id is required for Instagram children fetch.")
+        return self.get_paginated(
+            f"{media_id.strip()}/children",
+            params={"fields": "id,media_type,media_url,thumbnail_url"},
+            use_page_token=True,
+        )
+
+    def get_instagram_media_content(self, media_id: str) -> dict[str, Any]:
+        """Fetch caption and media URLs for one own Instagram post."""
+        if not media_id.strip():
+            raise MetaConfigError("media_id is required for Instagram content fetch.")
+        from meta.content_media import OWN_CONTENT_FIELDS, as_content_fields
+
+        return self.get_json(
+            media_id.strip(),
+            params={"fields": as_content_fields(OWN_CONTENT_FIELDS)},
+            use_page_token=True,
+        )
+
     def get_facebook_page_posts(
         self,
         page_id: str | None = None,

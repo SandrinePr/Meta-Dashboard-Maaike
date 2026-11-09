@@ -1757,5 +1757,56 @@ table.rro-comparison-table small,
     font-weight: 800 !important;
     color: var(--rro-cta) !important;
 }
+
+.rro-week-alert {
+    background: #3a2a1c !important;
+    border: 1px solid var(--rro-cta) !important;
+    border-radius: var(--rro-radius-sm) !important;
+    padding: 12px 14px !important;
+    margin: 0 0 12px 0 !important;
+    font-weight: 700 !important;
+}
+.rro-week-meta {
+    display: grid !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px !important;
+    margin: 0 0 8px 0 !important;
+}
+.rro-week-meta div {
+    background: #1A2230 !important;
+    border: 1px solid var(--rro-border) !important;
+    border-radius: var(--rro-radius-sm) !important;
+    padding: 10px 12px !important;
+    font-size: 0.9rem !important;
+}
+
+@media print {
+    section[data-testid="stSidebar"],
+    [data-testid="stHeader"],
+    [data-testid="stToolbar"],
+    .stButton,
+    .stDownloadButton,
+    [data-testid="stSelectbox"],
+    [data-testid="stDateInput"] {
+        display: none !important;
+    }
+    .stApp,
+    section.main,
+    [data-testid="stMain"],
+    div.stMainBlockContainer.block-container {
+        background: #ffffff !important;
+        color: #1c1915 !important;
+        box-shadow: none !important;
+        border: 0 !important;
+    }
+    .rro-week-meta div,
+    table.rro-comparison-table,
+    table.rro-comparison-table th,
+    table.rro-comparison-table td,
+    h1, h2, h3, p, li, span, div {
+        color: #1c1915 !important;
+        background: #ffffff !important;
+    }
+}
 </style>
 """

@@ -3,7 +3,7 @@
 from datetime import date
 from pathlib import Path
 
-from db.database import get_connection, initialize_database
+from db.database import get_connection
 from db.repository import rebuild_search_index, sync_post_hashtags, upsert_account, upsert_post
 from search.engine import SearchResult, search
 from ui.components import (
@@ -244,7 +244,15 @@ def test_comment_mention_produces_tag_badge() -> None:
 def _seed_search_posts(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "test.db"
     monkeypatch.setenv("DATABASE_PATH", str(db_path))
-    initialize_database(db_path)
+    # Schema only — do not call initialize_database (that copies the full seed DB
+    # and makes "match" queries hit unrelated Art-of-Living rows).
+    from db.migrate import apply_comparison_schema
+
+    schema_path = Path(__file__).resolve().parents[1] / "db" / "schema.sql"
+    with get_connection(db_path) as conn:
+        conn.executescript(schema_path.read_text(encoding="utf-8"))
+        apply_comparison_schema(conn)
+        conn.commit()
 
     with get_connection() as conn:
         account_id = upsert_account(conn, platform="instagram", external_id="ig-1")

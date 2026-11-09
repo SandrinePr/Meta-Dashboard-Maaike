@@ -325,6 +325,45 @@ def render_comparison_sidebar_button(is_active: bool) -> None:
         st.rerun()
 
 
+def render_weekly_report_sidebar_button(is_active: bool) -> None:
+    """Open the weekly results page from the sidebar."""
+    if st.button(
+        "Weekrapport",
+        type="tertiary" if is_active else "primary",
+        icon=":material/calendar_month:",
+        use_container_width=True,
+        key="nav_weekly",
+    ):
+        st.session_state.dashboard_page = "weekly"
+        st.rerun()
+
+
+def render_image_test_sidebar_button(is_active: bool) -> None:
+    """Open the local image comparison page from the sidebar."""
+    if st.button(
+        "Beeldtest",
+        type="tertiary" if is_active else "primary",
+        icon=":material/image:",
+        use_container_width=True,
+        key="nav_image_test",
+    ):
+        st.session_state.dashboard_page = "image_test"
+        st.rerun()
+
+
+def render_ai_settings_sidebar_button(is_active: bool) -> None:
+    """Open the AI connection and prompt page from the sidebar."""
+    if st.button(
+        "AI-koppeling",
+        type="tertiary" if is_active else "primary",
+        icon=":material/tune:",
+        use_container_width=True,
+        key="nav_ai",
+    ):
+        st.session_state.dashboard_page = "ai"
+        st.rerun()
+
+
 def render_sidebar_stats(totals: dict) -> None:
     """Render sidebar sync statistics with icons."""
     st.markdown('<div class="rro-sidebar-title">Synchronisatie</div>', unsafe_allow_html=True)

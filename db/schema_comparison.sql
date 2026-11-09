@@ -124,3 +124,65 @@ CREATE INDEX IF NOT EXISTS idx_discovery_request_log_run
     ON comparison_discovery_request_log(fetch_run_id, page_index);
 CREATE INDEX IF NOT EXISTS idx_discovery_checkpoints_updated
     ON comparison_discovery_checkpoints(updated_at DESC);
+
+-- Frozen weekly reports. Opening one reads this row and does not call Meta or AI.
+CREATE TABLE IF NOT EXISTS weekly_reports (
+    id INTEGER PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    period_start TEXT NOT NULL,
+    period_end TEXT NOT NULL,
+    own_account_id INTEGER,
+    account_label TEXT,
+    snapshot_json TEXT NOT NULL,
+    ai_status TEXT NOT NULL,
+    ai_summary TEXT,
+    ai_advice_json TEXT,
+    ai_model TEXT,
+    ai_generated_at TEXT,
+    FOREIGN KEY(own_account_id) REFERENCES accounts(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_reports_created
+    ON weekly_reports(created_at DESC);
+
+-- Editable instruction texts only. API keys stay in the environment, never here.
+CREATE TABLE IF NOT EXISTS ai_prompt_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    system_prompt TEXT NOT NULL,
+    user_prompt TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- Ordered media parts for one post. A URL here is not proof that a model saw the file.
+CREATE TABLE IF NOT EXISTS post_media_items (
+    id INTEGER PRIMARY KEY,
+    post_id INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    external_id TEXT,
+    media_type TEXT,
+    source_url TEXT,
+    local_path TEXT,
+    available INTEGER NOT NULL DEFAULT 0,
+    unavailable_reason TEXT,
+    fetched_at TEXT NOT NULL,
+    UNIQUE(post_id, position, role),
+    FOREIGN KEY(post_id) REFERENCES posts(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_post_media_items_post
+    ON post_media_items(post_id, position);
+
+-- One stored content description per post. Unchanged content is not sent again.
+CREATE TABLE IF NOT EXISTS content_descriptions (
+    post_id INTEGER PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    coverage TEXT NOT NULL,
+    coverage_note TEXT,
+    description_json TEXT,
+    files_processed_json TEXT,
+    model TEXT,
+    prompt_version TEXT,
+    analyzed_at TEXT,
+    FOREIGN KEY(post_id) REFERENCES posts(id)
+);
