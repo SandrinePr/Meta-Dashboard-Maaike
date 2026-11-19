@@ -113,6 +113,10 @@ def feed_card(post: StoredPost, *, formula_rating: dict | None = None) -> dict:
         "formula_rating": formula or None,
         "excel_rating": post.rating_text,
         "excel_rating_source": post.rating_source_label,
+        "log_rating": post.rating_text or "",
+        "log_insight": post.insight_text or "",
+        "log_action": post.action_text or "",
+        "figma_url": getattr(post, "figma_url", None) or "",
     }
 
 

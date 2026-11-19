@@ -57,6 +57,15 @@ def ensure_tables(conn) -> None:
         );
         """
     )
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(client_comparison_preferences)").fetchall()}
+    for name, declaration in (
+        ("weekly_enabled", "INTEGER NOT NULL DEFAULT 0"),
+        ("weekly_weekday", "INTEGER NOT NULL DEFAULT 0"),  # 0=ma … 6=zo
+        ("weekly_time", "TEXT NOT NULL DEFAULT '09:00'"),
+        ("weekly_note", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        if name not in cols:
+            conn.execute(f"ALTER TABLE client_comparison_preferences ADD COLUMN {name} {declaration}")
 
 
 def normalize_username(value: str) -> str:
@@ -237,6 +246,7 @@ def comparison_state(
             "limitation": None,
         },
         "schedule": _schedule_payload(),
+        "weekly_plan": _weekly_plan(conn, client_id),
         "empty_data_message": EMPTY_DATA_MESSAGE,
         "not_fetched_message": NOT_FETCHED_MESSAGE,
     }
@@ -252,6 +262,86 @@ def _schedule_payload() -> dict:
             "enabled": False,
             "detail": "Scheduler niet beschikbaar in dit proces.",
         }
+
+
+WEEKDAY_LABELS = ("maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag", "zondag")
+
+
+def _weekly_plan(conn, client_id: int) -> dict:
+    ensure_tables(conn)
+    row = conn.execute(
+        """
+        SELECT weekly_enabled, weekly_weekday, weekly_time, weekly_note
+        FROM client_comparison_preferences WHERE client_id = ?
+        """,
+        (client_id,),
+    ).fetchone()
+    enabled = bool(row["weekly_enabled"]) if row else False
+    weekday = int(row["weekly_weekday"]) if row else 0
+    time_s = str(row["weekly_time"] if row else "09:00") or "09:00"
+    note = str(row["weekly_note"] if row else "") or ""
+    return {
+        "enabled": enabled,
+        "weekday": weekday,
+        "weekday_label": WEEKDAY_LABELS[weekday] if 0 <= weekday <= 6 else WEEKDAY_LABELS[0],
+        "time": time_s,
+        "note": note,
+        "auto_execute": False,
+        "status": "gepland (handmatig; auto-uitvoering uit in productie)",
+        "weekday_options": [{"value": i, "label": label} for i, label in enumerate(WEEKDAY_LABELS)],
+    }
+
+
+def save_weekly_plan(
+    conn,
+    client_id: int,
+    *,
+    enabled: bool = False,
+    weekday: int = 0,
+    time: str = "09:00",
+    note: str = "",
+) -> dict:
+    ensure_tables(conn)
+    wd = max(0, min(6, int(weekday)))
+    time_s = str(time or "09:00").strip() or "09:00"
+    from datetime import datetime, timezone
+
+    now = datetime.now(tz=timezone.utc).isoformat()
+    row = conn.execute(
+        "SELECT competitors_json, period_key, custom_start, custom_end FROM client_comparison_preferences WHERE client_id = ?",
+        (client_id,),
+    ).fetchone()
+    competitors = row["competitors_json"] if row else "[]"
+    period_key = (row["period_key"] if row else None) or "3m"
+    custom_start = row["custom_start"] if row else None
+    custom_end = row["custom_end"] if row else None
+    conn.execute(
+        """
+        INSERT INTO client_comparison_preferences (
+            client_id, competitors_json, period_key, custom_start, custom_end, updated_at,
+            weekly_enabled, weekly_weekday, weekly_time, weekly_note
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(client_id) DO UPDATE SET
+            weekly_enabled = excluded.weekly_enabled,
+            weekly_weekday = excluded.weekly_weekday,
+            weekly_time = excluded.weekly_time,
+            weekly_note = excluded.weekly_note,
+            updated_at = excluded.updated_at
+        """,
+        (
+            client_id,
+            competitors,
+            period_key,
+            custom_start,
+            custom_end,
+            now,
+            1 if enabled else 0,
+            wd,
+            time_s,
+            str(note or "").strip(),
+        ),
+    )
+    return _weekly_plan(conn, client_id)
 
 
 def save_competitors(conn, client_id: int, competitors: list[str]) -> dict:

@@ -118,6 +118,56 @@ export default function StrategyPage({ client }) {
             An incomplete strategy does not block Social posts, import or reports. Meta is not required.
           </div>
 
+          <StrategyImportPanel
+            clientId={client.id}
+            onApplied={(payload) => {
+              setData(payload);
+              setNotice("Strategie-import opgeslagen (handmatige antwoorden behouden).");
+            }}
+            onError={setError}
+          />
+
+          {(data.overview_sections || []).length ? (
+            <section className="card stack">
+              <h3>Overzicht per klant</h3>
+              <p className="hint">
+                Bedrijfscontext, doelen, platforms en afspraken — geen onboarding opnieuw als dit al
+                uit Canva/PDF staat.
+              </p>
+              {(data.overview_sections || []).map((section) => (
+                <div key={section.id} className="stack">
+                  <h4 style={{ marginBottom: 0 }}>{section.title}</h4>
+                  <ul className="plain-list">
+                    {(section.items || []).map((item) => (
+                      <li key={`${section.id}-${item.label}`}>
+                        <strong>{item.label}:</strong>{" "}
+                        {String(item.value || "").trim() ? (
+                          String(item.value).length > 280 ? (
+                            `${String(item.value).slice(0, 280)}…`
+                          ) : (
+                            item.value
+                          )
+                        ) : (
+                          <span className="muted">— ontbreekt</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+              {(data.missing_overview || []).length ? (
+                <p className="banner warn-soft">
+                  Ontbrekend: {(data.missing_overview || []).slice(0, 8).join(" · ")}
+                  {(data.missing_overview || []).length > 8
+                    ? ` · +${data.missing_overview.length - 8}`
+                    : ""}
+                </p>
+              ) : (
+                <p className="banner">Alle overzichtvelden hebben inhoud.</p>
+              )}
+            </section>
+          ) : null}
+
           <section className="card stack">
             <h3>Strategy & targets</h3>
             <p className="hint">
@@ -416,6 +466,132 @@ export default function StrategyPage({ client }) {
       {error ? <p className="banner error">{error}</p> : null}
       {notice ? <p className="banner">{notice}</p> : null}
     </div>
+  );
+}
+
+function StrategyImportPanel({ clientId, onApplied, onError }) {
+  const [canvaUrl, setCanvaUrl] = useState("");
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <section className="card stack">
+      <h3>Import strategie (Canva / PDF)</h3>
+      <p className="hint">
+        Plak de Canva-bronlink of upload de PDF-export. Eerst preview — pas na bevestiging wordt
+        opgeslagen. Bestaande handmatige antwoorden blijven staan.
+      </p>
+      <div className="row-actions wrap">
+        <label style={{ flex: 1, minWidth: "16rem" }}>
+          Canva-link
+          <input
+            value={canvaUrl}
+            onChange={(e) => setCanvaUrl(e.target.value)}
+            placeholder="https://www.canva.com/design/…"
+          />
+        </label>
+        <button
+          className="secondary"
+          type="button"
+          disabled={busy || !canvaUrl.trim()}
+          onClick={() => {
+            setBusy(true);
+            api(`/api/clients/${clientId}/strategy/import/canva-preview`, {
+              method: "POST",
+              body: { url: canvaUrl.trim() },
+            })
+              .then(setPreview)
+              .catch((exc) => onError(exc.message))
+              .finally(() => setBusy(false));
+          }}
+        >
+          Preview Canva-link
+        </button>
+        <label className="secondary file-btn">
+          PDF preview
+          <input
+            type="file"
+            accept="application/pdf,.pdf"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (!file) return;
+              const body = new FormData();
+              body.append("file", file);
+              setBusy(true);
+              api(`/api/clients/${clientId}/strategy/import/pdf-preview`, {
+                method: "POST",
+                body,
+                raw: true,
+              })
+                .then(setPreview)
+                .catch((exc) => onError(exc.message))
+                .finally(() => {
+                  setBusy(false);
+                  event.target.value = "";
+                });
+            }}
+          />
+        </label>
+      </div>
+      {preview ? (
+        <div className="stack">
+          <p className="banner">
+            Bron: <strong>{preview.source_kind}</strong>
+            {preview.filename ? ` · ${preview.filename}` : ""}
+            {preview.canva_url ? (
+              <>
+                {" "}
+                ·{" "}
+                <a href={preview.canva_url} target="_blank" rel="noreferrer">
+                  open Canva
+                </a>
+              </>
+            ) : null}
+          </p>
+          {preview.note ? <p className="hint">{preview.note}</p> : null}
+          {preview.excerpt ? (
+            <pre className="hint" style={{ whiteSpace: "pre-wrap", maxHeight: "12rem", overflow: "auto" }}>
+              {preview.excerpt}
+            </pre>
+          ) : null}
+          {(preview.filled_keys || []).length ? (
+            <p className="hint">Gevonden velden: {preview.filled_keys.join(", ")}</p>
+          ) : null}
+          {(preview.missing || []).length ? (
+            <p className="banner warn-soft">
+              Nog open na import: {preview.missing.slice(0, 6).join(" · ")}
+              {preview.missing.length > 6 ? ` · +${preview.missing.length - 6}` : ""}
+            </p>
+          ) : null}
+          <div className="row-actions">
+            <button
+              className="primary"
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                api(`/api/clients/${clientId}/strategy/import/apply`, {
+                  method: "POST",
+                  body: { proposed: preview.proposed || {}, preserve_manual: true },
+                })
+                  .then((payload) => {
+                    setPreview(null);
+                    onApplied(payload);
+                  })
+                  .catch((exc) => onError(exc.message))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              Opslaan na preview
+            </button>
+            <button className="secondary" type="button" onClick={() => setPreview(null)}>
+              Annuleren
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 }
 

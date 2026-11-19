@@ -223,6 +223,18 @@ def list_reports(conn, client_id: int, *, report_type: str | None = None) -> dic
     # Newest preparations first so a just-saved report is easy to reopen after reload.
     q += " ORDER BY COALESCE(updated_at, prepared_at, created_at) DESC, id DESC"
     rows = [dict(r) for r in conn.execute(q, params).fetchall()]
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(client_reports)").fetchall()}
+    has_origin = "origin" in cols
+    if has_origin:
+        origin_by_id = {
+            int(r["id"]): (r["origin"] or "")
+            for r in conn.execute(
+                "SELECT id, origin FROM client_reports WHERE client_id = ?",
+                (client_id,),
+            ).fetchall()
+        }
+    else:
+        origin_by_id = {}
     from maaike.report_review import review_summary_for_list
 
     for row in rows:
@@ -234,6 +246,8 @@ def list_reports(conn, client_id: int, *, report_type: str | None = None) -> dic
         row["analysis_usable"] = bool(summary.get("analysis_usable"))
         row["review_execution_key"] = summary.get("execution_key") or ""
         row["is_partial"] = bool(row.get("is_partial"))
+        row["origin"] = origin_by_id.get(int(row["id"]), "")
+        row["from_plan"] = row["origin"] == "report_plan"
         # Voorbereiding zonder uitvoering mag nooit als goedgekeurd of AI-afgerond gelden.
         if not row.get("executed_at") or row.get("status") == "prepared":
             row["is_approved"] = False
@@ -608,6 +622,29 @@ def _legend_payload(conn, client_id: int) -> dict[str, Any]:
     }
 
 
+def _count_figma_planning_items(conn, client_id: int, *, year: int, month: int) -> int:
+    """Count Figma planning items for the planning month (posts, stories, reels, …)."""
+    try:
+        from maaike.figma_planning import ensure_figma_tables
+
+        ensure_figma_tables(conn)
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM figma_planning_items
+            WHERE client_id = ?
+              AND (
+                    (period_year = ? AND period_month = ?)
+                    OR period_year IS NULL
+                  )
+            """,
+            (client_id, year, month),
+        ).fetchone()
+        return int(row["n"] or 0)
+    except Exception:
+        return 0
+
+
 def _available_stories(conn, client_id: int, *, year: int, month: int) -> dict[str, Any]:
     """Client-scoped stories from Figma planning + posts, for the period."""
     stories = []
@@ -685,14 +722,32 @@ def _available_stories(conn, client_id: int, *, year: int, month: int) -> dict[s
 
 
 def _trend_summary(conn, client_id: int, linked_trend_report_id: int | None) -> dict[str, Any] | None:
+    """Resolve a trend report for linking.
+
+    Same-client trends are preferred, but a completed/mock trend from another
+    client may be reused as the shared monthly trend for all clients.
+    """
     if linked_trend_report_id is None:
         return None
     row = conn.execute(
         "SELECT * FROM client_reports WHERE id = ? AND client_id = ? AND report_type = 'trend'",
         (linked_trend_report_id, client_id),
     ).fetchone()
+    shared = False
     if row is None:
-        raise ValueError("Gekozen trendrapport hoort niet bij deze klant.")
+        row = conn.execute(
+            """
+            SELECT * FROM client_reports
+            WHERE id = ? AND report_type = 'trend'
+              AND status IN ('completed', 'mock_completed')
+            """,
+            (linked_trend_report_id,),
+        ).fetchone()
+        shared = row is not None
+    if row is None:
+        raise ValueError(
+            "Gekozen trendrapport bestaat niet of is niet bruikbaar als gedeeld maandtrend."
+        )
     return {
         "id": row["id"],
         "title": row["title"],
@@ -700,8 +755,12 @@ def _trend_summary(conn, client_id: int, linked_trend_report_id: int | None) -> 
         "version": row["version"],
         "period_year": row["period_year"],
         "period_month": row["period_month"],
+        "planning_year": row["planning_year"] if "planning_year" in row.keys() else None,
+        "planning_month": row["planning_month"] if "planning_month" in row.keys() else None,
         "is_mock": bool(row["is_mock"]),
         "body_present": bool(str(row["body_json"] or "").strip() not in ("", "{}")),
+        "shared_across_clients": shared,
+        "owner_client_id": int(row["client_id"]),
     }
 
 
@@ -915,8 +974,19 @@ def inspect_client_report_data(
     trend = _trend_summary(conn, client_id, linked_trend_report_id)
     metrics = period_bundle["metrics"]
     posts = period_bundle["posts"]
+    # X+2 planning frame (september-analyse → novemberplanning) before enrich
+    py, pm = int(period_bundle["period"]["year"]), int(period_bundle["period"]["month"])
+    plan_m = pm + 2
+    plan_y = py
+    while plan_m > 12:
+        plan_m -= 12
+        plan_y += 1
     analysis_context, stories, historical = _enrich_client_report_context(
-        conn, client_id, period_bundle=period_bundle
+        conn,
+        client_id,
+        period_bundle=period_bundle,
+        planning_year=plan_y,
+        planning_month=plan_m,
     )
 
     missing: list[str] = []
@@ -964,7 +1034,52 @@ def inspect_client_report_data(
         "seo_sources_supplied": False,
         "competitor_sources_supplied": False,
         "ahrefs_sources_supplied": False,
+        "figma_items": _count_figma_planning_items(conn, client_id, year=plan_y, month=plan_m),
+        "log_insights": sum(
+            1
+            for p in posts
+            if (p.get("excel_assessment") or {}).get("insight_text")
+            or (p.get("ai_analysis") or {}).get("insight_text")
+        ),
     }
+    input_checklist = [
+        {
+            "id": "strategy",
+            "label": "Klantstrategie",
+            "ready": bool(strategy.get("start_answers")),
+            "detail": "Targets & Strategy / Canva-import",
+        },
+        {
+            "id": "period",
+            "label": "Gekozen periode",
+            "ready": metrics["post_count"] > 0,
+            "detail": f"{py}-{pm:02d} → planning {plan_y}-{plan_m:02d} (X+2)",
+        },
+        {
+            "id": "posts",
+            "label": "Echte postresultaten",
+            "ready": metrics["post_count"] > 0,
+            "detail": f"{metrics['post_count']} posts in periode",
+        },
+        {
+            "id": "logs",
+            "label": "Inzichten uit Logs",
+            "ready": available["log_insights"] > 0,
+            "detail": f"{available['log_insights']} posts met insight",
+        },
+        {
+            "id": "figma",
+            "label": "Gekoppelde Figma-planning",
+            "ready": available["figma_items"] > 0,
+            "detail": f"{available['figma_items']} planningitems",
+        },
+        {
+            "id": "trend",
+            "label": "Algemeen trendrapport",
+            "ready": trend is not None,
+            "detail": (trend or {}).get("title") if trend else "Nog niet gekoppeld",
+        },
+    ]
     prompt_input = _client_report_prompt_input(
         strategy=strategy,
         legend=legend,
@@ -983,11 +1098,14 @@ def inspect_client_report_data(
             "version": r["version"],
             "period_year": r["period_year"],
             "period_month": r["period_month"],
+            "planning_year": r["planning_year"] if "planning_year" in r.keys() else None,
+            "planning_month": r["planning_month"] if "planning_month" in r.keys() else None,
             "is_mock": bool(r["is_mock"]),
         }
         for r in conn.execute(
             """
-            SELECT id, title, status, version, period_year, period_month, is_mock
+            SELECT id, title, status, version, period_year, period_month,
+                   planning_year, planning_month, is_mock
             FROM client_reports
             WHERE client_id = ? AND report_type = 'trend'
             ORDER BY period_year DESC, period_month DESC, version DESC, id DESC
@@ -1012,11 +1130,13 @@ def inspect_client_report_data(
         "ai_analysis_banner": ai_summary["ai_analysis_banner"],
         "attached_ai_analysis_ids": ai_summary["completed_analysis_ids"],
         "period": period_bundle["period"],
+        "planning_x2": {"year": plan_y, "month": plan_m},
         "metrics": metrics,
         "previous_metrics": period_bundle["previous_metrics"],
         "comparison": period_bundle["comparison"],
         "posts": posts,
         "available": available,
+        "input_checklist": input_checklist,
         "missing": missing,
         "partial": bool(missing),
         "data_coverage": coverage,
@@ -1044,6 +1164,7 @@ def prepare_client_report(
     compare_start: str | None = None,
     compare_end: str | None = None,
     title: str | None = None,
+    maaike_planning_notes: str | None = None,
 ) -> dict[str, Any]:
     ensure_report_tables(conn)
     _require_client(conn, client_id)
@@ -1074,11 +1195,14 @@ def prepare_client_report(
     strategy = get_strategy(conn, client_id)
     legend = _legend_payload(conn, client_id)
     trend = _trend_summary(conn, client_id, linked_trend_report_id)
-    # period_year/month on the report = analysis period; planning defaults to next month
-    if period_month == 12:
-        default_plan_y, default_plan_m = period_year + 1, 1
-    else:
-        default_plan_y, default_plan_m = period_year, period_month + 1
+    # period_year/month = analyseperiode; planning standaard X+2
+    # (september-analyse → novemberplanning)
+    plan_m = period_month + 2
+    plan_y = period_year
+    while plan_m > 12:
+        plan_m -= 12
+        plan_y += 1
+    default_plan_y, default_plan_m = plan_y, plan_m
     analysis_context, stories, historical = _enrich_client_report_context(
         conn,
         client_id,
@@ -1140,6 +1264,9 @@ def prepare_client_report(
         "seo_sources_supplied": False,
         "competitor_sources_supplied": False,
         "ahrefs_sources_supplied": False,
+        "figma_items": _count_figma_planning_items(
+            conn, client_id, year=planning_year, month=planning_month
+        ),
     }
     prompt_input = _client_report_prompt_input(
         strategy=strategy,
@@ -1152,10 +1279,18 @@ def prepare_client_report(
         historical_performance=historical,
     )
 
+    notes = str(maaike_planning_notes or "").strip()
+    if notes:
+        prompt_input = {
+            **prompt_input,
+            "maaike_planning_notes": notes,
+            "maaike_planning_notes_for_x2": notes,
+        }
     snapshot = {
         "report_type": "client",
         "research_mode": "supplied_data",
         "max_budget_usd": max_budget_usd,
+        "maaike_planning_notes": notes,
         "period": {
             "year": period_year,
             "month": period_month,
@@ -1168,7 +1303,7 @@ def prepare_client_report(
             "planning_period": {
                 "year": planning_year,
                 "month": planning_month,
-                "role": "planningsmaand",
+                "role": "planningsmaand_x2",
             },
         },
         "instruction_bundle": prompt_input["instruction_bundle"],
@@ -1780,27 +1915,48 @@ def recover_client_report_json_syntax(
     if not raw.strip():
         raise ValueError("Bronrapport heeft geen raw_response om te herstellen.")
 
+    from maaike.ai_response_validate import extract_json_object
+
     repair = repair_unambiguous_json_syntax(raw)
-    if not repair.get("ok") or not repair.get("parsed"):
-        raise ValueError(repair.get("error") or "JSON-herstel niet eenduidig mogelijk; gestopt.")
+    parsed = repair.get("parsed") if repair.get("ok") else None
+    repair_edits = list(repair.get("edits") or [])
+    repaired_text = repair.get("repaired_text")
+    if not parsed:
+        parsed, extract_err = extract_json_object(raw)
+        if not parsed:
+            raise ValueError(
+                repair.get("error")
+                or extract_err
+                or "JSON-herstel niet eenduidig mogelijk; gestopt."
+            )
+        repair_edits.append(
+            {
+                "type": "salvage_truncated_top_level_objects",
+                "description": (
+                    "Afgekapt Gemini-antwoord: six_answers/chapters/action_plan "
+                    "uit evenwichtige {...}-blokken gehaald (geen inhoudsherschrijving)."
+                ),
+            }
+        )
+        repaired_text = raw
 
     snapshot = json.loads(row["input_snapshot_json"] or "{}")
     sources = available_sources_from_snapshot(snapshot)
     candidate = {
-        **repair["parsed"],
+        **parsed,
         "label": (
             f"JSON-syntaxherstel van rapport #{source_report_id} "
             "(geen nieuwe AI-aanroep; inhoud ongewijzigd)"
         ),
-        "raw_text": repair["repaired_text"],
+        "raw_text": repaired_text or raw,
         "partial": True,
-        "fully_researched": bool(repair["parsed"].get("fully_researched"))
-        if "fully_researched" in repair["parsed"]
+        "fully_researched": bool(parsed.get("fully_researched"))
+        if "fully_researched" in parsed
         else False,
     }
     validation = validate_client_report_body(
         candidate,
-        raw_text=repair["repaired_text"] or raw,
+        raw_text=repaired_text or raw,
         test_label=f"JSON_SYNTAX_RECOVERY from report #{source_report_id}",
         available_sources=sources,
         require_source_honesty=True,
@@ -1820,10 +1976,10 @@ def recover_client_report_json_syntax(
             "partial": True,
             "requires_human_approval": True,
             "raw_response": raw,
-            "repaired_json_text": repair["repaired_text"],
+            "repaired_json_text": repaired_text,
             "json_syntax_recovery": {
                 "source_report_id": source_report_id,
-                "edits": repair["edits"],
+                "edits": repair_edits,
                 "original_raw_preserved": True,
                 "content_rewritten": False,
                 "auto_approved": False,
@@ -1850,14 +2006,14 @@ def recover_client_report_json_syntax(
         body = failed_body_envelope(
             label=candidate["label"],
             raw_text=raw,
-            raw_parsed=repair["parsed"],
+            raw_parsed=parsed,
             validation=validation,
             extra={
                 "partial": True,
-                "repaired_json_text": repair["repaired_text"],
+                "repaired_json_text": repaired_text,
                 "json_syntax_recovery": {
                     "source_report_id": source_report_id,
-                    "edits": repair["edits"],
+                    "edits": repair_edits,
                     "original_raw_preserved": True,
                     "content_rewritten": False,
                     "auto_approved": False,
@@ -1874,7 +2030,7 @@ def recover_client_report_json_syntax(
         "Geslaagde parse betekent niet dat de inhoud is goedgekeurd.",
         "Partieel concept voor menselijke controle; niet automatisch goedgekeurd.",
     ]
-    for edit in repair["edits"]:
+    for edit in repair_edits:
         notes.append(f"Syntax-edit: {edit.get('description')}")
 
     usage = json.loads(row["usage_json"] or "{}")
@@ -1883,7 +2039,7 @@ def recover_client_report_json_syntax(
         "status": f"json_syntax_recovery_from_{source_report_id}",
         "recovery": {
             "source_report_id": source_report_id,
-            "edits": repair["edits"],
+            "edits": repair_edits,
             "paid_call": False,
         },
         "notes": (

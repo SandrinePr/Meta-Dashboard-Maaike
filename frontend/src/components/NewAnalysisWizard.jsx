@@ -46,8 +46,25 @@ function monthLabel(year, month) {
   return "—";
 }
 
+function addMonths(year, month, delta) {
+  let m = Number(month) + Number(delta);
+  let y = Number(year);
+  while (m > 12) {
+    m -= 12;
+    y += 1;
+  }
+  while (m < 1) {
+    m += 12;
+    y -= 1;
+  }
+  return { year: y, month: m };
+}
+
 function suggestTitle(reportType, clientName, year, month) {
-  if (reportType === "trend") return `Social trends – planning ${monthLabel(year, month)}`;
+  if (reportType === "trend") {
+    const plan = addMonths(year, month, 2);
+    return `Social Trend Radar – planning ${monthLabel(plan.year, plan.month)}`;
+  }
   return `${clientName} – analyse ${monthLabel(year, month)}`;
 }
 
@@ -116,6 +133,9 @@ export default function NewAnalysisWizard({
   const [execPreview, setExecPreview] = useState(null);
   const [runState, setRunState] = useState(null);
   const [runError, setRunError] = useState("");
+  const [planningNotes, setPlanningNotes] = useState("");
+
+  const x2 = useMemo(() => addMonths(year, month, 2), [year, month]);
 
   const usableTrends = useMemo(
     () => (trendReports || []).filter(isUsableTrend),
@@ -196,6 +216,7 @@ export default function NewAnalysisWizard({
       allow_partial_without_trend: !trendId,
       max_budget_usd: null,
       title: title.trim() || suggestTitle("client", client.name, year, month),
+      maaike_planning_notes: planningNotes.trim() || null,
     };
     if (useCustomDates) {
       body.start = periodStart;
@@ -220,6 +241,7 @@ export default function NewAnalysisWizard({
     compareCustom,
     compareStart,
     compareEnd,
+    planningNotes,
   ]);
 
   const costLabel = useMemo(() => {
@@ -299,20 +321,36 @@ export default function NewAnalysisWizard({
               ],
           metrics: { post_count: 0, by_platform: {} },
           data_coverage: { posts_by_platform: {} },
+          input_checklist: [
+            {
+              id: "creation",
+              label: "Aanmaakmaand",
+              ready: true,
+              detail: monthLabel(year, month),
+            },
+            {
+              id: "planning",
+              label: "Planningsmaand (X+2)",
+              ready: true,
+              detail: monthLabel(x2.year, x2.month),
+            },
+            {
+              id: "lookback",
+              label: "Terugblik",
+              ready: true,
+              detail: "21e vorige maand t/m 20e aanmaakmaand",
+            },
+          ],
         });
       }
-      const payload = await prepareFresh();
-      const preview = await api(
-        `/api/clients/${client.id}/reports/${payload.report.id}/execution-preview`
-      );
-      setExecPreview(preview);
+      // Geen aparte bewerkstap: alleen inputcheck. Prepare gebeurt pas bij Start analyse.
       setStep(2);
       setRunState(null);
-      setNotice("Voorbereiding klaar — nog geen betaalde analyse gestart.");
+      setNotice("Controleer de bronnen — nog geen betaalde analyse gestart.");
     } catch (exc) {
       setRunState("failed");
-      setRunError(exc.message || "Voorbereiding mislukt.");
-      setError(exc.message || "Voorbereiding mislukt.");
+      setRunError(exc.message || "Controle mislukt.");
+      setError(exc.message || "Controle mislukt.");
     } finally {
       setBusy(false);
     }
@@ -373,8 +411,8 @@ export default function NewAnalysisWizard({
       </div>
 
       <ol className="report-wizard-steps" aria-label="Stappen">
-        <li className={step === 1 ? "is-active" : "is-done"}>Kies type &amp; periode</li>
-        <li className={step === 2 ? "is-active" : ""}>Controleer &amp; start</li>
+        <li className={step === 1 ? "is-active" : "is-done"}>Type, periode &amp; planning-input</li>
+        <li className={step === 2 ? "is-active" : ""}>Bronnen controleren &amp; starten</li>
       </ol>
 
       {step === 1 ? (
@@ -429,7 +467,7 @@ export default function NewAnalysisWizard({
 
           <div className="row-actions wrap">
             <label>
-              {reportType === "trend" ? "Planningsmaand — jaar" : "Analyseperiode — jaar"}
+              {reportType === "trend" ? "Aanmaakmaand — jaar" : "Analyseperiode — jaar"}
               <input type="number" value={year} onChange={(e) => setYear(Number(e.target.value))} />
             </label>
             <label>
@@ -444,10 +482,33 @@ export default function NewAnalysisWizard({
             </label>
           </div>
 
-          {reportType === "client" ? (
-            <p className="hint" style={{ margin: 0 }}>
-              Standaardvergelijking: <strong>{compareHint}</strong>
+          {reportType === "trend" ? (
+            <p className="banner">
+              X+2: aanmaak <strong>{monthLabel(year, month)}</strong> → terugblik apart → planning{" "}
+              <strong>{monthLabel(x2.year, x2.month)}</strong>
             </p>
+          ) : (
+            <p className="banner">
+              Analyse <strong>{monthLabel(year, month)}</strong> → acties voor planning{" "}
+              <strong>{monthLabel(x2.year, x2.month)}</strong> (X+2)
+            </p>
+          )}
+
+          {reportType === "client" ? (
+            <>
+              <label>
+                Jouw input voor de planning (X+2)
+                <textarea
+                  rows={4}
+                  value={planningNotes}
+                  onChange={(e) => setPlanningNotes(e.target.value)}
+                  placeholder="Wat wil je meenemen naar de novemberplanning? Ideeën, beperkingen, afspraken met de klant…"
+                />
+              </label>
+              <p className="hint" style={{ margin: 0 }}>
+                Standaardvergelijking: <strong>{compareHint}</strong>
+              </p>
+            </>
           ) : (
             <p className="hint" style={{ margin: 0 }}>
               Internetzoeken:{" "}
@@ -591,6 +652,9 @@ export default function NewAnalysisWizard({
                     : monthLabel(year, month)}
                 </li>
                 <li>
+                  <strong>Planning (X+2):</strong> {monthLabel(x2.year, x2.month)}
+                </li>
+                <li>
                   <strong>Vergelijkingsperiode:</strong> {compareHint}
                 </li>
                 <li>
@@ -611,11 +675,18 @@ export default function NewAnalysisWizard({
                     ? selectedTrend.title || `Social trends #${selectedTrend.id}`
                     : "Geen trendrapport"}
                 </li>
+                <li>
+                  <strong>Jouw planning-input:</strong>{" "}
+                  {planningNotes.trim() ? planningNotes.trim() : <span className="muted">nog leeg</span>}
+                </li>
               </>
             ) : (
               <>
                 <li>
-                  <strong>Planningsmaand:</strong> {monthLabel(year, month)}
+                  <strong>Aanmaakmaand:</strong> {monthLabel(year, month)}
+                </li>
+                <li>
+                  <strong>Planningsmaand (X+2):</strong> {monthLabel(x2.year, x2.month)}
                 </li>
                 <li>
                   <strong>Internetzoeken:</strong>{" "}
@@ -635,10 +706,25 @@ export default function NewAnalysisWizard({
             </li>
           </ul>
 
+          {(inspect?.input_checklist || []).length ? (
+            <section className="card stack">
+              <h4 style={{ marginTop: 0 }}>Bronnen klaar?</h4>
+              <ul className="plain-list">
+                {inspect.input_checklist.map((item) => (
+                  <li key={item.id}>
+                    {item.ready ? "✓" : "○"} <strong>{item.label}</strong>
+                    {item.detail ? ` — ${item.detail}` : ""}
+                    {!item.ready ? <span className="muted"> (ontbreekt)</span> : null}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
           {missing.length ? (
             <p className="banner warn-soft">
-              Let op: {missing.slice(0, 2).join(" · ")}
-              {missing.length > 2 ? ` · +${missing.length - 2} meer` : ""}
+              Ontbrekende bronnen: {missing.slice(0, 4).join(" · ")}
+              {missing.length > 4 ? ` · +${missing.length - 4} meer` : ""}
             </p>
           ) : null}
 
@@ -671,8 +757,9 @@ export default function NewAnalysisWizard({
           ) : null}
 
           <p className="hint">
-            Alleen <strong>Start analyse</strong> start de betaalde run. Oude pogingen blijven in het
-            activiteitenlogboek (eerdere versies).
+            Alleen <strong>Start analyse</strong> start de betaalde run. Daarna open je direct het
+            rapport om concept te beoordelen en goed te keuren — geen aparte bewerkstap in de
+            analyseroute.
           </p>
 
           <div className="row-actions wrap">

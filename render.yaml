@@ -1,28 +1,60 @@
-# Reports and measurements live in the SQLite file from DATABASE_PATH.
-# This file does not attach a paid disk and does not change the current plan.
-# A lasting copy needs DATABASE_PATH on storage that survives redeploys.
+# HAMSTER (Maaike) — React SPA + FastAPI from SandrinePr/Meta-Dashboard-Maaike.
+# Persistent SQLite requires a paid plan + disk. Free web services have no disk.
 services:
   - type: web
-    name: meta-dashboard
+    name: hamster
     runtime: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python run_web.py
+    plan: starter
+    region: frankfurt
+    buildCommand: pip install -r requirements.txt && cd frontend && npm ci && VITE_API_URL= npm run build
+    startCommand: uvicorn maaike_web.app:app --host 0.0.0.0 --port $PORT --no-access-log
+    healthCheckPath: /api/health
+    disk:
+      name: hamster-data
+      mountPath: /var/data
+      sizeGB: 5
     envVars:
       - key: PYTHON_VERSION
-        value: "3.11.9"
+        value: "3.12.10"
+      - key: NODE_VERSION
+        value: "20.18.1"
+      - key: MAAIKE_DATABASE_PATH
+        value: /var/data/maaike_redrock.db
       - key: ENABLE_SCHEDULER
-        value: "1"
-
-  - type: cron
-    name: dashboard-wake
-    runtime: python
-    plan: free
-    schedule: "0 5-19 * * *"
-    buildCommand: pip install -r requirements.txt
-    startCommand: python scripts/wake_dashboard.py
-    envVars:
-      - key: PYTHON_VERSION
-        value: "3.11.9"
-      - key: DASHBOARD_URL
-        value: https://meta-dashboard.onrender.com
+        value: "0"
+      - key: ENABLE_REPORT_PLANNING_SCHEDULER
+        value: "0"
+      - key: APP_ENV
+        value: production
+      - key: APP_DEBUG
+        value: "false"
+      - key: MAAIKE_FRONTEND_URL
+        sync: false
+      - key: MAAIKE_BACKEND_URL
+        sync: false
+      - key: MAAIKE_CORS_ORIGINS
+        sync: false
+      - key: MAAIKE_WEB_OAUTH_REDIRECT_URI
+        sync: false
+      - key: MAAIKE_SESSION_SECRET
+        generateValue: true
+      - key: MAAIKE_BASIC_AUTH_USER
+        value: maaike
+      - key: MAAIKE_BASIC_AUTH_PASSWORD
+        sync: false
+      - key: MAAIKE_META_APP_ID
+        sync: false
+      - key: MAAIKE_META_APP_SECRET
+        sync: false
+      - key: MAAIKE_META_GRAPH_API_VERSION
+        value: v25.0
+      - key: MAAIKE_META_LOGIN_CONFIG_ID
+        sync: false
+      - key: AI_BASE_URL
+        value: https://generativelanguage.googleapis.com/v1beta/openai
+      - key: AI_MODEL
+        value: gemini-3.5-flash-lite
+      - key: AI_API_KEY
+        sync: false
+      - key: FIGMA_ACCESS_TOKEN
+        sync: false

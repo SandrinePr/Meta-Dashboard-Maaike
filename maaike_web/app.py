@@ -15,13 +15,19 @@ from urllib.parse import quote
 
 from pathlib import Path
 
+import base64
+import os
+import secrets
+
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from maaike.ai_status import public_ai_status
-from maaike.config import MaaikeConfigError, database_path
+from maaike.config import MaaikeConfigError, database_path, project_root
 from maaike.db import initialize_database, transaction
 from maaike.comparison_service import (
     add_competitor as comparison_add_competitor,
@@ -98,6 +104,43 @@ from maaike_web.session import (
 from maaike_web.settings import WebSettings, load_settings
 
 _COOKIE_MAX_AGE = 8 * 60 * 60
+_FRONTEND_DIST = project_root() / "frontend" / "dist"
+_PUBLIC_PATHS = frozenset({"/api/health", "/api/meta/callback"})
+
+
+class _OptionalBasicAuth(BaseHTTPMiddleware):
+    """Protect the public URL when MAAIKE_BASIC_AUTH_PASSWORD is set.
+
+    /api/health stays open for Render health checks. Meta OAuth callback stays
+    open so Facebook can redirect back after login.
+    """
+
+    def __init__(self, app, *, username: str, password: str):
+        super().__init__(app)
+        self.username = username
+        self.password = password
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path.rstrip("/") or "/"
+        if path in _PUBLIC_PATHS or path == "/api/health":
+            return await call_next(request)
+        header = request.headers.get("authorization") or ""
+        if header.lower().startswith("basic "):
+            try:
+                decoded = base64.b64decode(header.split(" ", 1)[1].strip()).decode("utf-8")
+                user, _, pwd = decoded.partition(":")
+            except Exception:
+                user, pwd = "", ""
+            if secrets.compare_digest(user, self.username) and secrets.compare_digest(
+                pwd, self.password
+            ):
+                return await call_next(request)
+        return Response(
+            content="Authentication required.",
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="HAMSTER"'},
+            media_type="text/plain",
+        )
 
 
 class NameBody(BaseModel):
@@ -111,6 +154,7 @@ class LegendBody(BaseModel):
 
     name: str
     explanation: str = ""
+    example_url: str = ""
 
 
 class EditorialBody(BaseModel):
@@ -119,6 +163,7 @@ class EditorialBody(BaseModel):
     format_id: int | None = None
     pillar_id: int | None = None
     hook: str = ""
+    figma_url: str | None = None
 
 
 class ConfirmBody(BaseModel):
@@ -149,6 +194,12 @@ def create_app() -> FastAPI:
         except Exception:
             # Dashboard must still boot if the scheduler fails to start.
             pass
+        try:
+            from maaike.report_planning import start_report_planning_scheduler
+
+            start_report_planning_scheduler()
+        except Exception:
+            pass
         yield
 
     app = FastAPI(title="Maaike", lifespan=lifespan)
@@ -157,9 +208,13 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=list(settings.cors_origins),
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
-        allow_headers=["Content-Type"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization"],
     )
+    basic_user = os.getenv("MAAIKE_BASIC_AUTH_USER", "maaike").strip() or "maaike"
+    basic_password = os.getenv("MAAIKE_BASIC_AUTH_PASSWORD", "").strip()
+    if basic_password:
+        app.add_middleware(_OptionalBasicAuth, username=basic_user, password=basic_password)
 
     @app.exception_handler(Exception)
     async def unhandled(request: Request, exc: Exception):
@@ -174,7 +229,96 @@ def create_app() -> FastAPI:
 
     @app.get("/api/ai-status")
     def ai_status() -> dict:
-        return public_ai_status()
+        from maaike.report_planning import task_ai_providers
+
+        payload = public_ai_status()
+        payload["task_providers"] = task_ai_providers()
+        return payload
+
+    @app.get("/api/prompt-settings")
+    def read_prompt_settings() -> dict:
+        from maaike.prompt_settings import list_prompt_settings
+
+        with transaction() as conn:
+            return list_prompt_settings(conn)
+
+    @app.put("/api/prompt-settings/{prompt_key}")
+    def put_prompt_settings(prompt_key: str, body: dict) -> dict:
+        from maaike.prompt_settings import save_prompt_override
+
+        try:
+            with transaction() as conn:
+                return save_prompt_override(
+                    conn,
+                    prompt_key,
+                    body_text=str((body or {}).get("body_text") or ""),
+                    version_tag=str((body or {}).get("version_tag") or ""),
+                    updated_by=str((body or {}).get("updated_by") or ""),
+                )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/prompt-settings/{prompt_key}")
+    def delete_prompt_settings(prompt_key: str) -> dict:
+        from maaike.prompt_settings import reset_prompt_override
+
+        try:
+            with transaction() as conn:
+                return reset_prompt_override(conn, prompt_key)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/report-planning")
+    def read_report_planning() -> dict:
+        from maaike.report_planning import planning_overview
+
+        with transaction() as conn:
+            return planning_overview(conn)
+
+    @app.put("/api/report-planning")
+    def save_report_planning(body: dict) -> dict:
+        from maaike.report_planning import planning_overview, update_plan
+
+        try:
+            with transaction() as conn:
+                update_plan(conn, body or {})
+                return planning_overview(conn)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/report-planning/ready-concepts")
+    def read_ready_concepts(client_id: int | None = None) -> dict:
+        from maaike.report_planning import list_ready_concepts
+
+        with transaction() as conn:
+            return {"concepts": list_ready_concepts(conn, client_id=client_id)}
+
+    @app.get("/api/report-planning/runs/{run_id}")
+    def read_report_plan_run(run_id: int) -> dict:
+        from maaike.report_planning import get_run
+
+        try:
+            with transaction() as conn:
+                return get_run(conn, run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/report-planning/runs")
+    def start_report_plan_run(body: dict | None = None) -> dict:
+        """QA / manual dry path: assess data + prepare concepts. Never paid AI. Never live auto."""
+        from maaike.report_planning import start_or_resume_run
+
+        payload = body or {}
+        try:
+            with transaction() as conn:
+                return start_or_resume_run(
+                    conn,
+                    planned_date=payload.get("planned_date"),
+                    prepare_concepts=bool(payload.get("prepare_concepts", True)),
+                    allow_meta_refresh=False,
+                )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/clients/{client_id}/ai-trial")
     def read_ai_trial(client_id: int) -> dict:
@@ -509,6 +653,7 @@ def create_app() -> FastAPI:
                     compare_start=payload.get("compare_start") or None,
                     compare_end=payload.get("compare_end") or None,
                     title=payload.get("title"),
+                    maaike_planning_notes=payload.get("maaike_planning_notes") or None,
                 )
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -852,6 +997,7 @@ def create_app() -> FastAPI:
         year: int | None = None,
         month: int | None = None,
         platforms: str = "instagram,facebook",
+        months_span: int = 1,
     ) -> dict:
         platform_set = {part.strip() for part in platforms.split(",") if part.strip()}
         with transaction() as conn:
@@ -863,6 +1009,7 @@ def create_app() -> FastAPI:
                     year=year,
                     month=month,
                     platforms=platform_set or {"instagram", "facebook"},
+                    months_span=months_span,
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1027,6 +1174,54 @@ def create_app() -> FastAPI:
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.put("/api/clients/{client_id}/comparison/weekly-plan")
+    def put_comparison_weekly_plan(client_id: int, body: dict) -> dict:
+        from maaike.comparison_service import comparison_state, save_weekly_plan
+
+        try:
+            with transaction() as conn:
+                _require_client(conn, client_id)
+                save_weekly_plan(
+                    conn,
+                    client_id,
+                    enabled=bool((body or {}).get("enabled")),
+                    weekday=int((body or {}).get("weekday") or 0),
+                    time=str((body or {}).get("time") or "09:00"),
+                    note=str((body or {}).get("note") or ""),
+                )
+                return comparison_state(conn, client_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/clients/{client_id}/logs/weekly-plan")
+    def read_logs_weekly_plan(client_id: int) -> dict:
+        """Weekly Logs control schedule — separate from Competitors."""
+        from maaike.logs_weekly import get_logs_weekly_plan
+
+        with transaction() as conn:
+            _require_client(conn, client_id)
+            return {"weekly_plan": get_logs_weekly_plan(conn, client_id)}
+
+    @app.put("/api/clients/{client_id}/logs/weekly-plan")
+    def put_logs_weekly_plan(client_id: int, body: dict) -> dict:
+        from maaike.logs_weekly import save_logs_weekly_plan
+
+        try:
+            with transaction() as conn:
+                _require_client(conn, client_id)
+                return {
+                    "weekly_plan": save_logs_weekly_plan(
+                        conn,
+                        client_id,
+                        enabled=bool((body or {}).get("enabled")),
+                        weekday=int((body or {}).get("weekday") or 0),
+                        time=str((body or {}).get("time") or "09:00"),
+                        note=str((body or {}).get("note") or ""),
+                    )
+                }
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.post("/api/clients/{client_id}/posts/fetch")
     def fetch_posts(client_id: int) -> dict:
         try:
@@ -1047,6 +1242,7 @@ def create_app() -> FastAPI:
                     format_id=body.format_id,
                     pillar_id=body.pillar_id,
                     hook=body.hook,
+                    figma_url=body.figma_url,
                 )
         except LegendInputError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1335,11 +1531,54 @@ def create_app() -> FastAPI:
 
     @app.get("/api/clients/{client_id}/strategy")
     def read_strategy(client_id: int) -> dict:
-        from maaike.strategy import get_strategy
+        from maaike.strategy_import import strategy_overview
 
         with transaction() as conn:
             _require_client(conn, client_id)
-            return get_strategy(conn, client_id)
+            return strategy_overview(conn, client_id)
+
+    @app.post("/api/clients/{client_id}/strategy/import/canva-preview")
+    def strategy_canva_preview(client_id: int, body: dict) -> dict:
+        from maaike.strategy_import import preview_canva_link
+
+        _ = client_id
+        try:
+            return preview_canva_link(str((body or {}).get("url") or ""))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/clients/{client_id}/strategy/import/pdf-preview")
+    async def strategy_pdf_preview(client_id: int, request: Request) -> dict:
+        from maaike.strategy_import import preview_strategy_pdf
+
+        _ = client_id
+        form = await request.form()
+        upload = form.get("file")
+        if upload is None:
+            raise HTTPException(status_code=400, detail="Upload een PDF-bestand.")
+        raw = await upload.read()
+        filename = getattr(upload, "filename", "") or "strategie.pdf"
+        try:
+            return preview_strategy_pdf(raw, filename=filename)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/clients/{client_id}/strategy/import/apply")
+    def strategy_import_apply(client_id: int, body: dict) -> dict:
+        from maaike.strategy_import import apply_strategy_import, strategy_overview
+
+        try:
+            with transaction() as conn:
+                _require_client(conn, client_id)
+                apply_strategy_import(
+                    conn,
+                    client_id,
+                    proposed=(body or {}).get("proposed") or {},
+                    preserve_manual=bool((body or {}).get("preserve_manual", True)),
+                )
+                return strategy_overview(conn, client_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/clients/{client_id}/figma-planning")
     def read_figma_planning(client_id: int) -> dict:
@@ -1674,6 +1913,29 @@ def create_app() -> FastAPI:
         _set_cookie(response, cookie_value(bind_sid, settings_now.session_secret), settings_now)
         return response
 
+    # Production: serve the Vite build from the same webservice (same-origin API).
+    if _FRONTEND_DIST.is_dir():
+        assets_dir = _FRONTEND_DIST / "assets"
+        if assets_dir.is_dir():
+            app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+        @app.get("/")
+        def spa_index() -> FileResponse:
+            return FileResponse(_FRONTEND_DIST / "index.html")
+
+        @app.get("/{full_path:path}")
+        def spa_fallback(full_path: str) -> FileResponse:
+            if full_path.startswith("api/"):
+                raise HTTPException(status_code=404, detail="Not found.")
+            candidate = (_FRONTEND_DIST / full_path).resolve()
+            try:
+                candidate.relative_to(_FRONTEND_DIST.resolve())
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail="Not found.") from exc
+            if candidate.is_file():
+                return FileResponse(candidate)
+            return FileResponse(_FRONTEND_DIST / "index.html")
+
     return app
 
 
@@ -1734,6 +1996,7 @@ def _posts_payload(client_id: int) -> dict:
                     or not bool((post.hook or "").strip()),
                 },
                 "formula_rating": formula,
+                "figma_url": getattr(post, "figma_url", None) or "",
                 "cells": cells,
             }
         )
@@ -1822,12 +2085,13 @@ def _add_legend(client_id: int, kind: str, body: LegendBody) -> dict:
     try:
         with transaction() as conn:
             _require_client(conn, client_id)
+            url = body.example_url or ""
             if kind == "format":
-                add_format(conn, client_id, body.name, body.explanation)
+                add_format(conn, client_id, body.name, body.explanation, example_url=url)
             elif kind == "pillar":
-                add_pillar(conn, client_id, body.name, body.explanation)
+                add_pillar(conn, client_id, body.name, body.explanation, example_url=url)
             elif kind == "hook":
-                add_hook(conn, client_id, body.name, body.explanation)
+                add_hook(conn, client_id, body.name, body.explanation, example_url=url)
             else:
                 raise HTTPException(status_code=400, detail="Unknown legend type.")
             payload = _legend_out(conn, client_id)
@@ -1840,12 +2104,13 @@ def _update_legend(client_id: int, kind: str, item_id: int, body: LegendBody) ->
     try:
         with transaction() as conn:
             _require_client(conn, client_id)
+            url = body.example_url or ""
             if kind == "format":
-                update_format(conn, client_id, item_id, body.name, body.explanation)
+                update_format(conn, client_id, item_id, body.name, body.explanation, example_url=url)
             elif kind == "pillar":
-                update_pillar(conn, client_id, item_id, body.name, body.explanation)
+                update_pillar(conn, client_id, item_id, body.name, body.explanation, example_url=url)
             elif kind == "hook":
-                update_hook(conn, client_id, item_id, body.name, body.explanation)
+                update_hook(conn, client_id, item_id, body.name, body.explanation, example_url=url)
             else:
                 raise HTTPException(status_code=400, detail="Unknown legend type.")
             payload = _legend_out(conn, client_id)
@@ -1863,7 +2128,12 @@ def _legend_out(conn, client_id: int) -> dict:
 
 
 def _legend_item(item) -> dict:
-    return {"id": item.item_id, "name": item.name, "explanation": item.explanation}
+    return {
+        "id": item.item_id,
+        "name": item.name,
+        "explanation": item.explanation,
+        "example_url": getattr(item, "example_url", None) or "",
+    }
 
 
 def _is_connected(client: Client) -> bool:

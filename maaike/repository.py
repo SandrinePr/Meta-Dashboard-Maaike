@@ -60,6 +60,7 @@ class LegendItem:
     item_id: int
     name: str
     explanation: str
+    example_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +96,7 @@ class StoredPost:
     action_text: str | None = None
     format_code_raw: str | None = None
     content_soort_raw: str | None = None
+    figma_url: str | None = None
 
 
 def _now() -> str:
@@ -418,11 +420,20 @@ def mark_link_failed(
     )
 
 
+def _ensure_legend_example_url(conn: sqlite3.Connection, table: str) -> bool:
+    cols = {str(r[1]) for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if "example_url" not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN example_url TEXT NOT NULL DEFAULT ''")
+        return True
+    return "example_url" in cols or True
+
+
 def list_items(conn: sqlite3.Connection, client_id: int, kind: str) -> list[LegendItem]:
     table = _table(kind)
+    _ensure_legend_example_url(conn, table)
     rows = conn.execute(
         f"""
-        SELECT id, name, explanation
+        SELECT id, name, explanation, COALESCE(example_url, '') AS example_url
         FROM {table}
         WHERE client_id = ?
         ORDER BY name COLLATE NOCASE, id
@@ -430,7 +441,12 @@ def list_items(conn: sqlite3.Connection, client_id: int, kind: str) -> list[Lege
         (client_id,),
     ).fetchall()
     return [
-        LegendItem(item_id=int(row["id"]), name=str(row["name"]), explanation=str(row["explanation"] or ""))
+        LegendItem(
+            item_id=int(row["id"]),
+            name=str(row["name"]),
+            explanation=str(row["explanation"] or ""),
+            example_url=str(row["example_url"] or "") or None,
+        )
         for row in rows
     ]
 
@@ -453,37 +469,46 @@ def add_item(
     kind: str,
     name: str,
     explanation: str,
+    example_url: str = "",
 ) -> int:
     _require_client(conn, client_id)
     table = _table(kind)
+    _ensure_legend_example_url(conn, table)
     cleaned = _clean_name(name, empty_message="Enter a name.")
     note = _clean_explanation(explanation)
+    url = str(example_url or "").strip()
     if _name_taken(conn, table, client_id, cleaned, exclude_id=None):
         raise DuplicateLegendName(f"The name '{cleaned}' already exists for this client.")
     now = _now()
     try:
         cursor = conn.execute(
             f"""
-            INSERT INTO {table} (client_id, name, explanation, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO {table} (client_id, name, explanation, example_url, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (client_id, cleaned, note, now, now),
+            (client_id, cleaned, note, url, now, now),
         )
     except sqlite3.IntegrityError as exc:
         raise DuplicateLegendName(f"The name '{cleaned}' already exists for this client.") from exc
     return int(cursor.lastrowid)
 
 
-def add_format(conn: sqlite3.Connection, client_id: int, name: str, explanation: str) -> int:
-    return add_item(conn, client_id, "format", name, explanation)
+def add_format(
+    conn: sqlite3.Connection, client_id: int, name: str, explanation: str, example_url: str = ""
+) -> int:
+    return add_item(conn, client_id, "format", name, explanation, example_url=example_url)
 
 
-def add_pillar(conn: sqlite3.Connection, client_id: int, name: str, explanation: str) -> int:
-    return add_item(conn, client_id, "pillar", name, explanation)
+def add_pillar(
+    conn: sqlite3.Connection, client_id: int, name: str, explanation: str, example_url: str = ""
+) -> int:
+    return add_item(conn, client_id, "pillar", name, explanation, example_url=example_url)
 
 
-def add_hook(conn: sqlite3.Connection, client_id: int, name: str, explanation: str) -> int:
-    return add_item(conn, client_id, "hook", name, explanation)
+def add_hook(
+    conn: sqlite3.Connection, client_id: int, name: str, explanation: str, example_url: str = ""
+) -> int:
+    return add_item(conn, client_id, "hook", name, explanation, example_url=example_url)
 
 
 def update_item(
@@ -493,10 +518,13 @@ def update_item(
     item_id: int,
     name: str,
     explanation: str,
+    example_url: str = "",
 ) -> None:
     table = _table(kind)
+    _ensure_legend_example_url(conn, table)
     cleaned = _clean_name(name, empty_message="Enter a name.")
     note = _clean_explanation(explanation)
+    url = str(example_url or "").strip()
     _require_owned_item(conn, table, client_id, item_id)
     if _name_taken(conn, table, client_id, cleaned, exclude_id=item_id):
         raise DuplicateLegendName(f"The name '{cleaned}' already exists for this client.")
@@ -504,10 +532,10 @@ def update_item(
         conn.execute(
             f"""
             UPDATE {table}
-            SET name = ?, explanation = ?, updated_at = ?
+            SET name = ?, explanation = ?, example_url = ?, updated_at = ?
             WHERE id = ? AND client_id = ?
             """,
-            (cleaned, note, _now(), item_id, client_id),
+            (cleaned, note, url, _now(), item_id, client_id),
         )
     except sqlite3.IntegrityError as exc:
         raise DuplicateLegendName(f"The name '{cleaned}' already exists for this client.") from exc
@@ -519,8 +547,9 @@ def update_format(
     item_id: int,
     name: str,
     explanation: str,
+    example_url: str = "",
 ) -> None:
-    update_item(conn, client_id, "format", item_id, name, explanation)
+    update_item(conn, client_id, "format", item_id, name, explanation, example_url=example_url)
 
 
 def update_hook(
@@ -529,8 +558,9 @@ def update_hook(
     item_id: int,
     name: str,
     explanation: str,
+    example_url: str = "",
 ) -> None:
-    update_item(conn, client_id, "hook", item_id, name, explanation)
+    update_item(conn, client_id, "hook", item_id, name, explanation, example_url=example_url)
 
 
 def update_pillar(
@@ -539,8 +569,9 @@ def update_pillar(
     item_id: int,
     name: str,
     explanation: str,
+    example_url: str = "",
 ) -> None:
-    update_item(conn, client_id, "pillar", item_id, name, explanation)
+    update_item(conn, client_id, "pillar", item_id, name, explanation, example_url=example_url)
 
 
 def latest_sync_at(conn: sqlite3.Connection, client_id: int) -> str | None:
@@ -595,6 +626,7 @@ def list_posts(conn: sqlite3.Connection, client_id: int) -> list[StoredPost]:
             p.source_origin AS source_origin,
             e.format_code_raw AS format_code_raw,
             e.content_soort_raw AS content_soort_raw,
+            e.figma_url AS figma_url,
             (
                 SELECT a.rating_text FROM post_assessments a
                 WHERE a.post_id = p.id AND a.source = 'excel_imported'
@@ -637,6 +669,7 @@ def save_editorial(
     format_id: int | None,
     pillar_id: int | None,
     hook: str,
+    figma_url: str | None = None,
 ) -> None:
     post = conn.execute(
         "SELECT client_id FROM posts WHERE id = ?",
@@ -649,17 +682,30 @@ def save_editorial(
     if pillar_id is not None and _not_owned(conn, "content_pillars", client_id, pillar_id):
         raise LegendInputError("This content pillar does not belong to the selected client.")
     now = _now()
+    # Ensure optional column exists on older DBs
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(post_editorial)").fetchall()}
+    if "figma_url" not in cols:
+        conn.execute("ALTER TABLE post_editorial ADD COLUMN figma_url TEXT")
+    url = (figma_url if figma_url is not None else "").strip()
+    # Keep existing figma_url when caller omits it (None means "leave unchanged" only if we
+    # pass a sentinel; here empty string clears, None keeps via COALESCE-style read).
+    if figma_url is None:
+        existing = conn.execute(
+            "SELECT figma_url FROM post_editorial WHERE post_id = ?", (post_id,)
+        ).fetchone()
+        url = str((existing["figma_url"] if existing else "") or "")
     conn.execute(
         """
-        INSERT INTO post_editorial (post_id, format_id, pillar_id, hook, updated_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO post_editorial (post_id, format_id, pillar_id, hook, figma_url, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(post_id) DO UPDATE SET
             format_id = excluded.format_id,
             pillar_id = excluded.pillar_id,
             hook = excluded.hook,
+            figma_url = excluded.figma_url,
             updated_at = excluded.updated_at
         """,
-        (post_id, format_id, pillar_id, hook.strip(), now),
+        (post_id, format_id, pillar_id, hook.strip(), url, now),
     )
 
 
@@ -970,4 +1016,5 @@ def _stored_post(row: sqlite3.Row) -> StoredPost:
         action_text=_optional_text(row["action_text"]) if "action_text" in row.keys() else None,
         format_code_raw=_optional_text(row["format_code_raw"]) if "format_code_raw" in row.keys() else None,
         content_soort_raw=_optional_text(row["content_soort_raw"]) if "content_soort_raw" in row.keys() else None,
+        figma_url=_optional_text(row["figma_url"]) if "figma_url" in row.keys() else None,
     )

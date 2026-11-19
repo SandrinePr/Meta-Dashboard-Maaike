@@ -36,7 +36,7 @@ export default function LegendPage({ client, onNotice, onError }) {
       </div>
       <p className="hint">
         Legend for <strong>{client.name}</strong>: formats, content pillars and hooks with explanations. Only
-        this client. Linking to posts happens in Logs.
+        this client. Optional example URL per item. Linking to posts happens in Logs.
       </p>
       {loadError ? (
         <p className="banner error">
@@ -49,7 +49,7 @@ export default function LegendPage({ client, onNotice, onError }) {
       {loading && !loadError ? <p className="muted">Loading legend…</p> : null}
       <Catalog
         title="Content formats"
-        intro="Name + explanation = the format legend. Choose these later per post in Logs."
+        intro="Name + explanation = the format legend. Optional voorbeeld-URL. Choose these later per post in Logs."
         empty={`No content formats for ${client.name} yet. Add the first one below — this does not affect other clients.`}
         addLabel="New content format"
         items={legend.formats || []}
@@ -96,14 +96,16 @@ export default function LegendPage({ client, onNotice, onError }) {
 function Catalog({ title, intro, empty, addLabel, items, onCreate, onUpdate, onSaved, onError }) {
   const [name, setName] = useState("");
   const [explanation, setExplanation] = useState("");
+  const [exampleUrl, setExampleUrl] = useState("");
 
   async function addItem(event) {
     event.preventDefault();
     onError("");
     try {
-      await onCreate({ name, explanation });
+      await onCreate({ name, explanation, example_url: exampleUrl });
       setName("");
       setExplanation("");
+      setExampleUrl("");
       await onSaved("Saved.");
     } catch (exc) {
       onError(exc.message);
@@ -130,6 +132,14 @@ function Catalog({ title, intro, empty, addLabel, items, onCreate, onUpdate, onS
           Explanation
           <textarea value={explanation} onChange={(event) => setExplanation(event.target.value)} />
         </label>
+        <label>
+          Voorbeeld-URL (optioneel)
+          <input
+            value={exampleUrl}
+            onChange={(event) => setExampleUrl(event.target.value)}
+            placeholder="https://…"
+          />
+        </label>
         <button className="primary" type="submit">
           Add
         </button>
@@ -141,17 +151,19 @@ function Catalog({ title, intro, empty, addLabel, items, onCreate, onUpdate, onS
 function ItemForm({ item, onUpdate, onSaved, onError }) {
   const [name, setName] = useState(item.name);
   const [explanation, setExplanation] = useState(item.explanation || "");
+  const [exampleUrl, setExampleUrl] = useState(item.example_url || "");
 
   useEffect(() => {
     setName(item.name);
     setExplanation(item.explanation || "");
-  }, [item.id, item.name, item.explanation]);
+    setExampleUrl(item.example_url || "");
+  }, [item.id, item.name, item.explanation, item.example_url]);
 
   async function save(event) {
     event.preventDefault();
     onError("");
     try {
-      await onUpdate(item, { name, explanation });
+      await onUpdate(item, { name, explanation, example_url: exampleUrl });
       await onSaved("Saved.");
     } catch (exc) {
       onError(exc.message);
@@ -168,6 +180,21 @@ function ItemForm({ item, onUpdate, onSaved, onError }) {
         Explanation
         <textarea value={explanation} onChange={(event) => setExplanation(event.target.value)} />
       </label>
+      <label>
+        Voorbeeld-URL (optioneel)
+        <input
+          value={exampleUrl}
+          onChange={(event) => setExampleUrl(event.target.value)}
+          placeholder="https://…"
+        />
+      </label>
+      {exampleUrl ? (
+        <p className="hint">
+          <a href={exampleUrl} target="_blank" rel="noreferrer">
+            Open voorbeeld
+          </a>
+        </p>
+      ) : null}
       <button className="secondary" type="submit">
         Save
       </button>

@@ -146,6 +146,25 @@ export default function ResultCard({
               {post.formula_rating.explanation || post.formula_rating.reason}
             </p>
           ) : null}
+          {post.log_rating || post.log_insight || post.log_action ? (
+            <div className="stack" style={{ marginTop: "0.5rem" }}>
+              {post.log_rating ? (
+                <p className="hint" style={{ margin: 0 }}>
+                  <strong>Beoordeling:</strong> {post.log_rating}
+                </p>
+              ) : null}
+              {post.log_insight ? (
+                <p className="hint" style={{ margin: 0 }}>
+                  <strong>Inzicht:</strong> {post.log_insight}
+                </p>
+              ) : null}
+              {post.log_action ? (
+                <p className="hint" style={{ margin: 0 }}>
+                  <strong>Vervolgactie:</strong> {post.log_action}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <div className="rro-card-actions">
           {post.permalink ? (

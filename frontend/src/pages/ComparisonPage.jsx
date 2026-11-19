@@ -293,6 +293,35 @@ export default function ComparisonPage({ client }) {
       </section>
 
       <section className="card stack">
+        <h3 style={{ marginTop: 0 }}>Wekelijkse planning</h3>
+        <p className="hint">
+          Aparte wekelijkse controle voor concurrenten. Automatische uitvoering blijft uit in
+          productie — alleen het schema is bewerkbaar.
+        </p>
+        <WeeklyPlanEditor
+          plan={state.weekly_plan}
+          busy={busy === "weekly"}
+          onSave={async (body) => {
+            setBusy("weekly");
+            setError("");
+            try {
+              setState(
+                await api(`/api/clients/${client.id}/comparison/weekly-plan`, {
+                  method: "PUT",
+                  body,
+                }),
+              );
+              setNotice("Wekelijkse planning opgeslagen.");
+            } catch (exc) {
+              setError(exc.message);
+            } finally {
+              setBusy("");
+            }
+          }}
+        />
+      </section>
+
+      <section className="card stack">
         <h3 style={{ marginTop: 0 }}>Prestaties</h3>
         <div className="table-wrap">
           <table>
@@ -380,6 +409,65 @@ export default function ComparisonPage({ client }) {
         </div>
       </section>
 
+    </div>
+  );
+}
+
+function WeeklyPlanEditor({ plan, busy, onSave }) {
+  const [enabled, setEnabled] = useState(Boolean(plan?.enabled));
+  const [weekday, setWeekday] = useState(String(plan?.weekday ?? 0));
+  const [time, setTime] = useState(plan?.time || "09:00");
+  const [note, setNote] = useState(plan?.note || "");
+
+  useEffect(() => {
+    setEnabled(Boolean(plan?.enabled));
+    setWeekday(String(plan?.weekday ?? 0));
+    setTime(plan?.time || "09:00");
+    setNote(plan?.note || "");
+  }, [plan?.enabled, plan?.weekday, plan?.time, plan?.note]);
+
+  return (
+    <div className="stack">
+      <label className="row-actions">
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+        Wekelijkse planning actief (schema alleen; geen auto-run)
+      </label>
+      <div className="row-actions wrap">
+        <label>
+          Dag
+          <select value={weekday} onChange={(e) => setWeekday(e.target.value)}>
+            {(plan?.weekday_options || []).map((opt) => (
+              <option key={opt.value} value={String(opt.value)}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Tijd (Amsterdam)
+          <input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+        </label>
+      </div>
+      <label>
+        Notitie
+        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="bijv. focus op reels-mix" />
+      </label>
+      <p className="hint">{plan?.status || "Automatische uitvoering uit."}</p>
+      <button
+        className="secondary"
+        type="button"
+        disabled={busy}
+        onClick={() =>
+          onSave({
+            enabled,
+            weekday: Number(weekday),
+            time,
+            note,
+          })
+        }
+      >
+        Planning opslaan
+      </button>
     </div>
   );
 }

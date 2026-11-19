@@ -43,12 +43,14 @@ def performance_month_payload(
     year: int | None = None,
     month: int | None = None,
     platforms: set[str] | None = None,
+    months_span: int = 1,
 ) -> dict:
-    """Top 3 per metric for posts published in the selected month (lifetime totals)."""
+    """Top 3 per metric for posts in the selected month or a 1–6 month window."""
     client = get_client(conn, client_id)
     if client is None:
         raise ValueError("This client is not in the list.")
     platforms = platforms or {"instagram", "facebook"}
+    span = max(1, min(int(months_span or 1), 6))
     posts = [p for p in list_posts(conn, client_id) if p.platform in platforms]
     months = _available_months(posts)
     if not months:
@@ -63,6 +65,8 @@ def performance_month_payload(
             "caption": None,
             "latest_month_label": None,
             "refresh_available": bool(client.meta_status == "connected"),
+            "months_span": span,
+            "span_options": [1, 2, 3, 4, 5, 6],
         }
 
     counts = _month_counts(posts)
@@ -72,7 +76,8 @@ def performance_month_payload(
     if selected not in months:
         selected = months[0]
 
-    month_posts = [p for p in posts if _ym(p.published_at) == selected]
+    window = _month_window_ending(selected, span)
+    month_posts = [p for p in posts if _ym(p.published_at) in window]
     latest = next((ym for ym in months if counts.get(ym, 0) > 0), None)
     sections = []
     visible = [m for m in METRIC_KEYS if m != "saves" or "instagram" in platforms]
@@ -103,6 +108,11 @@ def performance_month_payload(
             }
         )
 
+    if span == 1:
+        period_label = format_month_label(*selected)
+    else:
+        oldest = window[-1]
+        period_label = f"{format_month_label(*oldest)} – {format_month_label(*selected)} ({span} maanden)"
     return {
         "client_id": client_id,
         "months": [
@@ -124,19 +134,35 @@ def performance_month_payload(
             "month": selected[1],
             "label": format_month_label(*selected),
         },
+        "months_span": span,
+        "span_options": [1, 2, 3, 4, 5, 6],
+        "window_months": [{"year": y, "month": m, "label": format_month_label(y, m)} for y, m in window],
         "post_count": len(month_posts),
         "platforms": sorted(platforms),
         "sections": sections,
         "empty_message": None,
         "caption": (
-            f"Top posts published in {format_month_label(*selected)}, "
+            f"Top posts published in {period_label}, "
             "ranked by lifetime totals from the database. "
-            "Click Refresh figures for the latest Meta data."
+            "Beoordeling/insight/actie bekijk je bij de post onder Logs."
         ),
         "latest_month_label": format_month_label(*latest) if latest else None,
         "refresh_available": connection_ok(client),
         "synced_at": format_sync_moment(client.last_fetch_at) if client.last_fetch_at else None,
     }
+
+
+def _month_window_ending(end: tuple[int, int], span: int) -> list[tuple[int, int]]:
+    """Inclusive window of `span` months ending at `end`, newest first."""
+    y, m = end
+    out: list[tuple[int, int]] = []
+    for _ in range(span):
+        out.append((y, m))
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+    return out
 
 
 def connection_ok(client) -> bool:

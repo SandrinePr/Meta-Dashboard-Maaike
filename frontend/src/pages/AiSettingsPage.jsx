@@ -38,6 +38,7 @@ export default function AiSettingsPage() {
   const gemini = status.gemini || {};
   const claude = status.claude || {};
   const prompts = status.analysis_prompts || {};
+  const taskProviders = status.task_providers || {};
 
   return (
     <div className="stack">
@@ -45,6 +46,36 @@ export default function AiSettingsPage() {
         AI Connections: status of API connections (Gemini and Claude). This page does not start an analysis until you
         explicitly click analyse. Key values are not shown.
       </p>
+
+      {taskProviders.post_analysis || taskProviders.client_report ? (
+        <section className="card stack">
+          <h3>Aanbieder per taak</h3>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Taak</th>
+                  <th>Aanbieder</th>
+                  <th>Model</th>
+                </tr>
+              </thead>
+              <tbody>
+                {["post_analysis", "client_report", "trend_report"].map((key) => {
+                  const item = taskProviders[key] || {};
+                  const primary = item.primary || {};
+                  return (
+                    <tr key={key}>
+                      <td>{item.label || key}</td>
+                      <td>{primary.provider || "—"}</td>
+                      <td>{primary.model || "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
 
       <section className="card stack">
         <h3>Gemini API</h3>
@@ -139,6 +170,11 @@ export default function AiSettingsPage() {
           <p className="hint">{prompts.data_expectations.single_post_limitation}</p>
         ) : null}
       </section>
+
+      <EditablePromptsPanel
+        onNotice={setNotice}
+        onError={setError}
+      />
 
       <section className="card stack">
         <h3>Single Claude post analysis</h3>
@@ -261,5 +297,132 @@ export default function AiSettingsPage() {
       {error ? <p className="banner error">{error}</p> : null}
       {notice ? <p className="banner">{notice}</p> : null}
     </div>
+  );
+}
+
+function EditablePromptsPanel({ onNotice, onError }) {
+  const [data, setData] = useState(null);
+  const [busyKey, setBusyKey] = useState("");
+  const [drafts, setDrafts] = useState({});
+
+  useEffect(() => {
+    api("/api/prompt-settings")
+      .then((payload) => {
+        setData(payload);
+        const next = {};
+        for (const p of payload.prompts || []) {
+          next[p.prompt_key] = {
+            body_text: p.body_text || "",
+            version_tag: p.version_tag || "",
+          };
+        }
+        setDrafts(next);
+      })
+      .catch((exc) => onError(exc.message));
+  }, []);
+
+  if (!data) return <p className="muted">Promptinstellingen laden…</p>;
+
+  return (
+    <section className="card stack">
+      <h3>Bewerkbare prompts (dashboard)</h3>
+      <p className="hint">
+        Pas postanalyse-, trend- en klantrapportprompts aan. Per gegenereerd rapport blijft de
+        gebruikte promptversie bewaard. {data.note}
+      </p>
+      {(data.prompts || []).map((prompt) => {
+        const draft = drafts[prompt.prompt_key] || { body_text: "", version_tag: "" };
+        return (
+          <article className="card stack" key={prompt.prompt_key}>
+            <h4 style={{ marginTop: 0 }}>
+              {prompt.label}{" "}
+              <span className="hint">
+                · {prompt.source} · {prompt.version_tag}
+              </span>
+            </h4>
+            <label>
+              Versietag
+              <input
+                value={draft.version_tag}
+                onChange={(e) =>
+                  setDrafts((prev) => ({
+                    ...prev,
+                    [prompt.prompt_key]: { ...draft, version_tag: e.target.value },
+                  }))
+                }
+              />
+            </label>
+            <label>
+              Prompttekst
+              <textarea
+                rows={8}
+                value={draft.body_text}
+                onChange={(e) =>
+                  setDrafts((prev) => ({
+                    ...prev,
+                    [prompt.prompt_key]: { ...draft, body_text: e.target.value },
+                  }))
+                }
+              />
+            </label>
+            <div className="row-actions wrap">
+              <button
+                className="primary"
+                type="button"
+                disabled={busyKey === prompt.prompt_key}
+                onClick={() => {
+                  setBusyKey(prompt.prompt_key);
+                  api(`/api/prompt-settings/${prompt.prompt_key}`, {
+                    method: "PUT",
+                    body: {
+                      body_text: draft.body_text,
+                      version_tag: draft.version_tag,
+                      updated_by: "Maaike",
+                    },
+                  })
+                    .then((payload) => {
+                      setData(payload);
+                      onNotice(`${prompt.label} opgeslagen.`);
+                    })
+                    .catch((exc) => onError(exc.message))
+                    .finally(() => setBusyKey(""));
+                }}
+              >
+                Opslaan
+              </button>
+              <button
+                className="secondary"
+                type="button"
+                disabled={busyKey === prompt.prompt_key || prompt.source === "files"}
+                onClick={() => {
+                  setBusyKey(prompt.prompt_key);
+                  api(`/api/prompt-settings/${prompt.prompt_key}`, { method: "DELETE" })
+                    .then((payload) => {
+                      setData(payload);
+                      const restored = (payload.prompts || []).find(
+                        (p) => p.prompt_key === prompt.prompt_key,
+                      );
+                      if (restored) {
+                        setDrafts((prev) => ({
+                          ...prev,
+                          [prompt.prompt_key]: {
+                            body_text: restored.body_text || "",
+                            version_tag: restored.version_tag || "",
+                          },
+                        }));
+                      }
+                      onNotice(`${prompt.label} teruggezet naar bestanden.`);
+                    })
+                    .catch((exc) => onError(exc.message))
+                    .finally(() => setBusyKey(""));
+                }}
+              >
+                Reset naar bestanden
+              </button>
+            </div>
+          </article>
+        );
+      })}
+    </section>
   );
 }

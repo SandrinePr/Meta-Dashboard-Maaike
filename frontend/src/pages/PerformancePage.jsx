@@ -13,6 +13,7 @@ export default function PerformancePage({
 }) {
   const [instagram, setInstagram] = useState(true);
   const [facebook, setFacebook] = useState(true);
+  const [monthsSpan, setMonthsSpan] = useState(1);
   const [internalSelection, setInternalSelection] = useState("");
   const [payload, setPayload] = useState(null);
   const [error, setError] = useState("");
@@ -54,6 +55,7 @@ export default function PerformancePage({
     }
     const params = new URLSearchParams();
     params.set("platforms", platforms.join(","));
+    params.set("months_span", String(monthsSpan));
     if (selection) {
       params.set("year", selection.split("-")[0]);
       params.set("month", selection.split("-")[1]);
@@ -67,7 +69,7 @@ export default function PerformancePage({
         }
       })
       .catch((exc) => setError(exc.message));
-  }, [client.id, selection, platforms.join(",")]);
+  }, [client.id, selection, platforms.join(","), monthsSpan]);
 
   async function refreshFigures() {
     setRefreshing(true);
@@ -77,7 +79,10 @@ export default function PerformancePage({
       await api(`/api/clients/${client.id}/posts/fetch`, { method: "POST", body: {} });
       setNotice("Figures refreshed from Meta. Rankings below are totals to date.");
       onSynced?.();
-      const params = new URLSearchParams({ platforms: platforms.join(",") });
+      const params = new URLSearchParams({
+        platforms: platforms.join(","),
+        months_span: String(monthsSpan),
+      });
       if (selection) {
         params.set("year", selection.split("-")[0]);
         params.set("month", selection.split("-")[1]);
@@ -103,11 +108,21 @@ export default function PerformancePage({
       </p>
       <div className="filters">
         <label>
-          Month
+          Eindmaand
           <select value={selection} onChange={(event) => setSelection(event.target.value)}>
             {(payload.months || []).map((item) => (
               <option key={`${item.year}-${item.month}`} value={`${item.year}-${String(item.month).padStart(2, "0")}`}>
                 {item.select_label || `${item.label} (${item.count})`}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Periode
+          <select value={String(monthsSpan)} onChange={(e) => setMonthsSpan(Number(e.target.value))}>
+            {(payload.span_options || [1, 2, 3, 4, 5, 6]).map((n) => (
+              <option key={n} value={n}>
+                {n === 1 ? "1 maand" : `${n} maanden`}
               </option>
             ))}
           </select>

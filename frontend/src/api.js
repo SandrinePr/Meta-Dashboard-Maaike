@@ -1,6 +1,17 @@
-export const API_URL = (import.meta.env.VITE_API_URL || "https://127.0.0.1:8000").replace(/\/$/, "");
+// Production (import.meta.env.PROD): same-origin unless VITE_API_URL is a real URL.
+// Local: .env may set https://127.0.0.1:8000 / :8001. Render build uses VITE_API_URL=.
+const configured = String(import.meta.env.VITE_API_URL ?? "").trim();
+const isLocalhostApi = /^(https?:\/\/)?(127\.0\.0\.1|localhost)(:\d+)?$/i.test(
+  configured.replace(/\/$/, ""),
+);
+export const API_URL = (
+  import.meta.env.PROD && (!configured || isLocalhostApi)
+    ? ""
+    : configured || "https://127.0.0.1:8000"
+).replace(/\/$/, "");
 
 export function apiUrl(path) {
+  if (!API_URL) return path;
   return `${API_URL}${path}`;
 }
 

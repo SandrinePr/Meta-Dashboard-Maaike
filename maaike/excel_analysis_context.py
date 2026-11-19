@@ -186,11 +186,12 @@ def build_client_analysis_context(
     plan_y = planning_year or analysis_year
     plan_m = planning_month
     if plan_m is None:
-        # Default: planning = month after analysis period
-        if analysis_month == 12:
-            plan_y, plan_m = analysis_year + 1, 1
-        else:
-            plan_y, plan_m = analysis_year, analysis_month + 1
+        # Default: planning = analysis + 2 months (X+2)
+        plan_m = analysis_month + 2
+        plan_y = analysis_year
+        while plan_m > 12:
+            plan_m -= 12
+            plan_y += 1
     month_match = resolve_month_context_for_period(
         list(months),
         planning_year=plan_y,

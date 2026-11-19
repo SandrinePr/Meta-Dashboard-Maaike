@@ -226,6 +226,7 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
         for name, declaration in (
             ("content_soort_raw", "TEXT"),
             ("format_code_raw", "TEXT"),
+            ("figma_url", "TEXT"),
         ):
             if not _has_column(conn, "post_editorial", name):
                 conn.execute(f"ALTER TABLE post_editorial ADD COLUMN {name} {declaration}")

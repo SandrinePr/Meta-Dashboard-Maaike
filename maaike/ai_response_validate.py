@@ -311,6 +311,72 @@ class ValidationResult:
         }
 
 
+def _extract_balanced_object(text: str, start: int) -> str | None:
+    """Return the {...} slice starting at `start`, respecting strings. None if truncated."""
+    if start < 0 or start >= len(text) or text[start] != "{":
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+def _salvage_truncated_report_json(text: str) -> dict[str, Any] | None:
+    """Recover usable report JSON when Gemini cuts off after six_answers/chapters/action_plan."""
+    raw = (text or "").strip()
+    if '"six_answers"' not in raw:
+        return None
+    out: dict[str, Any] = {}
+    for key in ("six_answers", "chapters", "action_plan"):
+        match = re.search(rf'"{re.escape(key)}"\s*:\s*\{{', raw)
+        if not match:
+            continue
+        blob = _extract_balanced_object(raw, match.end() - 1)
+        if not blob:
+            continue
+        try:
+            value = json.loads(blob)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            out[key] = value
+    # Optional top-level string fields if complete
+    for key in ("hoofdfocus", "waarom_nu", "planning_note"):
+        match = re.search(
+            rf'"{re.escape(key)}"\s*:\s*"((?:\\.|[^"\\])*)"',
+            raw,
+        )
+        if match:
+            try:
+                out[key] = json.loads(f'"{match.group(1)}"')
+            except json.JSONDecodeError:
+                out[key] = match.group(1)
+    if not isinstance(out.get("six_answers"), dict):
+        return None
+    out["partial"] = True
+    out["fully_researched"] = False
+    out["_salvaged_from_truncated_json"] = True
+    return out
+
+
 def extract_json_object(text: str | None) -> tuple[dict[str, Any] | None, str | None]:
     """Parse a JSON object from model text. Returns (data, error)."""
     raw = (text or "").strip()
@@ -321,17 +387,19 @@ def extract_json_object(text: str | None) -> tuple[dict[str, Any] | None, str | 
         if isinstance(data, dict):
             return data, None
         return None, "JSON is geen object (verwacht {...})."
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as first_exc:
         match = re.search(r"\{[\s\S]*\}", raw)
-        if not match:
-            return None, "Geen JSON-object gevonden in het antwoord."
-        try:
-            data = json.loads(match.group(0))
-        except json.JSONDecodeError as exc:
-            return None, f"Ongeldige JSON: {exc}"
-        if isinstance(data, dict):
-            return data, None
-        return None, "Geëxtraheerde JSON is geen object."
+        if match:
+            try:
+                data = json.loads(match.group(0))
+                if isinstance(data, dict):
+                    return data, None
+            except json.JSONDecodeError:
+                pass
+        salvaged = _salvage_truncated_report_json(raw)
+        if salvaged:
+            return salvaged, None
+        return None, f"Ongeldige JSON: {first_exc}"
 
 
 def _is_placeholder(value: Any) -> bool:

@@ -3,9 +3,11 @@ import AiSettingsPage from "./AiSettingsPage.jsx";
 import AiTrialPage from "./AiTrialPage.jsx";
 import DataTransferPage from "./DataTransferPage.jsx";
 import LegendPage from "./LegendPage.jsx";
+import ReportPlanningPage from "./ReportPlanningPage.jsx";
 
 const TABS = [
   ["ai", "AI Connections"],
+  ["planning", "Rapportplanning"],
   ["legend", "Legend"],
   ["backup", "Backup & restore"],
 ];
@@ -25,14 +27,23 @@ export default function SettingsHubPage({ client, initialTab = "ai", onNotice, o
   return (
     <div className="stack">
       <p className="hint">
-        Settings for client: <strong>{client ? client.name : "none selected"}</strong>
-        {tab === "legend" ? " — legend items are stored per client." : null}
-        {tab === "backup"
-          ? " — full dashboard JSON backup/restore (separate from post Excel import)."
-          : null}
-        {tab === "ai"
-          ? " — API status plus internal AI Trial (post analysis probe; not the monthly client report)."
-          : null}
+        {tab === "planning" ? (
+          <>
+            <strong>Rapportplanning is globaal</strong> — voor alle klanten hetzelfde schema. De
+            klant links (nu {client ? client.name : "geen"}) verandert dit niet.
+          </>
+        ) : (
+          <>
+            Settings for client: <strong>{client ? client.name : "none selected"}</strong>
+            {tab === "legend" ? " — legend items are stored per client." : null}
+            {tab === "backup"
+              ? " — full dashboard JSON backup/restore (separate from post Excel import)."
+              : null}
+            {tab === "ai"
+              ? " — API status plus internal AI Trial (post analysis probe; not the monthly client report)."
+              : null}
+          </>
+        )}
       </p>
       <div className="subnav-tabs" role="tablist" aria-label="Settings">
         {TABS.map(([id, label]) => (
@@ -66,6 +77,7 @@ export default function SettingsHubPage({ client, initialTab = "ai", onNotice, o
           </section>
         </div>
       ) : null}
+      {tab === "planning" ? <ReportPlanningPage /> : null}
       {tab === "legend" && client ? (
         <LegendPage key={`legend-${client.id}`} client={client} onNotice={onNotice} onError={onError} />
       ) : null}

@@ -117,6 +117,11 @@ def build_execute_model_input(
     prompt_input = snap.get("prompt_input") or {}
     strategy_summary = snap.get("strategy_summary") or {}
     analysis_context = snap.get("analysis_context") or prompt_input.get("analysis_context")
+    notes = str(
+        snap.get("maaike_planning_notes")
+        or prompt_input.get("maaike_planning_notes")
+        or ""
+    ).strip()
     payload = {
         "report_type": report_type,
         "title": title,
@@ -144,6 +149,7 @@ def build_execute_model_input(
         or prompt_input.get("historical_performance"),
         "linked_trend": snap.get("linked_trend"),
         "attached_ai_analysis_ids": snap.get("attached_ai_analysis_ids"),
+        "maaike_planning_notes": notes or None,
         "posts": posts_for_prompt if report_type == "client" else None,
         "client_isolation": True,
         "workflow_prompts_local": True,
@@ -182,7 +188,15 @@ def model_input_presence_checklist(model_input: dict[str, Any]) -> list[dict[str
         if (p.get("excel_assessment") or {}).get("insight_text")
         or (p.get("ai_analysis") or {}).get("insight_text")
     )
+    notes = str(model_input.get("maaike_planning_notes") or "").strip()
     return [
+        _entry(
+            "maaike_planning_notes",
+            "Maaike planning-input (X+2)",
+            bool(notes),
+            "maaike_planning_notes",
+            (notes[:120] + "…") if len(notes) > 120 else (notes or "leeg"),
+        ),
         _entry(
             "client_file_strategy",
             "Klantbestand / strategieantwoorden + kanaalregels",
@@ -834,7 +848,7 @@ def execute_report(
     dry_run_paid: bool = True,
     model_override: str | None = None,
     thinking_level: str | None = None,
-    max_output_tokens: int = 4096,
+    max_output_tokens: int | None = None,
 ) -> dict[str, Any]:
     """
     Execute a prepared report.
@@ -884,17 +898,31 @@ def execute_report(
         or str((snap.get("execution_constraints") or {}).get("thinking_level") or "").strip()
         or None
     )
+    # Client reports need more room: 4096 often truncates mid-JSON (six_answers OK, rest cut off).
+    default_max_out = 16384 if row["report_type"] == "client" else 8192
     run_max_out = int(
         max_output_tokens
         or (snap.get("execution_constraints") or {}).get("max_output_tokens")
-        or 4096
+        or default_max_out
     )
+    run_max_out = max(1024, min(run_max_out, 65536))
 
     conn.execute(
         "UPDATE client_reports SET status = 'running', updated_at = ?, model = COALESCE(?, model) WHERE id = ?",
         (_now(), run_model, report_id),
     )
     bundle = load_report_instruction_bundle(row["report_type"])
+    prompt_version_used = bundle.get("prompt_version") or PROMPT_VERSION
+    try:
+        from maaike.prompt_settings import active_prompt_text
+
+        key = "trend_report" if row["report_type"] == "trend" else "client_report"
+        override = active_prompt_text(conn, key)
+        if override.get("source") == "dashboard_override" and override.get("body_text"):
+            bundle = {**bundle, "system_text": override["body_text"], "prompt_version": override["version_tag"]}
+            prompt_version_used = override["version_tag"]
+    except Exception:
+        pass
     research_mode = (snap.get("research_mode") or "manual").strip()
     enable_search = research_mode == "internet" and row["report_type"] == "trend"
 
@@ -914,6 +942,15 @@ def execute_report(
         json.dumps(model_input, ensure_ascii=False)[:120000],
         "",
     ]
+    notes = str(snap.get("maaike_planning_notes") or "").strip()
+    if row["report_type"] == "client" and notes:
+        user_parts.extend(
+            [
+                "MAAIKE PLANNING-INPUT (meenemen naar X+2; niet negeren):",
+                notes[:8000],
+                "",
+            ]
+        )
     if row["report_type"] == "client":
         user_parts.append(
             "Lever UITSLUITEND één JSON-object met dit formaat "
@@ -1104,7 +1141,7 @@ def execute_report(
                 now,
                 "Google Gemini Developer API (native)",
                 result.get("model") or "",
-                PROMPT_VERSION,
+                prompt_version_used,
                 report_id,
             ),
         )
@@ -1252,7 +1289,7 @@ def execute_report(
     if isinstance(body, dict):
         body["model"] = result.get("model")
         body["thinking_level"] = result.get("thinking_level") or run_thinking
-        body["prompt_version"] = PROMPT_VERSION
+        body["prompt_version"] = prompt_version_used
         body["http_status"] = result.get("http_status")
     conn.execute(
         """
@@ -1271,7 +1308,7 @@ def execute_report(
             now,
             "Google Gemini Developer API (native)",
             result.get("model") or "",
-            PROMPT_VERSION,
+            prompt_version_used,
             report_id,
         ),
     )

@@ -31,10 +31,10 @@ def test_inspect_and_prepare_include_analysis_context(tmp_path: Path, monkeypatc
                 "feedback_tov": "Feedback: blijf menselijk.",
                 "excel_month_contexts": [
                     {
-                        "sheet_name": "April 2026",
+                        "sheet_name": "Mei 2026",
                         "client_label": "QA Model",
                         "planning_year": 2026,
-                        "planning_month": 4,
+                        "planning_month": 5,  # X+2 from analyse March
                         "analysis_year": 2026,
                         "analysis_month": 3,
                         "analyse_vorige_planning": "Cases deden het beter.",
@@ -70,14 +70,18 @@ def test_inspect_and_prepare_include_analysis_context(tmp_path: Path, monkeypatc
             period_year=2026,
             period_month=3,
             allow_partial_without_trend=True,
+            maaike_planning_notes="QA: november meer reels, minder carrousels.",
         )
         snap = prepared["report"]["input_snapshot"]
         assert snap["period"]["analysis_period"]["month"] == 3
-        assert snap["period"]["planning_period"]["month"] == 4
+        assert snap["period"]["planning_period"]["month"] == 5  # X+2 from analyse March
         assert snap["analysis_context"]["feedback_tov"]["present"] is True
+        assert "meer reels" in (snap.get("maaike_planning_notes") or "")
         model = build_execute_model_input(prepared["report"], snap)
+        assert "meer reels" in (model.get("maaike_planning_notes") or "")
         checklist = model_input_presence_checklist(model)
         by_key = {c["key"]: c for c in checklist}
+        assert by_key["maaike_planning_notes"]["present"] is True
         assert by_key["feedback_tov"]["present"] is True
         assert by_key["month_analyse"]["present"] is True
         assert by_key["analysis_period"]["present"] is True

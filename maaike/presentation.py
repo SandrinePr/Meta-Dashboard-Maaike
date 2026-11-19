@@ -36,6 +36,7 @@ OVERVIEW_COLUMNS = (
     "Beoordeling",
     "Insight",
     "Actie",
+    "Figma",
 )
 
 COLUMN_LABELS = {
@@ -61,6 +62,7 @@ COLUMN_LABELS = {
     "Beoordeling": "Rating",
     "Insight": "Insight",
     "Actie": "Action",
+    "Figma": "Figma link",
 }
 
 EDITABLE_COLUMNS = frozenset({"Contentformat", "Contentpijler", "Hook"})
@@ -156,6 +158,7 @@ def overview_record(post: StoredPost) -> dict[str, str]:
         "Beoordeling": rating,
         "Insight": post.insight_text or "",
         "Actie": post.action_text or "",
+        "Figma": getattr(post, "figma_url", None) or "",
     }
 
 

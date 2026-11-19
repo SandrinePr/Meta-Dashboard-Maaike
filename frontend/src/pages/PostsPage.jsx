@@ -5,6 +5,19 @@ import RatingBadge from "../components/RatingBadge.jsx";
 
 const EDITABLE = new Set(["Contentformat", "Contentpijler", "Hook"]);
 
+/** Normalize Publicatiedatum cells (ISO or DD-MM-YYYY) to YYYY-MM-DD for filters/sort. */
+function toIsoDate(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const dmy = raw.match(/^(\d{1,2})-(\d{1,2})-(\d{4})/);
+  if (dmy) {
+    return `${dmy[3]}-${String(dmy[2]).padStart(2, "0")}-${String(dmy[1]).padStart(2, "0")}`;
+  }
+  return raw.slice(0, 10);
+}
+
 export default function PostsPage({
   client,
   focusPostId,
@@ -169,8 +182,7 @@ export default function PostsPage({
       if (filters.missing === "format" && !missing.format) return false;
       if (filters.missing === "pillar" && !missing.pillar) return false;
       if (filters.missing === "hook" && !missing.hook) return false;
-      const pub = String(cells.Publicatiedatum || "");
-      const iso = pub.includes("-") ? pub.slice(0, 10) : "";
+      const iso = toIsoDate(cells.Publicatiedatum);
       if (filters.date_from && iso && iso < filters.date_from) return false;
       if (filters.date_to && iso && iso > filters.date_to) return false;
       return true;
@@ -179,8 +191,8 @@ export default function PostsPage({
     sorted.sort((a, b) => {
       const ca = a.cells || {};
       const cb = b.cells || {};
-      const da = String(ca.Publicatiedatum || "").slice(0, 10);
-      const db = String(cb.Publicatiedatum || "").slice(0, 10);
+      const da = toIsoDate(ca.Publicatiedatum);
+      const db = toIsoDate(cb.Publicatiedatum);
       if (sortKey === "date_asc") return da.localeCompare(db) || a.post_id - b.post_id;
       if (sortKey === "platform") {
         return String(ca.Platform || "").localeCompare(String(cb.Platform || "")) || db.localeCompare(da);
@@ -991,7 +1003,8 @@ function useDraft(post) {
   const [formatId, setFormatId] = useState(post.format_id == null ? "" : String(post.format_id));
   const [pillarId, setPillarId] = useState(post.pillar_id == null ? "" : String(post.pillar_id));
   const [hook, setHook] = useState(post.cells.Hook || "");
-  return { formatId, setFormatId, pillarId, setPillarId, hook, setHook };
+  const [figmaUrl, setFigmaUrl] = useState(post.figma_url || post.cells?.Figma || "");
+  return { formatId, setFormatId, pillarId, setPillarId, hook, setHook, figmaUrl, setFigmaUrl };
 }
 
 async function saveDraft(clientId, post, draft, onSaved, onError) {
@@ -1003,6 +1016,7 @@ async function saveDraft(clientId, post, draft, onSaved, onError) {
         format_id: draft.formatId === "" ? null : Number(draft.formatId),
         pillar_id: draft.pillarId === "" ? null : Number(draft.pillarId),
         hook: draft.hook,
+        figma_url: draft.figmaUrl ?? "",
       },
     });
     await onSaved();
@@ -1048,6 +1062,14 @@ function PostDesktop({ clientId, post, columns, columnLabels, formats, pillars, 
               </button>
             ) : null}
           </div>
+          <label style={{ display: "block", marginTop: "0.5rem" }}>
+            Figma-link (optioneel)
+            <input
+              value={draft.figmaUrl}
+              onChange={(e) => draft.setFigmaUrl(e.target.value)}
+              placeholder="https://www.figma.com/…"
+            />
+          </label>
           <MediaUploadPanel clientId={clientId} postId={post.id} onError={onError} onSaved={onSaved} />
         </td>
       </tr>
@@ -1086,6 +1108,14 @@ function PostCard({ clientId, post, columns, columnLabels, formats, pillars, hoo
         </label>
       ))}
       {post.formula_rating ? <RatingBadge rating={post.formula_rating} showExplanation /> : null}
+      <label>
+        Figma-link (optioneel)
+        <input
+          value={draft.figmaUrl}
+          onChange={(e) => draft.setFigmaUrl(e.target.value)}
+          placeholder="https://www.figma.com/…"
+        />
+      </label>
       <div className="row-actions">
         <button className="primary" type="button" onClick={() => saveDraft(clientId, post, draft, onSaved, onError)}>
           Save format, pillar and hook

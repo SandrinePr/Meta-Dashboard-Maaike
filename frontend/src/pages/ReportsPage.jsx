@@ -254,7 +254,30 @@ export default function ReportsPage({ client }) {
     () => (data?.reports || []).filter((r) => r.report_type === "trend"),
     [data]
   );
-  const reportGroups = useMemo(() => groupSavedReports(data?.reports || []), [data]);
+  const readyToReview = useMemo(() => {
+    const rows = (data?.reports || []).filter((r) => {
+      if (r.report_type !== "client") return false;
+      if (r.is_approved) return false;
+      if (r.status === "prepared" || !r.executed_at) return true;
+      if (r.status === "completed" || r.status === "mock_completed") return true;
+      return false;
+    });
+    rows.sort((a, b) => {
+      const pa = a.from_plan ? 0 : 1;
+      const pb = b.from_plan ? 0 : 1;
+      if (pa !== pb) return pa - pb;
+      const da = a.updated_at || a.prepared_at || "";
+      const db = b.updated_at || b.prepared_at || "";
+      return db.localeCompare(da);
+    });
+    return rows;
+  }, [data]);
+  const readyIds = useMemo(() => new Set(readyToReview.map((r) => r.id)), [readyToReview]);
+  const reportGroups = useMemo(
+    () =>
+      groupSavedReports((data?.reports || []).filter((r) => !readyIds.has(r.id) || r.report_type === "trend")),
+    [data, readyIds],
+  );
 
   if (!data) {
     return error ? <p className="banner error">{error}</p> : <p className="muted">Loading…</p>;
@@ -400,8 +423,50 @@ export default function ReportsPage({ client }) {
             </button>
           </div>
 
+          {readyToReview.length ? (
+            <section className="card stack">
+              <h3 style={{ marginTop: 0 }}>Klaar om te bekijken</h3>
+              <p className="hint" style={{ margin: 0 }}>
+                Concepten met klantnaam en periode. Openen, aanpassen en zelf goedkeuren — start geen AI.
+              </p>
+              <div className="report-list stack">
+                {readyToReview.map((r) => (
+                  <div
+                    className={`report-list-row${selectedId === r.id ? " is-selected" : ""}`}
+                    key={`ready-${r.id}`}
+                  >
+                    <div className="report-list-main">
+                      <span className="report-list-title">
+                        {client.name} · {periodLabel(r)}
+                      </span>
+                      <div className="report-list-meta">
+                        <span className="report-list-type">{displayReportTitle(r, client.name)}</span>
+                        <span className={`report-status-badge is-${resolveReportBadge(r).code}`}>
+                          {resolveReportBadge(r).label}
+                        </span>
+                        {r.from_plan ? (
+                          <span className="report-status-badge is-prepared">Planning</span>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="report-list-actions">
+                      <button
+                        className="secondary"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => openReport(r.id).catch((exc) => setError(exc.message))}
+                      >
+                        Openen
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
           <section className="card stack">
-            {!reportGroups.length ? (
+            {!reportGroups.length && !readyToReview.length ? (
               <p className="hint">Nog geen rapporten voor deze klant. Start met Nieuwe analyse.</p>
             ) : null}
             <div className="report-list stack">

@@ -8,8 +8,8 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
-_DEFAULT_FRONTEND = "http://127.0.0.1:5173"
-_DEFAULT_BACKEND = "http://127.0.0.1:8000"
+_DEFAULT_FRONTEND = "https://127.0.0.1:5173"
+_DEFAULT_BACKEND = "https://127.0.0.1:8000"
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +68,10 @@ def _with_loopback_aliases(origins: tuple[str, ...]) -> tuple[str, ...]:
             candidates.append(origin.replace("://127.0.0.1", "://localhost", 1))
         elif "://localhost" in origin:
             candidates.append(origin.replace("://localhost", "://127.0.0.1", 1))
+        if origin.startswith("http://"):
+            candidates.append("https://" + origin[len("http://") :])
+        elif origin.startswith("https://"):
+            candidates.append("http://" + origin[len("https://") :])
         for item in candidates:
             if item not in seen:
                 seen.add(item)
