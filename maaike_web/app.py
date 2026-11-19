@@ -188,12 +188,21 @@ def create_app() -> FastAPI:
         except MaaikeConfigError as exc:
             raise RuntimeError(str(exc)) from exc
         try:
-            from maaike.persist_remote import restore_from_remote_if_needed  # noqa: F401
-
             with transaction() as conn:
-                restore_from_remote_if_needed(conn)
+                try:
+                    from maaike.persist_remote import restore_from_remote_if_needed
+
+                    restore_from_remote_if_needed(conn)
+                except Exception:
+                    pass
+                try:
+                    from maaike.hamster_seed import restore_hamster_seed_if_empty
+
+                    restore_hamster_seed_if_empty(conn)
+                except Exception:
+                    pass
         except Exception:
-            # Remote persist is optional; boot even if restore/import fails.
+            # Seed/persist are optional; boot even if restore fails.
             pass
         try:
             from maaike.competitor_scheduler import start_competitor_scheduler
@@ -1677,16 +1686,26 @@ def create_app() -> FastAPI:
     @app.post("/api/clients/{client_id}/figma-planning/sync")
     def sync_figma_planning(client_id: int, body: dict | None = None) -> dict:
         """Sync planning items from Figma API when FIGMA_ACCESS_TOKEN is set."""
-        from maaike.figma_planning import sync_from_figma_api
+        from maaike.figma_planning import repair_classification_flags, sync_from_figma_api
 
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
                 result = sync_from_figma_api(conn, client_id)
+                result["classification_repair"] = repair_classification_flags(conn, client_id)
                 result["persist"] = _safe_persist_push(conn)
                 return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/clients/{client_id}/figma-planning/repair-classifications")
+    def repair_figma_classifications(client_id: int) -> dict:
+        """Recompute usable flags from raw Figma fields. Does not change post links."""
+        from maaike.figma_planning import repair_classification_flags
+
+        with transaction() as conn:
+            _require_client(conn, client_id)
+            return repair_classification_flags(conn, client_id)
 
     @app.post("/api/clients/{client_id}/figma-planning/import-snapshot")
     def import_figma_snapshot(client_id: int, body: dict) -> dict:

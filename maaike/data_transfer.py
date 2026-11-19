@@ -48,12 +48,26 @@ def _table_exists(conn, name: str) -> bool:
 
 def create_pre_import_backup() -> Path:
     src = database_path()
-    backup_dir = project_root() / "data" / "backups"
-    backup_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M")
-    dest = backup_dir / f"maaike_redrock-before-import-{stamp}.db"
-    shutil.copy2(src, dest)
-    return dest
+    candidates = [
+        project_root() / "data" / "backups",
+        Path("/tmp") / "maaike_backups",
+        src.parent,
+    ]
+    last_error: Exception | None = None
+    for backup_dir in candidates:
+        try:
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            dest = backup_dir / f"maaike_redrock-before-import-{stamp}.db"
+            if src.is_file():
+                shutil.copy2(src, dest)
+            else:
+                dest.write_bytes(b"")
+            return dest
+        except OSError as exc:
+            last_error = exc
+            continue
+    raise OSError(f"Could not create pre-import backup: {last_error}")
 
 
 def export_package(conn, *, client_id: int | None = None) -> dict[str, Any]:

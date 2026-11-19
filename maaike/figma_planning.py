@@ -29,6 +29,12 @@ UNUSABLE_VALUES = frozenset(
         "nvt",
         "nvt --> ondertitelen",
         "nvt --&gt; ondertitelen",
+        "niet van toepassing",
+        "niet van toepassing.",
+        "not applicable",
+        "-",
+        "—",
+        "–",
     }
 )
 
@@ -165,6 +171,8 @@ def is_usable_classification(value: str | None) -> bool:
     if lower in UNUSABLE_VALUES:
         return False
     if lower.startswith("hier in te vullen"):
+        return False
+    if lower.startswith("niet van toepassing"):
         return False
     if lower in {"nvt", "nvt.", "n.v.t", "n.v.t."}:
         return False
@@ -1042,6 +1050,53 @@ def apply_link_to_post(
             ).fetchone()
         ),
     }
+
+
+def repair_classification_flags(conn, client_id: int) -> dict[str, Any]:
+    """Recompute usable flags from stored raw fields. Never touches linked posts."""
+    ensure_figma_tables(conn)
+    rows = conn.execute(
+        """
+        SELECT id, format_raw, pillar_raw, hook_raw, format_usable, pillar_usable, hook_usable
+        FROM figma_planning_items WHERE client_id = ?
+        """,
+        (client_id,),
+    ).fetchall()
+    updated = 0
+    examples: list[dict[str, Any]] = []
+    now = _now()
+    for row in rows:
+        format_usable = 1 if is_usable_classification(row["format_raw"]) else 0
+        pillar_usable = 1 if is_usable_classification(row["pillar_raw"]) else 0
+        hook_usable = 1 if is_usable_classification(row["hook_raw"]) else 0
+        if (
+            format_usable == int(row["format_usable"] or 0)
+            and pillar_usable == int(row["pillar_usable"] or 0)
+            and hook_usable == int(row["hook_usable"] or 0)
+        ):
+            continue
+        conn.execute(
+            """
+            UPDATE figma_planning_items
+            SET format_usable = ?, pillar_usable = ?, hook_usable = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (format_usable, pillar_usable, hook_usable, now, row["id"]),
+        )
+        updated += 1
+        if len(examples) < 12:
+            examples.append(
+                {
+                    "id": row["id"],
+                    "format_raw": row["format_raw"],
+                    "format_usable": bool(format_usable),
+                    "pillar_raw": row["pillar_raw"],
+                    "pillar_usable": bool(pillar_usable),
+                    "hook_raw": row["hook_raw"],
+                    "hook_usable": bool(hook_usable),
+                }
+            )
+    return {"updated": updated, "scanned": len(rows), "examples": examples}
 
 
 def planning_overview(conn, client_id: int) -> dict[str, Any]:

@@ -231,9 +231,11 @@ def public_persist_status() -> dict[str, Any]:
             "last_pushed_sha256": state.get("last_pushed_sha256"),
             "last_pushed_at": state.get("last_pushed_at"),
             "last_restored_at": state.get("last_restored_at"),
+            "hamster_seed": "maaike/seed/hamster_redrock.json.gz",
             "free_tier_note": (
-                "Without a Render disk, SQLite is ephemeral. Enable remote persist so "
-                "prompts, posts, Figma links and reports survive restarts."
+                "Without a Render disk, SQLite is ephemeral. HAMSTER restores "
+                "maaike/seed/hamster_redrock.json.gz when posts are empty. "
+                "Set MAAIKE_PERSIST_* for edits (prompts/links) across restarts."
             ),
         }
     except Exception as exc:
@@ -245,8 +247,10 @@ def public_persist_status() -> dict[str, Any]:
             "missing": ["persist_status_error"],
             "error": exc.__class__.__name__,
             "note": "Persist status failed safely; dashboard can still boot.",
+            "hamster_seed": "maaike/seed/hamster_redrock.json.gz",
             "free_tier_note": (
-                "Without a Render disk, SQLite is ephemeral. Enable remote persist so "
-                "prompts, posts, Figma links and reports survive restarts."
+                "Without a Render disk, SQLite is ephemeral. HAMSTER restores "
+                "maaike/seed/hamster_redrock.json.gz when posts are empty. "
+                "Set MAAIKE_PERSIST_* for edits (prompts/links) across restarts."
             ),
         }

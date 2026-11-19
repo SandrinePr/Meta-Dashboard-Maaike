@@ -50,6 +50,8 @@ def test_usable_and_parse_helpers():
     assert is_usable_classification("Hier in te vullen") is False
     assert is_usable_classification("nvt.") is False
     assert is_usable_classification("n.v.t.") is False
+    assert is_usable_classification("Niet van toepassing") is False
+    assert is_usable_classification("niet van toepassing.") is False
     brief = parse_brief_fields(
         "INSTA - REEL Content format: R07 Contentpijler: Branche & Trends Wat moet de gebruiker doen / onthouden na het zien van de post? x"
     )
