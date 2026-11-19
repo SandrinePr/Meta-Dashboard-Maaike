@@ -145,8 +145,18 @@ def claude_connection_status() -> dict[str, Any]:
         "key_source": resolved["source"],
         "model": model,
         "base_host": base.replace("https://", "").replace("http://", "").split("/")[0],
-        "missing_setting": None if key else "CLAUDE_API_KEY in .env (projectroot)",
-        "env_file_hint": f"{ENV_FILE.name} in projectroot (server-side; nooit in de frontend)",
+        "missing_setting": None
+        if key
+        else (
+            "CLAUDE_API_KEY (Render Environment → hamster)"
+            if os.getenv("RENDER") or os.getenv("RENDER_EXTERNAL_URL")
+            else "CLAUDE_API_KEY in .env (project root)"
+        ),
+        "env_file_hint": (
+            "Render Environment variable CLAUDE_API_KEY (server-side; never in the frontend)"
+            if os.getenv("RENDER") or os.getenv("RENDER_EXTERNAL_URL")
+            else f"{ENV_FILE.name} in project root (server-side; never in the frontend)"
+        ),
         "notes": notes,
     }
 
