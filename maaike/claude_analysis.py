@@ -17,16 +17,17 @@ from maaike.report_metrics import build_period_metrics, trend_lookback_bounds, _
 from maaike.repository import list_formats, list_posts
 from maaike.strategy import get_strategy
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SOCIAL_AGENT_DIR = PROJECT_ROOT / "data" / "imports" / "redrock" / "social_agent"
+from maaike.prompt_files import (
+    ANALYSIS_PROMPT_FILES,
+    PROJECT_ROOT,
+    read_social_agent_text,
+    social_agent_dir,
+)
+
 ENV_FILE = PROJECT_ROOT / ".env"
 PROMPT_VERSION = "maaike-performance-analyse-v2"
-
-REQUIRED_FILES = (
-    "Performance-analyse richtlijnen.txt",
-    "Role - Algemene instructies.txt",
-    "Kwaliteitsstandaard.txt",
-)
+REQUIRED_FILES = ANALYSIS_PROMPT_FILES
+SOCIAL_AGENT_DIR = social_agent_dir()  # resolved at import; refresh via social_agent_dir()
 
 # Prefer CLAUDE_API_KEY; fall back to ANTHROPIC_API_KEY.
 _KEY_VARS = ("CLAUDE_API_KEY", "ANTHROPIC_API_KEY")
@@ -37,10 +38,7 @@ def _now() -> str:
 
 
 def _read(name: str) -> str:
-    path = SOCIAL_AGENT_DIR / name
-    if not path.exists():
-        return ""
-    return path.read_text(encoding="utf-8")
+    return read_social_agent_text(name)
 
 
 def resolve_claude_api_key() -> dict[str, Any]:

@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from maaike.ai_status import public_ai_status
 from maaike.ai_trial_media import prepare_post_media
 from maaike.ai_trial_request import PROMPT_VERSION, build_request_package
+from maaike.prompt_files import social_agent_dir
 
 TRIAL_KEY = "redrock-postanalyse-v1"
 
@@ -56,9 +57,6 @@ DEFAULT_TRIAL_POSTS = (
         "reason": "Reel R07 met video-URL + thumbnail; frames verspreid over de hele clip (dicht in 0–3s). Geen audio/transcript; geen claim van volledige videoanalyse.",
     },
 )
-
-SOCIAL_AGENT_DIR = Path(__file__).resolve().parents[1] / "data" / "imports" / "redrock" / "social_agent"
-
 
 def _now() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
@@ -228,12 +226,18 @@ def sync_prompt_catalog(conn) -> list[dict[str, Any]]:
             body = item.get("body") or ""
             status = "catalogued"
         else:
-            file_path = SOCIAL_AGENT_DIR / item["filename"]
+            root = social_agent_dir()
+            file_path = root / item["filename"]
             txt_path = file_path.with_suffix(".txt")
-            path = str(file_path.relative_to(Path(__file__).resolve().parents[1])) if file_path.exists() else item["label"]
+            path = (
+                str(file_path.relative_to(Path(__file__).resolve().parents[1])).replace("\\", "/")
+                if file_path.exists()
+                else item["label"]
+            )
             if txt_path.exists():
                 body = txt_path.read_text(encoding="utf-8")
                 status = "loaded"
+                path = str(txt_path.relative_to(Path(__file__).resolve().parents[1])).replace("\\", "/")
             elif file_path.exists():
                 body = ""
                 status = "downloaded_not_extracted"

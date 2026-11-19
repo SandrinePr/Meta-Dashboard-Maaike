@@ -43,9 +43,15 @@ export default function AiSettingsPage() {
   return (
     <div className="stack">
       <p className="hint">
-        AI Connections: status of API connections (Gemini and Claude). This page does not start an analysis until you
-        explicitly click analyse. Key values are not shown.
+        AI Connections: actieve route is Gemini voor postanalyse, klantrapport en trendrapport. Claude is optioneel.
+        Deze pagina start geen AI-aanvraag. Key values worden niet getoond.
       </p>
+
+      {status.active_provider ? (
+        <p className="banner">Actieve configuratie: {status.active_provider}{status.model ? ` · ${status.model}` : ""}</p>
+      ) : (
+        <p className="banner error">Geen actieve AI-configuratie (zet AI_BASE_URL / AI_API_KEY / AI_MODEL).</p>
+      )}
 
       {taskProviders.post_analysis || taskProviders.client_report ? (
         <section className="card stack">
@@ -78,12 +84,19 @@ export default function AiSettingsPage() {
       ) : null}
 
       <section className="card stack">
-        <h3>Gemini API</h3>
+        <h3>Gemini API (actief)</h3>
         <p className={gemini.configured ? "banner" : "banner error"}>
           {gemini.configured
             ? `Connected · model ${gemini.model} · host ${gemini.base_host || "—"}`
             : "Not fully configured (AI_BASE_URL / AI_API_KEY / AI_MODEL)."}
         </p>
+        {(gemini.used_for || []).length ? (
+          <ul className="plain-list">
+            {gemini.used_for.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        ) : null}
         <div className="table-wrap">
           <table>
             <thead>
@@ -111,11 +124,11 @@ export default function AiSettingsPage() {
       </section>
 
       <section className="card stack">
-        <h3>Claude API</h3>
-        <p className={claude.configured ? "banner" : "banner error"}>
+        <h3>Claude API (optioneel)</h3>
+        <p className={claude.configured ? "banner" : "banner"}>
           {claude.configured
             ? `Connected · model ${claude.model} · host ${claude.base_host}`
-            : `Not connected — set ${claude.missing_setting || "CLAUDE_API_KEY"} in ${claude.env_file_hint || ".env"}.`}
+            : `Niet verbonden — niet vereist voor Gemini-rapporten/postanalyse. Optioneel: ${claude.missing_setting || "CLAUDE_API_KEY"} in ${claude.env_file_hint || ".env"}.`}
         </p>
         <div className="table-wrap">
           <table>
@@ -156,7 +169,7 @@ export default function AiSettingsPage() {
         <h3>Maaike analysis prompts</h3>
         <p className={prompts.ready ? "banner" : "banner error"}>
           {prompts.ready
-            ? `Prompt version ${prompts.prompt_version} loaded.`
+            ? `Prompt version ${prompts.prompt_version} loaded${prompts.root ? ` · ${prompts.root}` : ""}.`
             : `Missing files: ${(prompts.missing_files || []).join(", ") || "unknown"}`}
         </p>
         <ul className="plain-list">

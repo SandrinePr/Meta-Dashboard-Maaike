@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-SOCIAL_AGENT_DIR = Path(__file__).resolve().parents[1] / "data" / "imports" / "redrock" / "social_agent"
+from maaike.prompt_files import read_social_agent_text, social_agent_dir
+
+SOCIAL_AGENT_DIR = social_agent_dir()
 PROMPT_VERSION = "maaike-postanalyse-trial-v2"
 
 # Formats sheet groups: C* = Carrousel/post (multi-slide); R* = Reel; LZ* = LinkedIn zakelijk.
@@ -31,10 +32,7 @@ FORMAT_FAMILY = {
 
 
 def _read_txt(name: str) -> str:
-    path = SOCIAL_AGENT_DIR / name
-    if not path.exists():
-        return ""
-    return path.read_text(encoding="utf-8")
+    return read_social_agent_text(name)
 
 
 def load_instruction_bundle() -> dict[str, Any]:
@@ -67,7 +65,7 @@ def load_instruction_bundle() -> dict[str, Any]:
             "Cluster-prompt (niet gevonden)",
         ],
         "system_text": _system_text(role, quality, performance),
-        "sources_on_disk": [p.name for p in SOCIAL_AGENT_DIR.glob("*.txt")],
+        "sources_on_disk": [p.name for p in social_agent_dir().glob("*.txt")],
     }
 
 

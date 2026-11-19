@@ -569,11 +569,19 @@ def task_ai_providers() -> dict[str, Any]:
         "post_analysis": {
             "label": "Postanalyse",
             "primary": {
-                "provider": "Claude" if claude.get("configured") else "Gemini (fallback)",
-                "model": (claude.get("model") if claude.get("configured") else gemini.get("model")) or "",
-                "configured": bool(claude.get("configured") or gemini.get("configured")),
+                "provider": "Google Gemini Developer API",
+                "model": gemini.get("model") or "",
+                "configured": bool(gemini.get("configured")),
             },
-            "notes": "Claude wanneer CLAUDE_API_KEY gezet is; anders Gemini via AI_*.",
+            "notes": (
+                "Standaardknoppen Prepare/Execute gebruiken Gemini (AI_*). "
+                "Claude alleen via de optionele Settings-knop."
+            ),
+            "optional": {
+                "provider": "Claude",
+                "configured": bool(claude.get("configured")),
+                "model": claude.get("model") or "",
+            },
         },
         "client_report": {
             "label": "Klantrapport",

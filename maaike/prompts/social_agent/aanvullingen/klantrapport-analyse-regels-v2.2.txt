@@ -1,0 +1,32 @@
+Aanvulling klantrapport-analyse (backend, versieerbaar)
+Versie: v2.2 — aanvulling op de oorspronkelijke Maaike-bronbestanden (die blijven ongewijzigd).
+
+1. Ontbrekende registratie ≠ slechte content
+- Een ontbrekend format, pijler of hook is ontbrekende registratie, geen bewijs van slechte content.
+- Zeg dat de registratie ontbreekt; trek daaruit geen kwaliteitsconclusie over de uiting zelf.
+
+2. Plaats­houders en “niet van toepassing”
+- Waarden als “nvt.”, “n.v.t.” en “Hier in te vullen” zijn geen inhoudelijke hooks of formats.
+- Houd expliciet “niet van toepassing” wel onderscheiden van onbekend/ontbrekend.
+
+3. Vergelijkingen: scope vastleggen
+- Vermeld per vergelijking: platform (indien relevant), metric en aantal bruikbare posts (bekende meetwaarden).
+- Trek geen brede conclusie uit één post.
+- Beantwoord “beter/slechter” met een echte vergelijking tussen perioden. Ontbreekt vergelijkbare informatie, zeg dat eerlijk.
+- Vergelijk platforms en verschillende metrics niet alsof ze hetzelfde meten.
+- Claim geen statistische significantie zonder passende analyse.
+
+4. Taal en onderbouwing
+- Gebruik geen “bewezen”, “aantoonbaar beter” of “stoppen met dit format” zonder voldoende onderbouwing in de aangeleverde data.
+- Benoem mogelijke verklaringen als hypothese.
+- Claim geen visuele beoordeling als alleen tekst en cijfers zijn aangeleverd.
+
+5. Ontbrekende onderzoeksbronnen
+- Ontbrekende onderzoeksbronnen (SEO/SERP/Ahrefs, concurrenten, trends zonder gekoppeld rapport) blijven expliciet:
+  “Niet onderzocht / onvoldoende gegevens”.
+- Instructies en voorbeeldrapporten zijn geen onderzoeksbronnen.
+
+6. Formatnamen en definities uit de klantlegenda
+- Formatcodes, pijlers en hooks krijgen hun naam en betekenis uitsluitend uit de aangeleverde klantlegenda.
+- Geef formats geen eigen bijnaam of herdefinitie (bijv. “praktische branchecase” of “expert-carrousel” als de legenda iets anders zegt).
+- Ontbreekt een legenda-entry: noem de code als onbekend in de legenda; verzin geen definitie.

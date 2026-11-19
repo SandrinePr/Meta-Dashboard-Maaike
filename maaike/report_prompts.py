@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-SOCIAL_AGENT_DIR = Path(__file__).resolve().parents[1] / "data" / "imports" / "redrock" / "social_agent"
+from maaike.prompt_files import read_social_agent_text, social_agent_dir
+
+SOCIAL_AGENT_DIR = social_agent_dir()
 VOORBEELD_DIR = SOCIAL_AGENT_DIR / "voorbeeldrapporten"
 PROMPT_VERSION = "maaike-rapporten-v2.2"
 CLIENT_ANALYSIS_SUPPLEMENT = "aanvullingen/klantrapport-analyse-regels-v2.2.txt"
@@ -22,10 +23,12 @@ CLIENT_EXAMPLE_PDF = "voorbeeldrapporten/Maandelijks klant rapport - Voorbeeld.p
 
 
 def _read(name: str) -> str:
-    path = SOCIAL_AGENT_DIR / name
-    if not path.exists():
-        return ""
-    return path.read_text(encoding="utf-8")
+    return read_social_agent_text(name)
+
+
+def _agent_root():
+    """Always re-resolve so tracked prompts win after deploy."""
+    return social_agent_dir()
 
 
 def internet_search_capability() -> dict[str, Any]:
@@ -45,8 +48,9 @@ def load_report_instruction_bundle(report_type: str) -> dict[str, Any]:
     style_notes = _read(STYLE_NOTES_FILE)
     client_supplement = _read(CLIENT_ANALYSIS_SUPPLEMENT) if report_type == "client" else ""
     search = internet_search_capability()
-    trend_example = (SOCIAL_AGENT_DIR / TREND_EXAMPLE_PDF).exists()
-    client_example = (SOCIAL_AGENT_DIR / CLIENT_EXAMPLE_PDF).exists()
+    root = _agent_root()
+    trend_example = (root / TREND_EXAMPLE_PDF).exists()
+    client_example = (root / CLIENT_EXAMPLE_PDF).exists()
 
     if report_type == "trend":
         primary = trend
