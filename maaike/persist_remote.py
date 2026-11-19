@@ -27,10 +27,18 @@ from maaike.data_transfer import apply_import, export_package_json_bytes, valida
 
 def _state_path() -> Path:
     """Keep digest next to the SQLite file so Free /tmp and local data/ both work."""
-    db = database_path()
-    root = db.parent
-    root.mkdir(parents=True, exist_ok=True)
-    return root / ".maaike_persist_state.json"
+    candidates = [database_path().parent, Path("/tmp"), project_root() / "data"]
+    for root in candidates:
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            probe = root / ".maaike_persist_write_probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return root / ".maaike_persist_state.json"
+        except OSError:
+            continue
+    # Last resort: in-memory only (no file); callers still work via empty state.
+    return Path("/tmp") / ".maaike_persist_state.json"
 
 
 def _load_state() -> dict[str, Any]:
@@ -205,18 +213,33 @@ def restore_from_remote_if_needed(conn) -> dict[str, Any]:
 
 
 def public_persist_status() -> dict[str, Any]:
-    cfg = persist_config()
-    state = _load_state()
-    db = database_path()
-    return {
-        **cfg,
-        "database_path_name": db.name,
-        "database_exists": db.is_file(),
-        "last_pushed_sha256": state.get("last_pushed_sha256"),
-        "last_pushed_at": state.get("last_pushed_at"),
-        "last_restored_at": state.get("last_restored_at"),
-        "free_tier_note": (
-            "Without a Render disk, SQLite is ephemeral. Enable remote persist so "
-            "prompts, posts, Figma links and reports survive restarts."
-        ),
-    }
+    try:
+        cfg = persist_config()
+        state = _load_state()
+        db = database_path()
+        return {
+            **cfg,
+            "database_path_name": db.name,
+            "database_exists": db.is_file(),
+            "last_pushed_sha256": state.get("last_pushed_sha256"),
+            "last_pushed_at": state.get("last_pushed_at"),
+            "last_restored_at": state.get("last_restored_at"),
+            "free_tier_note": (
+                "Without a Render disk, SQLite is ephemeral. Enable remote persist so "
+                "prompts, posts, Figma links and reports survive restarts."
+            ),
+        }
+    except Exception as exc:
+        return {
+            "enabled": False,
+            "has_url": False,
+            "has_token": False,
+            "url_host": "",
+            "missing": ["persist_status_error"],
+            "error": exc.__class__.__name__,
+            "note": "Persist status failed safely; dashboard can still boot.",
+            "free_tier_note": (
+                "Without a Render disk, SQLite is ephemeral. Enable remote persist so "
+                "prompts, posts, Figma links and reports survive restarts."
+            ),
+        }

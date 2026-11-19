@@ -237,12 +237,20 @@ def create_app() -> FastAPI:
 
     @app.get("/api/ai-status")
     def ai_status() -> dict:
-        from maaike.persist_remote import public_persist_status
         from maaike.report_planning import task_ai_providers
 
         payload = public_ai_status()
         payload["task_providers"] = task_ai_providers()
-        payload["persist"] = public_persist_status()
+        try:
+            from maaike.persist_remote import public_persist_status
+
+            payload["persist"] = public_persist_status()
+        except Exception as exc:
+            payload["persist"] = {
+                "enabled": False,
+                "error": exc.__class__.__name__,
+                "missing": ["persist_status_error"],
+            }
         payload["oauth_redirect_uri"] = settings.oauth_redirect_uri
         payload["backend_url"] = settings.backend_url
         payload["frontend_url"] = settings.frontend_url
@@ -250,9 +258,16 @@ def create_app() -> FastAPI:
 
     @app.get("/api/persist-status")
     def persist_status() -> dict:
-        from maaike.persist_remote import public_persist_status
+        try:
+            from maaike.persist_remote import public_persist_status
 
-        return public_persist_status()
+            return public_persist_status()
+        except Exception as exc:
+            return {
+                "enabled": False,
+                "error": exc.__class__.__name__,
+                "missing": ["persist_status_error"],
+            }
 
     @app.post("/api/persist/push")
     def persist_push() -> dict:
