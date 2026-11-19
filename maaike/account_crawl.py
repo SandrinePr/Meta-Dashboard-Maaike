@@ -209,12 +209,11 @@ def crawl_account(
                 sample_fields = sorted(item.keys())
             published = str(item.get("timestamp") or "").strip() or fetched_at
             kind = _content_kind(item)
-            media_urls = item.get("media_url") or item.get("thumbnail_url") or ""
-            if item.get("thumbnail_url") and item.get("media_url") and item.get("thumbnail_url") != item.get("media_url"):
-                media_urls = json.dumps(
-                    [u for u in [item.get("thumbnail_url"), item.get("media_url")] if u],
-                    ensure_ascii=False,
-                )
+            url_lines: list[str] = []
+            for candidate in (item.get("thumbnail_url"), item.get("media_url")):
+                if isinstance(candidate, str) and candidate.startswith("https://") and candidate not in url_lines:
+                    url_lines.append(candidate)
+            media_urls = "\n".join(url_lines) or None
             post_id = upsert_synced_post(
                 conn,
                 client_id,
@@ -225,7 +224,7 @@ def crawl_account(
                 permalink=item.get("permalink") or "",
                 account_name=f"@{account_info.get('username') or clean}",
                 caption=item.get("caption"),
-                media_urls=str(media_urls) if media_urls else None,
+                media_urls=media_urls,
                 synced_at=fetched_at,
             )
             conn.execute(
@@ -235,6 +234,15 @@ def crawl_account(
                 """,
                 ("Instagram", f"business_discovery:{clean}", post_id, client_id),
             )
+            try:
+                from maaike.thumbnails import download_image_bytes, write_cover_from_bytes
+
+                for candidate in url_lines:
+                    content = download_image_bytes(candidate)
+                    if content and write_cover_from_bytes("instagram", external_id, content):
+                        break
+            except Exception:
+                pass
             posts_saved += 1
             if oldest is None or published < oldest:
                 oldest = published

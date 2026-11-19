@@ -113,7 +113,12 @@ def filter_search_payload(
         # Original shows recent posts when query empty.
         for post in posts[: max(limit + offset, 20)]:
             results.append(
-                _post_result(post, query="", formula_rating=rate_post(post, rating_settings))
+                _post_result(
+                    post,
+                    query="",
+                    formula_rating=rate_post(post, rating_settings),
+                    client_id=client_id,
+                )
             )
     else:
         for post in posts:
@@ -124,6 +129,7 @@ def filter_search_payload(
                     query=trimmed,
                     membership=membership,
                     formula_rating=rate_post(post, rating_settings),
+                    client_id=client_id,
                 )
                 results.append(item)
         if "comment" in match_types:
@@ -244,8 +250,15 @@ def _comment_membership(text: str, query: str) -> set[str]:
     return membership
 
 
-def _post_result(post, *, query: str, membership: set[str] | None = None, formula_rating: dict | None = None) -> dict:
-    card = feed_card(post, formula_rating=formula_rating)
+def _post_result(
+    post,
+    *,
+    query: str,
+    membership: set[str] | None = None,
+    formula_rating: dict | None = None,
+    client_id: int | None = None,
+) -> dict:
+    card = feed_card(post, formula_rating=formula_rating, client_id=client_id)
     membership = membership or set()
     return {
         **card,

@@ -16,6 +16,8 @@ services:
         value: "20.18.1"
       - key: MAAIKE_DATABASE_PATH
         value: /tmp/maaike_redrock.db
+      - key: MAAIKE_THUMB_DIR
+        value: /tmp/maaike_thumbs
       - key: ENABLE_SCHEDULER
         value: "0"
       - key: ENABLE_REPORT_PLANNING_SCHEDULER

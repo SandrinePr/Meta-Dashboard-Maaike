@@ -18,6 +18,7 @@ data/backups/
 !data/seed_media.zip
 !data/seed_version.txt
 data/media/
+data/maaike_thumbs/
 data/uploads/
 data/imports/
 data/report_pdfs/

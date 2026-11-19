@@ -45,9 +45,21 @@ def parse_media_urls(raw: str | None) -> list[dict[str, str]]:
     """Split stored media lines into display items. Videos are marked as video."""
     if not raw:
         return []
+    lines: list[str] = []
+    text = raw.strip()
+    if text.startswith("["):
+        try:
+            import json
+
+            parsed = json.loads(text)
+        except (TypeError, json.JSONDecodeError):
+            parsed = None
+        if isinstance(parsed, list):
+            lines = [str(item).strip() for item in parsed if isinstance(item, str)]
+    if not lines:
+        lines = [line.strip() for line in raw.splitlines()]
     items: list[dict[str, str]] = []
-    for line in raw.splitlines():
-        url = line.strip()
+    for url in lines:
         if not url.startswith("https://"):
             continue
         if not _looks_like_media(url):
@@ -72,11 +84,33 @@ def _looks_like_media(url: str) -> bool:
     return path.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".mov", ".m4v", ".webm"))
 
 
-def feed_card(post: StoredPost, *, formula_rating: dict | None = None) -> dict:
-    """JSON shape for one visual feed card."""
+def feed_card(
+    post: StoredPost,
+    *,
+    formula_rating: dict | None = None,
+    client_id: int | None = None,
+) -> dict:
+    """JSON shape for one visual feed card.
+
+    When ``client_id`` is set, image URLs become same-origin thumbnail proxies so
+    expired Meta CDN links do not break Performance / All posts / Logs.
+    """
     media = parse_media_urls(post.media_urls)
     cover = next((item for item in media if item["kind"] == "image"), None)
     has_video = any(item["kind"] == "video" for item in media)
+    has_cover_candidate = cover is not None or has_video or bool(post.media_urls)
+    if client_id is not None:
+        from maaike.thumbnails import cover_api_path, rewrite_feed_media
+
+        media = rewrite_feed_media(
+            media,
+            client_id=client_id,
+            post_id=post.post_id,
+            has_cover_candidate=has_cover_candidate,
+        )
+        cover_url = cover_api_path(client_id, post.post_id) if has_cover_candidate else None
+    else:
+        cover_url = cover["url"] if cover else None
     formula = formula_rating or {}
     rating_label = formula.get("label") or post.rating_text or RATING_PENDING
     return {
@@ -92,7 +126,7 @@ def feed_card(post: StoredPost, *, formula_rating: dict | None = None) -> dict:
         "caption": post.caption or "",
         "external_id": post.external_id or "",
         "media": media,
-        "cover_url": cover["url"] if cover else None,
+        "cover_url": cover_url,
         "has_video": has_video,
         "media_note": _media_note(media, has_video, cover),
         "format_id": post.format_id,
@@ -216,7 +250,10 @@ def feed_payload(
         "min_query_length": MIN_QUERY_LENGTH,
         "available_kinds": available_kinds,
         "kind_labels": {kind: _kind_label(kind) for kind in available_kinds},
-        "posts": [feed_card(post, formula_rating=rate_post(post, rating_settings)) for post in page],
+        "posts": [
+            feed_card(post, formula_rating=rate_post(post, rating_settings), client_id=client_id)
+            for post in page
+        ],
         "empty_message": (
             f"No posts yet for {client.name}."
             if not all_posts
@@ -231,7 +268,7 @@ def post_detail(conn, client_id: int, post_id: int) -> dict | None:
     settings = get_rating_settings(conn, client_id)
     for post in list_posts(conn, client_id):
         if post.post_id == post_id:
-            return feed_card(post, formula_rating=rate_post(post, settings))
+            return feed_card(post, formula_rating=rate_post(post, settings), client_id=client_id)
     return None
 
 
@@ -306,7 +343,7 @@ def performance_payload(conn, client_id: int, *, year: int | None = None, month:
                 "label": label,
                 "posts": [
                     {
-                        **feed_card(post),
+                        **feed_card(post, client_id=client_id),
                         "rank": index,
                         "metric_value": _metric_value(post, metric),
                     }

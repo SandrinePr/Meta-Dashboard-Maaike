@@ -201,6 +201,12 @@ def create_app() -> FastAPI:
                     restore_hamster_seed_if_empty(conn)
                 except Exception:
                     pass
+                try:
+                    from maaike.thumbnails import ensure_seed_thumbs_extracted
+
+                    ensure_seed_thumbs_extracted()
+                except Exception:
+                    pass
         except Exception:
             # Seed/persist are optional; boot even if restore fails.
             pass
@@ -434,6 +440,42 @@ def create_app() -> FastAPI:
                 return adopt_to_logs(conn, client_id, post_id, body or {})
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/clients/{client_id}/posts/{post_id}/cover")
+    def read_post_cover(client_id: int, post_id: int):
+        """Same-origin cover JPEG (cached). Avoids expired Meta CDN 403 in the browser."""
+        from fastapi.responses import FileResponse, Response
+
+        from maaike.thumbnails import ensure_cover_file
+
+        with transaction() as conn:
+            _require_client(conn, client_id)
+            path = ensure_cover_file(conn, client_id, post_id)
+        if path is None:
+            return Response(status_code=404, content=b"", media_type="image/jpeg")
+        return FileResponse(
+            path,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    @app.get("/api/clients/{client_id}/posts/{post_id}/media-file/{index}")
+    def read_post_media_file(client_id: int, post_id: int, index: int):
+        """Same-origin carousel/reel preview JPEG by slide index."""
+        from fastapi.responses import FileResponse, Response
+
+        from maaike.thumbnails import ensure_slide_file
+
+        with transaction() as conn:
+            _require_client(conn, client_id)
+            path = ensure_slide_file(conn, client_id, post_id, index)
+        if path is None:
+            return Response(status_code=404, content=b"", media_type="image/jpeg")
+        return FileResponse(
+            path,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
 
     @app.get("/api/clients/{client_id}/posts/{post_id}/media")
     def list_post_media_assets(client_id: int, post_id: int) -> dict:
@@ -2069,6 +2111,9 @@ def _posts_payload(client_id: int) -> dict:
             cells["Beoordeling"] = formula["label"]
             if formula.get("score_known") and formula.get("score") is not None:
                 cells["Beoordeling"] = f"{formula['label']} ({formula['score']})"
+        from maaike.thumbnails import cover_api_path
+
+        has_media = bool((post.media_urls or "").strip())
         rated_posts.append(
             {
                 "id": post.post_id,
@@ -2085,6 +2130,7 @@ def _posts_payload(client_id: int) -> dict:
                 },
                 "formula_rating": formula,
                 "figma_url": getattr(post, "figma_url", None) or "",
+                "cover_url": cover_api_path(client_id, post.post_id) if has_media else None,
                 "cells": cells,
             }
         )

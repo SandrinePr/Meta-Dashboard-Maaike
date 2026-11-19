@@ -98,7 +98,7 @@ def performance_month_payload(
                 "header": f"{METRIC_LABELS[metric]} · top 3 · lifetime",
                 "posts": [
                     {
-                        **feed_card(post),
+                        **feed_card(post, client_id=client_id),
                         "rank": index,
                         "metric_value": value,
                         "metric_value_label": f"{value:,}".replace(",", "."),

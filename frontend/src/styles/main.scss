@@ -663,6 +663,16 @@ a.secondary {
   font-size: 0.68rem;
 }
 
+.logs-media-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: $radius-sm;
+  border: 1px solid $border;
+  background: $input;
+  display: block;
+}
+
 .rro-card-badges,
 .feed-badges {
   display: flex;

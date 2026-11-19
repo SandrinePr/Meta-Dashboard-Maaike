@@ -1299,7 +1299,35 @@ function ReadCell({ column, value, post }) {
   if (column === "Beoordeling") {
     return <RatingBadge rating={post?.formula_rating} showExplanation />;
   }
-  if ((column === "Post-URL" || column === "Media") && typeof value === "string") {
+  if (column === "Media") {
+    if (post?.cover_url) {
+      return (
+        <img
+          className="logs-media-thumb"
+          src={post.cover_url}
+          alt=""
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={(event) => {
+            event.currentTarget.replaceWith(
+              Object.assign(document.createElement("span"), {
+                className: "muted",
+                textContent: "No thumbnail",
+              }),
+            );
+          }}
+        />
+      );
+    }
+    if (typeof value === "string") {
+      const parts = value.split(/\s+/).filter(Boolean);
+      if (parts.length && parts.every((part) => part.startsWith("https://"))) {
+        return <span className="muted">No thumbnail</span>;
+      }
+    }
+    return value || "";
+  }
+  if (column === "Post-URL" && typeof value === "string") {
     const parts = value.split(/\s+/).filter(Boolean);
     if (parts.length && parts.every((part) => part.startsWith("https://"))) {
       return parts.map((part) => (

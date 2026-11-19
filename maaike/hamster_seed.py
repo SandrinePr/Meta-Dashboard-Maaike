@@ -35,9 +35,22 @@ def load_seed_package() -> dict[str, Any] | None:
 
 def restore_hamster_seed_if_empty(conn) -> dict[str, Any]:
     """If there are no posts yet, import the tracked HAMSTER Red Rock seed."""
+    thumbs_info: dict[str, Any] = {}
+    try:
+        from maaike.thumbnails import ensure_seed_thumbs_extracted
+
+        thumbs_info = ensure_seed_thumbs_extracted()
+    except Exception as exc:
+        thumbs_info = {"extracted": False, "reason": f"thumbs_error:{exc.__class__.__name__}"}
+
     post_count = int(conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0])
     if post_count > 0:
-        return {"restored": False, "reason": "local_has_posts", "posts": post_count}
+        return {
+            "restored": False,
+            "reason": "local_has_posts",
+            "posts": post_count,
+            "thumbs": thumbs_info,
+        }
 
     package = load_seed_package()
     if package is None:
@@ -45,6 +58,7 @@ def restore_hamster_seed_if_empty(conn) -> dict[str, Any]:
             "restored": False,
             "reason": "seed_missing",
             "path": str(SEED_REL).replace("\\", "/"),
+            "thumbs": thumbs_info,
         }
 
     from maaike.data_transfer import apply_import, validate_package
@@ -57,4 +71,5 @@ def restore_hamster_seed_if_empty(conn) -> dict[str, Any]:
         "path": str(SEED_REL).replace("\\", "/"),
         "stats": result.get("stats") if isinstance(result, dict) else result,
         "posts_before": post_count,
+        "thumbs": thumbs_info,
     }
