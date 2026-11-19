@@ -22,7 +22,13 @@ import requests
 from dotenv import load_dotenv
 
 from maaike.config import database_path, project_root
-from maaike.data_transfer import apply_import, export_package_json_bytes, validate_package
+
+
+def _data_transfer():
+    """Lazy import so status works even if optional Excel deps are missing."""
+    from maaike import data_transfer as mod
+
+    return mod
 
 
 def _state_path() -> Path:
@@ -114,7 +120,7 @@ def push_if_changed(conn) -> dict[str, Any]:
         return {"pushed": False, "reason": "disabled", "config": {k: cfg[k] for k in ("enabled", "missing", "note")}}
     load_dotenv(override=False)
     url = os.getenv("MAAIKE_PERSIST_BACKUP_URL", "").strip()
-    payload = export_package_json_bytes(conn)
+    payload = _data_transfer().export_package_json_bytes(conn)
     digest = content_fingerprint(payload)
     state = _load_state()
     if state.get("last_pushed_sha256") == digest:
@@ -188,12 +194,13 @@ def restore_from_remote_if_needed(conn) -> dict[str, Any]:
         data = response.json()
     except ValueError:
         return {"restored": False, "reason": "invalid_json"}
+    transfer = _data_transfer()
     try:
-        validate_package(data)
+        transfer.validate_package(data)
     except ValueError as exc:
         return {"restored": False, "reason": "invalid_package", "error": str(exc)}
 
-    result = apply_import(conn, data, overwrite=True)
+    result = transfer.apply_import(conn, data, overwrite=True)
     digest = content_fingerprint(json.dumps(data, ensure_ascii=False).encode("utf-8"))
     state = _load_state()
     state["last_restored_sha256"] = digest
