@@ -567,20 +567,22 @@ def task_ai_providers() -> dict[str, Any]:
     claude = status.get("claude") or {}
     return {
         "post_analysis": {
-            "label": "Postanalyse",
+            "label": "Postfeedback",
             "primary": {
-                "provider": "Google Gemini Developer API",
-                "model": gemini.get("model") or "",
-                "configured": bool(gemini.get("configured")),
+                "provider": "Anthropic Claude",
+                "model": claude.get("model") or "",
+                "configured": bool(claude.get("configured")),
             },
             "notes": (
-                "Standaardknoppen Prepare/Execute gebruiken Gemini (AI_*). "
-                "Claude alleen via de optionele Settings-knop."
+                "Prepare/Execute in Logs / Media & insight gebruikt Claude "
+                "(CLAUDE_API_KEY) met Maaikes bewerkbare post_analysis-prompt. "
+                "Mock test de invoer zonder betaalde call."
             ),
             "optional": {
-                "provider": "Claude",
-                "configured": bool(claude.get("configured")),
-                "model": claude.get("model") or "",
+                "provider": "Google Gemini Developer API",
+                "configured": bool(gemini.get("configured")),
+                "model": gemini.get("model") or "",
+                "used_for": "Rapporten / AI Trial — niet voor standaard postfeedback",
             },
         },
         "client_report": {

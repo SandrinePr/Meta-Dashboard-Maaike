@@ -188,6 +188,14 @@ def create_app() -> FastAPI:
         except MaaikeConfigError as exc:
             raise RuntimeError(str(exc)) from exc
         try:
+            from maaike.persist_remote import restore_from_remote_if_needed
+
+            with transaction() as conn:
+                restore_from_remote_if_needed(conn)
+        except Exception:
+            # Remote persist is optional; boot even if restore fails.
+            pass
+        try:
             from maaike.competitor_scheduler import start_competitor_scheduler
 
             start_competitor_scheduler()
@@ -229,11 +237,29 @@ def create_app() -> FastAPI:
 
     @app.get("/api/ai-status")
     def ai_status() -> dict:
+        from maaike.persist_remote import public_persist_status
         from maaike.report_planning import task_ai_providers
 
         payload = public_ai_status()
         payload["task_providers"] = task_ai_providers()
+        payload["persist"] = public_persist_status()
+        payload["oauth_redirect_uri"] = settings.oauth_redirect_uri
+        payload["backend_url"] = settings.backend_url
+        payload["frontend_url"] = settings.frontend_url
         return payload
+
+    @app.get("/api/persist-status")
+    def persist_status() -> dict:
+        from maaike.persist_remote import public_persist_status
+
+        return public_persist_status()
+
+    @app.post("/api/persist/push")
+    def persist_push() -> dict:
+        from maaike.persist_remote import push_if_changed
+
+        with transaction() as conn:
+            return push_if_changed(conn)
 
     @app.get("/api/prompt-settings")
     def read_prompt_settings() -> dict:
@@ -244,27 +270,33 @@ def create_app() -> FastAPI:
 
     @app.put("/api/prompt-settings/{prompt_key}")
     def put_prompt_settings(prompt_key: str, body: dict) -> dict:
+        from maaike.persist_remote import push_if_changed
         from maaike.prompt_settings import save_prompt_override
 
         try:
             with transaction() as conn:
-                return save_prompt_override(
+                result = save_prompt_override(
                     conn,
                     prompt_key,
                     body_text=str((body or {}).get("body_text") or ""),
                     version_tag=str((body or {}).get("version_tag") or ""),
                     updated_by=str((body or {}).get("updated_by") or ""),
                 )
+                result["persist"] = push_if_changed(conn)
+                return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.delete("/api/prompt-settings/{prompt_key}")
     def delete_prompt_settings(prompt_key: str) -> dict:
+        from maaike.persist_remote import push_if_changed
         from maaike.prompt_settings import reset_prompt_override
 
         try:
             with transaction() as conn:
-                return reset_prompt_override(conn, prompt_key)
+                result = reset_prompt_override(conn, prompt_key)
+                result["persist"] = push_if_changed(conn)
+                return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -981,13 +1013,28 @@ def create_app() -> FastAPI:
 
     @app.post("/api/clients/{client_id}/posts/{post_id}/analysis/execute")
     def execute_post_analysis_route(client_id: int, post_id: int, body: dict | None = None) -> dict:
-        """Paid single-post analysis. Requires confirm=true; not started by prepare/open."""
+        """Paid Claude post feedback. Requires confirm=true; not started by prepare/open."""
+        from maaike.persist_remote import push_if_changed
         from maaike.post_analysis_workflow import execute_prepared_post_analysis
 
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
-                return execute_prepared_post_analysis(conn, client_id, post_id, body or {})
+                result = execute_prepared_post_analysis(conn, client_id, post_id, body or {})
+                result["persist"] = push_if_changed(conn)
+                return result
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/clients/{client_id}/posts/{post_id}/analysis/mock")
+    def mock_post_analysis_route(client_id: int, post_id: int, body: dict | None = None) -> dict:
+        """Mock Claude post feedback. Never calls a paid provider."""
+        from maaike.post_analysis_workflow import apply_mock_post_analysis
+
+        try:
+            with transaction() as conn:
+                _require_client(conn, client_id)
+                return apply_mock_post_analysis(conn, client_id, post_id, body or {})
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1591,19 +1638,19 @@ def create_app() -> FastAPI:
     @app.put("/api/clients/{client_id}/figma-planning/connection")
     def put_figma_connection(client_id: int, body: dict) -> dict:
         from maaike.figma_planning import save_figma_connection
+        from maaike.persist_remote import push_if_changed
 
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
-                return {
-                    "connection": save_figma_connection(
-                        conn,
-                        client_id,
-                        file_key=str((body or {}).get("file_key") or ""),
-                        file_name=str((body or {}).get("file_name") or ""),
-                        source_url=str((body or {}).get("source_url") or ""),
-                    )
-                }
+                connection = save_figma_connection(
+                    conn,
+                    client_id,
+                    file_key=str((body or {}).get("file_key") or ""),
+                    file_name=str((body or {}).get("file_name") or ""),
+                    source_url=str((body or {}).get("source_url") or ""),
+                )
+                return {"connection": connection, "persist": push_if_changed(conn)}
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1611,11 +1658,14 @@ def create_app() -> FastAPI:
     def sync_figma_planning(client_id: int, body: dict | None = None) -> dict:
         """Sync planning items from Figma API when FIGMA_ACCESS_TOKEN is set."""
         from maaike.figma_planning import sync_from_figma_api
+        from maaike.persist_remote import push_if_changed
 
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
-                return sync_from_figma_api(conn, client_id)
+                result = sync_from_figma_api(conn, client_id)
+                result["persist"] = push_if_changed(conn)
+                return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

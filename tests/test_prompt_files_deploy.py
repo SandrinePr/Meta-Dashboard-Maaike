@@ -33,8 +33,8 @@ def test_report_instruction_bundle_loads_primary_texts():
     assert trend["primary_loaded"] is True
 
 
-def test_task_providers_use_gemini_for_main_buttons():
+def test_task_providers_claude_posts_gemini_reports():
     providers = task_ai_providers()
-    assert providers["post_analysis"]["primary"]["provider"] == "Google Gemini Developer API"
+    assert providers["post_analysis"]["primary"]["provider"] == "Anthropic Claude"
     assert providers["client_report"]["primary"]["provider"] == "Google Gemini Developer API"
     assert providers["trend_report"]["primary"]["provider"] == "Google Gemini Developer API"

@@ -24,8 +24,12 @@ def public_ai_status() -> dict:
     prompt_paths = social_agent_status()
     gemini_ok = bool(base_url and api_key and model)
     return {
-        "configured": gemini_ok,
-        "active_provider": "Google Gemini Developer API" if gemini_ok else "",
+        "configured": bool(claude.get("configured") or gemini_ok),
+        "active_provider": (
+            "Anthropic Claude (postfeedback) + Google Gemini (rapporten)"
+            if claude.get("configured") and gemini_ok
+            else ("Anthropic Claude" if claude.get("configured") else ("Google Gemini Developer API" if gemini_ok else ""))
+        ),
         "has_base_url": bool(base_url),
         "base_host": host,
         "has_api_key": bool(api_key),
@@ -37,17 +41,17 @@ def public_ai_status() -> dict:
             "has_api_key": bool(api_key),
             "base_host": host,
             "used_for": [
-                "Postanalyse (Prepare/Execute in Logs / Media & insight)",
                 "Klantrapport execute",
                 "Trendrapport execute",
-                "AI Trial",
+                "AI Trial (intern)",
             ],
         },
         "claude": {
             **claude,
-            "optional": True,
-            "used_for": ["Optionele Single Claude post analysis (Settings)"],
+            "optional": False,
+            "used_for": ["Postfeedback Prepare/Execute in Logs / Media & insight"],
             "required_for_reports": False,
+            "required_for_post_feedback": True,
         },
         "analysis_prompts": {
             "prompt_version": prompts["prompt_version"],
@@ -59,8 +63,9 @@ def public_ai_status() -> dict:
             "using_tracked": prompt_paths.get("using_tracked"),
         },
         "notes": [
-            "Actieve route voor analyse- en rapportknoppen: Gemini via AI_BASE_URL / AI_API_KEY / AI_MODEL.",
-            "Claude is optioneel en niet vereist voor klantrapporten of standaard postanalyse.",
+            "Postfeedback (Prepare/Execute): Claude via CLAUDE_API_KEY (of ANTHROPIC_API_KEY).",
+            "Klantrapport en trendrapport: Gemini via AI_BASE_URL / AI_API_KEY / AI_MODEL.",
+            "Bewerkbare prompts: Settings → AI Connections → Promptinstellingen (opgeslagen in SQLite).",
             "Promptbestanden komen uit maaike/prompts/social_agent (meegeleverd in de deploy).",
             "Deze pagina start geen AI-aanvraag.",
         ],

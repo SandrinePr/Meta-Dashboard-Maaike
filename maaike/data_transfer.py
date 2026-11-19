@@ -222,6 +222,39 @@ def export_package(conn, *, client_id: int | None = None) -> dict[str, Any]:
             row["_client_id"] = cid
             logs_rows.append(row)
 
+    prompt_settings = []
+    if _table_exists(conn, "maaike_prompt_settings"):
+        prompt_settings = [dict(r) for r in conn.execute("SELECT * FROM maaike_prompt_settings ORDER BY prompt_key").fetchall()]
+
+    figma_files = []
+    figma_items = []
+    if _table_exists(conn, "client_figma_files"):
+        figma_files = [
+            dict(r)
+            for r in conn.execute(
+                f"SELECT * FROM client_figma_files WHERE client_id IN ({placeholders}) ORDER BY client_id",
+                ids,
+            ).fetchall()
+        ]
+    if _table_exists(conn, "figma_planning_items"):
+        figma_items = [
+            dict(r)
+            for r in conn.execute(
+                f"SELECT * FROM figma_planning_items WHERE client_id IN ({placeholders}) ORDER BY id",
+                ids,
+            ).fetchall()
+        ]
+
+    post_ai_analyses = []
+    if _table_exists(conn, "post_ai_analyses"):
+        post_ai_analyses = [
+            dict(r)
+            for r in conn.execute(
+                f"SELECT * FROM post_ai_analyses WHERE client_id IN ({placeholders}) ORDER BY id",
+                ids,
+            ).fetchall()
+        ]
+
     return {
         "format": FORMAT_ID,
         "version": FORMAT_VERSION,
@@ -244,6 +277,10 @@ def export_package(conn, *, client_id: int | None = None) -> dict[str, Any]:
             "report_sources": len(report_sources),
             "activity_events": len(activity),
             "logs_rows": len(logs_rows),
+            "prompt_settings": len(prompt_settings),
+            "figma_files": len(figma_files),
+            "figma_items": len(figma_items),
+            "post_ai_analyses": len(post_ai_analyses),
         },
         "clients": clients_out,
         "content_formats": formats,
@@ -260,6 +297,10 @@ def export_package(conn, *, client_id: int | None = None) -> dict[str, Any]:
         "client_report_sources": report_sources,
         "activity_events": activity,
         "logs_export_rows": logs_rows,
+        "prompt_settings": prompt_settings,
+        "client_figma_files": figma_files,
+        "figma_planning_items": figma_items,
+        "post_ai_analyses": post_ai_analyses,
     }
 
 
@@ -410,6 +451,10 @@ def apply_import(
         "targets_added": 0,
         "reports_added": 0,
         "activity_added": 0,
+        "prompt_settings_upserted": 0,
+        "figma_files_upserted": 0,
+        "figma_items_upserted": 0,
+        "post_ai_analyses_added": 0,
         "skipped": 0,
     }
 
@@ -946,5 +991,174 @@ def apply_import(
                 occurred_at=ev.get("occurred_at"),
             )
             stats["activity_added"] += 1
+
+    # Editable dashboard prompts (survive Render Free restarts via remote persist)
+    if data.get("prompt_settings") and _table_exists(conn, "maaike_prompt_settings"):
+        from maaike.prompt_settings import ensure_prompt_settings_table
+
+        ensure_prompt_settings_table(conn)
+        for row in data.get("prompt_settings") or []:
+            key = str(row.get("prompt_key") or "").strip()
+            body = str(row.get("body_text") or "").strip()
+            if not key or not body:
+                continue
+            conn.execute(
+                """
+                INSERT INTO maaike_prompt_settings (prompt_key, label, body_text, version_tag, updated_at, updated_by)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(prompt_key) DO UPDATE SET
+                    label = excluded.label,
+                    body_text = excluded.body_text,
+                    version_tag = excluded.version_tag,
+                    updated_at = excluded.updated_at,
+                    updated_by = excluded.updated_by
+                """,
+                (
+                    key,
+                    str(row.get("label") or ""),
+                    body,
+                    str(row.get("version_tag") or ""),
+                    str(row.get("updated_at") or now),
+                    str(row.get("updated_by") or "import"),
+                ),
+            )
+            stats["prompt_settings_upserted"] += 1
+
+    # Figma file links + planning items
+    if data.get("client_figma_files"):
+        from maaike.figma_planning import ensure_figma_tables
+
+        ensure_figma_tables(conn)
+        for row in data.get("client_figma_files") or []:
+            live_client = pkg_client_to_live.get(int(row["client_id"]))
+            if live_client is None:
+                continue
+            conn.execute(
+                """
+                INSERT INTO client_figma_files (
+                    client_id, file_key, file_name, source_url, last_synced_at, last_sync_note, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(client_id) DO UPDATE SET
+                    file_key = excluded.file_key,
+                    file_name = excluded.file_name,
+                    source_url = excluded.source_url,
+                    last_synced_at = excluded.last_synced_at,
+                    last_sync_note = excluded.last_sync_note,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    live_client,
+                    str(row.get("file_key") or ""),
+                    str(row.get("file_name") or ""),
+                    str(row.get("source_url") or ""),
+                    row.get("last_synced_at"),
+                    str(row.get("last_sync_note") or ""),
+                    str(row.get("updated_at") or now),
+                ),
+            )
+            stats["figma_files_upserted"] += 1
+
+        for item in data.get("figma_planning_items") or []:
+            live_client = pkg_client_to_live.get(int(item["client_id"]))
+            if live_client is None:
+                continue
+            linked = item.get("linked_post_id")
+            live_linked = pkg_post_to_live.get(int(linked)) if linked is not None else None
+            conn.execute(
+                """
+                INSERT INTO figma_planning_items (
+                    client_id, node_id, source_url, page_name, page_node_id,
+                    period_year, period_month, code, content_kind, platform_hint,
+                    format_raw, format_usable, pillar_raw, pillar_usable,
+                    hook_raw, hook_usable, brief_excerpt, linked_post_id, link_status,
+                    raw_json, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(client_id, node_id) DO UPDATE SET
+                    source_url = excluded.source_url,
+                    page_name = excluded.page_name,
+                    page_node_id = excluded.page_node_id,
+                    period_year = excluded.period_year,
+                    period_month = excluded.period_month,
+                    code = excluded.code,
+                    content_kind = excluded.content_kind,
+                    platform_hint = excluded.platform_hint,
+                    format_raw = excluded.format_raw,
+                    format_usable = excluded.format_usable,
+                    pillar_raw = excluded.pillar_raw,
+                    pillar_usable = excluded.pillar_usable,
+                    hook_raw = excluded.hook_raw,
+                    hook_usable = excluded.hook_usable,
+                    brief_excerpt = excluded.brief_excerpt,
+                    linked_post_id = COALESCE(excluded.linked_post_id, figma_planning_items.linked_post_id),
+                    link_status = excluded.link_status,
+                    raw_json = excluded.raw_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    live_client,
+                    str(item.get("node_id") or ""),
+                    str(item.get("source_url") or ""),
+                    str(item.get("page_name") or ""),
+                    str(item.get("page_node_id") or ""),
+                    item.get("period_year"),
+                    item.get("period_month"),
+                    str(item.get("code") or ""),
+                    str(item.get("content_kind") or ""),
+                    str(item.get("platform_hint") or ""),
+                    str(item.get("format_raw") or ""),
+                    1 if item.get("format_usable") else 0,
+                    str(item.get("pillar_raw") or ""),
+                    1 if item.get("pillar_usable") else 0,
+                    str(item.get("hook_raw") or ""),
+                    1 if item.get("hook_usable") else 0,
+                    str(item.get("brief_excerpt") or "")[:2000],
+                    live_linked,
+                    str(item.get("link_status") or "unlinked"),
+                    str(item.get("raw_json") or "{}")[:20000],
+                    str(item.get("updated_at") or now),
+                ),
+            )
+            stats["figma_items_upserted"] += 1
+
+    # Stored post analyses / Claude feedback (no secrets)
+    if data.get("post_ai_analyses"):
+        from maaike.claude_analysis import ensure_analysis_tables
+
+        ensure_analysis_tables(conn)
+        for row in data.get("post_ai_analyses") or []:
+            live_client = pkg_client_to_live.get(int(row["client_id"]))
+            live_post = pkg_post_to_live.get(int(row["post_id"])) if row.get("post_id") is not None else None
+            if live_client is None or live_post is None:
+                continue
+            conn.execute(
+                """
+                INSERT INTO post_ai_analyses (
+                    client_id, post_id, provider, model, prompt_version, status,
+                    started_at, finished_at, insight_text, action_text, rating_text,
+                    raw_response_json, usage_json, input_snapshot_json, error_text,
+                    actual_cost_usd, cost_known
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    live_client,
+                    live_post,
+                    str(row.get("provider") or ""),
+                    str(row.get("model") or ""),
+                    str(row.get("prompt_version") or ""),
+                    str(row.get("status") or ""),
+                    str(row.get("started_at") or now),
+                    row.get("finished_at"),
+                    str(row.get("insight_text") or ""),
+                    str(row.get("action_text") or ""),
+                    str(row.get("rating_text") or ""),
+                    str(row.get("raw_response_json") or "{}"),
+                    str(row.get("usage_json") or "{}"),
+                    str(row.get("input_snapshot_json") or "{}"),
+                    str(row.get("error_text") or ""),
+                    row.get("actual_cost_usd"),
+                    1 if row.get("cost_known") else 0,
+                ),
+            )
+            stats["post_ai_analyses_added"] += 1
 
     return {"ok": True, "stats": stats, "overwrite": overwrite}

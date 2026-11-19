@@ -30,10 +30,30 @@ class WebSettings:
         }
 
 
+def _render_external_url() -> str:
+    """Render injects RENDER_EXTERNAL_URL (https://…onrender.com) on web services."""
+    return os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
+
+
+def _is_loopback(url: str) -> bool:
+    lower = (url or "").lower()
+    return "://127.0.0.1" in lower or "://localhost" in lower
+
+
 def load_settings() -> WebSettings:
     load_dotenv(override=False)
-    frontend = _trim_url(os.getenv("MAAIKE_FRONTEND_URL", ""), _DEFAULT_FRONTEND)
-    backend = _trim_url(os.getenv("MAAIKE_BACKEND_URL", ""), _DEFAULT_BACKEND)
+    render_url = _render_external_url()
+    frontend = _trim_url(os.getenv("MAAIKE_FRONTEND_URL", ""), "")
+    backend = _trim_url(os.getenv("MAAIKE_BACKEND_URL", ""), "")
+    if not frontend:
+        frontend = render_url or _DEFAULT_FRONTEND
+    if not backend:
+        backend = render_url or _DEFAULT_BACKEND
+    # On Render, never keep a leftover localhost callback from a copied .env.
+    if render_url and _is_loopback(frontend):
+        frontend = render_url
+    if render_url and _is_loopback(backend):
+        backend = render_url
     raw_origins = os.getenv("MAAIKE_CORS_ORIGINS", "").strip()
     if raw_origins:
         configured = tuple(part.strip().rstrip("/") for part in raw_origins.split(",") if part.strip())
@@ -41,7 +61,7 @@ def load_settings() -> WebSettings:
         configured = (frontend,)
     origins = _with_loopback_aliases(configured)
     redirect = os.getenv("MAAIKE_WEB_OAUTH_REDIRECT_URI", "").strip()
-    if not redirect:
+    if not redirect or (render_url and _is_loopback(redirect)):
         redirect = f"{backend}/api/meta/callback"
     session_secret = os.getenv("MAAIKE_SESSION_SECRET", "").strip() or secrets.token_urlsafe(32)
     return WebSettings(

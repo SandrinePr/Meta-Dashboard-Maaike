@@ -20,7 +20,13 @@ from maaike.ai_trial import (
 from maaike.ai_trial_media import classify_urls, prepare_post_media
 from maaike.ai_trial_request import PROMPT_VERSION, build_request_package
 from maaike.ai_status import public_ai_status
-from maaike.claude_analysis import ensure_analysis_tables, get_analysis
+from maaike.claude_analysis import (
+    build_post_input_snapshot,
+    claude_connection_status,
+    ensure_analysis_tables,
+    get_analysis,
+    resolve_post_analysis_prompt,
+)
 
 
 def _role_for_kind(content_kind: str | None) -> str:
@@ -291,16 +297,25 @@ def prepare_post_analysis(
         pillars=pillars,
         metrics=_post_metrics(conn, post_id),
     )
-
-    # Cost estimate only — not an execute.
-    image_n = len(media_prep.get("images_for_model") or [])
-    est_input_tokens = 2500 + image_n * 800
-    est_output_tokens = 900
-    low = round(
-        (est_input_tokens / 1_000_000) * OFFICIAL_RATES["input_per_1m"]
-        + (est_output_tokens / 1_000_000) * OFFICIAL_RATES["output_per_1m"],
-        4,
+    prompt = resolve_post_analysis_prompt(conn)
+    claude = claude_connection_status()
+    post_snapshot = build_post_input_snapshot(conn, client_id, post_id)
+    post_snapshot["analysis_scope"] = "single_post"
+    post_snapshot["prompt_source"] = prompt["source"]
+    post_snapshot["prompt_version"] = prompt["prompt_version"]
+    user_text = (
+        "Analyseer deze post volgens de instructies. "
+        "De JSON bevat de opgehaalde post, beschikbare cijfers en context. "
+        "Trek geen patroonconclusies over ontbrekende context (zie context_gaps). "
+        "Antwoord uitsluitend als JSON met keys: insight, action, rating, notes.\n\n"
+        + json.dumps(post_snapshot, ensure_ascii=False)
     )
+
+    # Cost estimate only — not an execute. Claude text rates are a ballpark.
+    image_n = len(media_prep.get("images_for_model") or [])
+    est_input_tokens = 2500 + len(user_text) // 4
+    est_output_tokens = 900
+    low = round((est_input_tokens / 1_000_000) * 3.0 + (est_output_tokens / 1_000_000) * 15.0, 4)
     high = round(low * 1.6, 4)
 
     role_for_model = role if role in {"image", "carousel", "reel"} else "image"
@@ -317,10 +332,14 @@ def prepare_post_analysis(
             }
         )
 
+    provider = "Anthropic Claude"
+    model = claude.get("model") or "claude-sonnet-4-5"
+    prompt_version = prompt["prompt_version"] or PROMPT_VERSION
     snapshot = {
         "prepared_at": _now(),
         "inventory": inventory,
         "role": role_for_model,
+        "provider_route": "claude_post_feedback",
         "media_prep": media_prep,
         "media_prep_summary": {
             "coverage": media_prep.get("coverage"),
@@ -332,28 +351,38 @@ def prepare_post_analysis(
             "audio_to_model": media_prep.get("audio_to_model"),
             "media_source": media_prep.get("media_source"),
         },
+        "post_snapshot": post_snapshot,
         "executable": {
-            "system_text": request_package.get("system_text") or "",
-            "user_text": request_package.get("user_text") or "",
+            "system_text": prompt["system_text"],
+            "user_text": user_text,
             "images_for_model": media_for_model,
             "limitations": list(media_prep.get("limitations") or []),
-            "prompt_version": PROMPT_VERSION,
+            "prompt_version": prompt_version,
+            "prompt_source": prompt["source"],
             "role": role_for_model,
+            "provider": provider,
+            "model": model,
         },
         "request_package": {
-            "prompt_version": PROMPT_VERSION,
-            "system_chars": len(str((request_package or {}).get("system_text") or "")),
-            "user_chars": len(str((request_package or {}).get("user_text") or "")),
+            "prompt_version": prompt_version,
+            "prompt_source": prompt["source"],
+            "system_chars": len(prompt["system_text"] or ""),
+            "user_chars": len(user_text),
             "image_parts": image_n,
+            "gemini_trial_system_chars": len(str((request_package or {}).get("system_text") or "")),
         },
         "cost_estimate_usd": {
             "low": low,
             "high": high,
             "currency": "USD",
-            "model": OFFICIAL_RATES["model"],
-            "provider": OFFICIAL_RATES["provider"],
-            "note": "Estimate only. Prepare does not call a paid API. Execute needs explicit confirm.",
+            "model": model,
+            "provider": provider,
+            "note": (
+                "Estimate only for Claude post feedback. Prepare does not call a paid API. "
+                "Execute needs explicit confirm=true. Gemini remains for reports."
+            ),
         },
+        "claude_configured": bool(claude.get("configured")),
         "paid_call": False,
     }
 
@@ -370,9 +399,9 @@ def prepare_post_analysis(
         (
             client_id,
             post_id,
-            OFFICIAL_RATES["provider"],
-            OFFICIAL_RATES["model"],
-            PROMPT_VERSION,
+            provider,
+            model,
+            prompt_version,
             started,
             json.dumps({"status": "prepared_not_executed", "estimate": snapshot["cost_estimate_usd"]}, ensure_ascii=False),
             json.dumps(snapshot, ensure_ascii=False),
@@ -383,59 +412,26 @@ def prepare_post_analysis(
         "analysis_id": analysis_id,
         "status": "prepared_not_executed",
         "paid_call": False,
+        "provider": provider,
+        "model": model,
+        "prompt_version": prompt_version,
+        "prompt_source": prompt["source"],
         "inventory": inventory,
         "media_prep": snapshot["media_prep_summary"],
         "media_for_model": media_for_model,
         "cost_estimate_usd": snapshot["cost_estimate_usd"],
         "capability": _capability_report(public_ai_status()),
+        "claude": claude,
         "execute_requires_confirm": True,
         "note": (
-            "Preparation stored. No paid model call. "
-            "Review media + estimate, then Execute with confirm=true, or save a manual insight."
+            "Preparation stored for Claude post feedback. No paid model call. "
+            "Review post + metrics + prompt, then Execute with confirm=true, "
+            "run Mock, or save a manual insight. Gemini stays for reports."
         ),
     }
 
 
-def execute_prepared_post_analysis(
-    conn,
-    client_id: int,
-    post_id: int,
-    body: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Run one paid Gemini post analysis from a prepared snapshot.
-
-    Requires body.confirm == true. Does not run on open/prepare/reload.
-    """
-    from pathlib import Path
-
-    import requests
-
-    from ai.config import chat_completions_url, is_configured, load_ai_config
-    from maaike.ai_response_validate import validate_post_analysis
-    from maaike.ai_trial_execute import (
-        MAX_OUTPUT_TOKENS,
-        PROJECT_ROOT,
-        REQUEST_TIMEOUT_S,
-        _RESPONSE_SCHEMA,
-        _cost_usd,
-        _extract_json,
-        _image_part,
-        _message_text,
-        _normalize_result,
-        _usage_from_body,
-        _verify_media,
-    )
-
-    ensure_analysis_tables(conn)
-    body = body or {}
-    if not body.get("confirm"):
-        raise ValueError(
-            "Execute requires confirm=true after reviewing the cost estimate. No paid call started."
-        )
-    if not is_configured():
-        raise ValueError("AI is niet geconfigureerd (AI_BASE_URL / AI_API_KEY / AI_MODEL).")
-
-    analysis_id = body.get("analysis_id")
+def _prepared_analysis_row(conn, client_id: int, post_id: int, analysis_id: Any):
     row = None
     if analysis_id is not None:
         row = conn.execute(
@@ -454,9 +450,137 @@ def execute_prepared_post_analysis(
             """,
             (client_id, post_id),
         ).fetchone()
+    return row
+
+
+def apply_mock_post_analysis(
+    conn,
+    client_id: int,
+    post_id: int,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Store mock Claude feedback from a prepared snapshot. Never calls a paid provider."""
+    ensure_analysis_tables(conn)
+    body = body or {}
+    row = _prepared_analysis_row(conn, client_id, post_id, body.get("analysis_id"))
+    if row is None:
+        prepare_post_analysis(conn, client_id, post_id, download_media=False)
+        row = _prepared_analysis_row(conn, client_id, post_id, None)
+    if row is None:
+        raise ValueError("Could not prepare a mock analysis row.")
+
+    snapshot = json.loads(row["input_snapshot_json"] or "{}")
+    executable = snapshot.get("executable") or {}
+    post_snapshot = snapshot.get("post_snapshot") or {}
+    prompt_version = str(executable.get("prompt_version") or row["prompt_version"] or "")
+    metrics = post_snapshot.get("metrics") or {}
+    finished = _now()
+    insight = (
+        "MOCK: postfeedback-invoer gecontroleerd — caption/metrics/prompt aanwezig; "
+        f"prompt_version={prompt_version}; "
+        f"reach={metrics.get('reach')}; likes={metrics.get('likes')}. "
+        "Geen betaalde Claude-call."
+    )
+    action = "MOCK: controleer live Execute pas na expliciete bevestiging."
+    rating = "Mock"
+    usage = {
+        "status": "mock_completed",
+        "is_mock": True,
+        "paid_call": False,
+        "prompt_version": prompt_version,
+        "prompt_source": executable.get("prompt_source"),
+        "system_chars": len(str(executable.get("system_text") or "")),
+        "user_chars": len(str(executable.get("user_text") or "")),
+        "post_id": post_id,
+        "has_metrics": bool(metrics),
+        "has_caption": bool(post_snapshot.get("caption")),
+    }
+    conn.execute(
+        """
+        UPDATE post_ai_analyses SET
+            status = 'mock_completed',
+            finished_at = ?,
+            insight_text = ?,
+            action_text = ?,
+            rating_text = ?,
+            provider = 'Mock Claude',
+            model = 'mock',
+            prompt_version = ?,
+            raw_response_json = ?,
+            usage_json = ?,
+            error_text = '',
+            actual_cost_usd = NULL,
+            cost_known = 0
+        WHERE id = ?
+        """,
+        (
+            finished,
+            insight,
+            action,
+            rating,
+            prompt_version,
+            json.dumps({"mock": True, "keys": ["insight", "action", "rating"]}, ensure_ascii=False),
+            json.dumps(usage, ensure_ascii=False),
+            int(row["id"]),
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO post_assessments (
+            post_id, source, source_label, rating_text, insight_text, action_text, imported_at
+        ) VALUES (?, 'post_analysis_mock', ?, ?, ?, ?, ?)
+        """,
+        (post_id, "Mock Claude", rating, insight, action, finished),
+    )
+    result = get_analysis(conn, client_id, int(row["id"]))
+    result["paid_call"] = False
+    result["is_mock"] = True
+    result["input_checks"] = {
+        "system_prompt": bool(executable.get("system_text")),
+        "user_payload": bool(executable.get("user_text")),
+        "post_snapshot": bool(post_snapshot),
+        "metrics": bool(metrics),
+        "prompt_version": prompt_version,
+    }
+    return result
+
+
+def execute_prepared_post_analysis(
+    conn,
+    client_id: int,
+    post_id: int,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run one paid Claude post-feedback call from a prepared snapshot.
+
+    Requires body.confirm == true. Does not run on open/prepare/reload.
+    Gemini remains the provider for trend/client reports.
+    """
+    import os
+
+    import requests
+    from dotenv import dotenv_values
+
+    from maaike.claude_analysis import ENV_FILE, resolve_claude_api_key
+
+    ensure_analysis_tables(conn)
+    body = body or {}
+    if not body.get("confirm"):
+        raise ValueError(
+            "Execute requires confirm=true after reviewing the cost estimate. No paid call started."
+        )
+    claude = claude_connection_status()
+    if not claude.get("configured"):
+        raise ValueError(
+            "Claude is niet geconfigureerd voor postfeedback. "
+            f"Zet {claude.get('missing_setting') or 'CLAUDE_API_KEY'} server-side (Render env / .env) "
+            "en herstart. Gemini blijft beschikbaar voor rapporten."
+        )
+
+    row = _prepared_analysis_row(conn, client_id, post_id, body.get("analysis_id"))
     if row is None:
         raise ValueError("No prepared analysis found. Run Prepare first.")
-    if row["status"] not in {"prepared", "failed"}:
+    if row["status"] not in {"prepared", "failed", "mock_completed"}:
         if row["status"] == "completed" and (row["insight_text"] or "").strip():
             raise ValueError(
                 f"Analysis #{row['id']} is already completed. Open saved insight instead of re-running."
@@ -466,131 +590,112 @@ def execute_prepared_post_analysis(
     executable = snapshot.get("executable") or {}
     system_text = str(executable.get("system_text") or "")
     user_text = str(executable.get("user_text") or "")
-    role = str(executable.get("role") or snapshot.get("role") or "image")
-    limitations = list(executable.get("limitations") or [])
-    images = _verify_media(executable.get("images_for_model") or [])
+    prompt_version = str(executable.get("prompt_version") or row["prompt_version"] or "")
     estimate = snapshot.get("cost_estimate_usd") or {}
     high = estimate.get("high")
-    max_allowed = float(body.get("max_cost_usd") or 0.05)
+    max_allowed = float(body.get("max_cost_usd") or 0.15)
     if isinstance(high, (int, float)) and high > max_allowed:
         raise ValueError(
             f"Estimate high USD {high} exceeds max_cost_usd USD {max_allowed}. No paid call started."
         )
     if not system_text or not user_text:
         raise ValueError("Prepared prompt is incomplete. Prepare again. No paid call started.")
-    if not images:
-        raise ValueError(
-            "No local image/frame files ready for the model. Prepare again with reachable media. "
-            "No paid call started."
-        )
 
-    config = load_ai_config()
+    resolved = resolve_claude_api_key()
+    model = str(executable.get("model") or claude.get("model") or "claude-sonnet-4-5")
+    base = (
+        str(dotenv_values(ENV_FILE).get("CLAUDE_API_BASE") or "").strip()
+        if ENV_FILE.exists()
+        else ""
+    ) or os.getenv("CLAUDE_API_BASE", "").strip() or "https://api.anthropic.com"
+    url = f"{base.rstrip('/')}/v1/messages"
+
     started = _now()
     conn.execute(
-        "UPDATE post_ai_analyses SET status = 'running', started_at = ?, error_text = '' WHERE id = ?",
-        (started, row["id"]),
+        "UPDATE post_ai_analyses SET status = 'running', started_at = ?, error_text = '', provider = ?, model = ?, prompt_version = ? WHERE id = ?",
+        (started, "Anthropic Claude", model, prompt_version, row["id"]),
     )
 
-    user_content: list[dict[str, Any]] = [
-        {
-            "type": "text",
-            "text": (
-                user_text
-                + "\n\nBeoordeel alleen wat je in de meegestuurde beelden en caption ziet. "
-                "Claim geen audio, gesproken hook of niet-meegestuurde slides/video. "
-                "Scheid zichtbare details, meetbare cijfers en hypotheses. "
-                "Lage interactiecijfers bewijzen niet dat het format de oorzaak was."
-            ),
-        }
-    ]
-    for img in images:
-        label = img.get("role") or "image"
-        ts = img.get("timestamp_s")
-        ts_bit = f" @ {ts}s" if ts is not None else ""
-        user_content.append({"type": "text", "text": f"MEDIA {label}{ts_bit}:"})
-        user_content.append(_image_part(Path(img["abs_path"])))
-
-    request_body = {
-        "model": config.model,
-        "max_tokens": MAX_OUTPUT_TOKENS,
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "maaike_postanalyse",
-                "strict": True,
-                "schema": _RESPONSE_SCHEMA,
-            },
-        },
-        "messages": [
-            {"role": "system", "content": system_text},
-            {"role": "user", "content": user_content},
-        ],
-    }
-
-    usage = {
-        "reported": False,
-        "prompt_tokens": None,
-        "completion_tokens": None,
-        "total_tokens": None,
-    }
     raw_text = ""
     error = None
     parsed: dict[str, Any] | None = None
     http_status = None
+    usage_meta: dict[str, Any] = {}
     try:
         response = requests.post(
-            chat_completions_url(config.base_url),
+            url,
             headers={
-                "Authorization": f"Bearer {config.api_key}",
-                "Content-Type": "application/json",
+                "content-type": "application/json",
+                "x-api-key": resolved["key"],
+                "anthropic-version": "2023-06-01",
             },
-            json=request_body,
-            timeout=REQUEST_TIMEOUT_S,
+            json={
+                "model": model,
+                "max_tokens": 1200,
+                "temperature": 0.2,
+                "system": system_text[:100000],
+                "messages": [{"role": "user", "content": user_text[:80000]}],
+            },
+            timeout=120,
         )
         http_status = response.status_code
         try:
             body_json = response.json()
         except ValueError:
             body_json = {}
-        usage = _usage_from_body(body_json) if isinstance(body_json, dict) else usage
         if response.ok:
-            raw_text = _message_text((body_json.get("choices") or [{}])[0].get("message", {}).get("content"))
-            extracted = _extract_json(raw_text)
-            if extracted:
-                candidate = _normalize_result(extracted, role=role, limitations=limitations)
-                validation = validate_post_analysis(
-                    candidate,
-                    raw_text=raw_text,
-                    role=role,
-                    limitations=limitations,
-                )
-                if validation.usable and validation.normalized:
-                    parsed = validation.normalized
-                else:
-                    error = validation.user_message or "AI response not usable."
-            else:
-                error = "Invalid or empty JSON from model."
+            parts = body_json.get("content") if isinstance(body_json, dict) else None
+            texts = []
+            if isinstance(parts, list):
+                for part in parts:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        texts.append(str(part.get("text") or ""))
+            raw_text = "\n".join(texts)
+            from maaike.claude_analysis import _parse_json_loose
+
+            parsed = _parse_json_loose(raw_text)
+            usage_meta = body_json.get("usage") if isinstance(body_json, dict) else {}
         else:
-            error = f"HTTP {response.status_code} from AI provider (no retry)."
+            err = body_json.get("error") if isinstance(body_json, dict) else None
+            message = str((err or {}).get("message") or "") if isinstance(err, dict) else ""
+            error = message or f"HTTP {response.status_code} from Claude (no retry)."
     except requests.RequestException as exc:
         error = f"Network error without retry: {exc.__class__.__name__}"
 
     finished = _now()
-    actual_cost, cost_known = _cost_usd(usage.get("prompt_tokens"), usage.get("completion_tokens"))
-    insight = (parsed or {}).get("ai_insight") or ""
-    action = (parsed or {}).get("ai_action") or ""
-    rating = (parsed or {}).get("proposed_format_code") or ""
-    status = "completed" if parsed else "failed"
+    in_tok = usage_meta.get("input_tokens") if isinstance(usage_meta, dict) else None
+    out_tok = usage_meta.get("output_tokens") if isinstance(usage_meta, dict) else None
+    from maaike.claude_analysis import _estimate_cost_usd
+
+    actual_cost, cost_known, cost_note = _estimate_cost_usd(in_tok, out_tok, model)
+    insight = str((parsed or {}).get("insight") or (parsed or {}).get("Insight") or "").strip()
+    action = str(
+        (parsed or {}).get("action")
+        or (parsed or {}).get("Actie")
+        or (parsed or {}).get("actie")
+        or ""
+    ).strip()
+    rating = str(
+        (parsed or {}).get("rating")
+        or (parsed or {}).get("Beoordeling")
+        or (parsed or {}).get("beoordeling")
+        or ""
+    ).strip()
+    status = "completed" if (parsed and not error and (insight or action or rating)) else "failed"
+    if status == "failed" and not error:
+        error = "Claude response missing insight/action/rating JSON."
     usage_out = {
-        **usage,
         "status": status,
         "http_status": http_status,
+        "input_tokens": in_tok,
+        "output_tokens": out_tok,
         "actual_cost_usd": actual_cost if cost_known else None,
         "cost_known": cost_known,
-        "images_sent": len(images),
-        "image_roles": [i.get("role") for i in images],
-        "model": config.model,
-        "notes": "Single-post execute from Social posts Media & insight.",
+        "notes": cost_note,
+        "model": model,
+        "prompt_version": prompt_version,
+        "prompt_source": executable.get("prompt_source"),
+        "route": "claude_post_feedback",
     }
     conn.execute(
         """
@@ -606,7 +711,8 @@ def execute_prepared_post_analysis(
             actual_cost_usd = ?,
             cost_known = ?,
             provider = ?,
-            model = ?
+            model = ?,
+            prompt_version = ?
         WHERE id = ?
         """,
         (
@@ -620,8 +726,9 @@ def execute_prepared_post_analysis(
             error or "",
             actual_cost if cost_known else None,
             1 if cost_known else 0,
-            OFFICIAL_RATES["provider"],
-            config.model,
+            "Anthropic Claude",
+            model,
+            prompt_version,
             row["id"],
         ),
     )
@@ -634,7 +741,7 @@ def execute_prepared_post_analysis(
             """,
             (
                 post_id,
-                f"{OFFICIAL_RATES['provider']} {config.model}",
+                f"Anthropic Claude {model}",
                 rating or None,
                 insight,
                 action,
@@ -644,10 +751,6 @@ def execute_prepared_post_analysis(
     result = get_analysis(conn, client_id, int(row["id"]))
     result["paid_call"] = True
     result["cost_estimate_usd"] = estimate
-    result["media_sent"] = [
-        {"role": i.get("role"), "path": i.get("path"), "timestamp_s": i.get("timestamp_s")}
-        for i in images
-    ]
     result["error"] = error
     return result
 

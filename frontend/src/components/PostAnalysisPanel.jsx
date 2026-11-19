@@ -44,9 +44,9 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
     <section className="card stack" style={{ marginTop: "0.75rem" }}>
       <h4>Media &amp; post insight</h4>
       <p className="hint">
-        Published Meta material and Figma planning are listed separately. Opening or preparing does{" "}
-        <strong>not</strong> start a paid AI call. AI Trial stays under Settings → AI Connections
-        (internal probe).
+        Published Meta material and Figma planning are listed separately. Postfeedback uses Claude
+        with Maaike&apos;s editable prompt. Opening or preparing does{" "}
+        <strong>not</strong> start a paid AI call. Reports stay on Gemini.
       </p>
 
       <div className="stack">
@@ -146,12 +146,13 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
             const est = prepareResult?.cost_estimate_usd;
             const mediaN = prepareResult?.media_for_model?.length || prepareResult?.media_prep?.images_for_model || 0;
             const ok = window.confirm(
-              `Start paid AI image analysis for post #${postId}?\n\n` +
-                `Model: ${est?.model || "—"}\n` +
-                `Media to model: ${mediaN} image(s)/frame(s)\n` +
-                `Estimate: USD ${est?.low ?? "?"} – ${est?.high ?? "?"}\n` +
-                `Full video/audio are not sent.\n\n` +
-                `OK = confirm paid call. Cancel = no call.`
+              `Start paid Claude post feedback for post #${postId}?\n\n` +
+                `Provider: ${prepareResult?.provider || est?.provider || "Anthropic Claude"}\n` +
+                `Model: ${est?.model || prepareResult?.model || "—"}\n` +
+                `Prompt: ${prepareResult?.prompt_version || "—"}\n` +
+                `Prepared media (context only): ${mediaN}\n` +
+                `Estimate: USD ${est?.low ?? "?"} – ${est?.high ?? "?"}\n\n` +
+                `OK = confirm paid Claude call. Cancel = no call.`
             );
             if (!ok) {
               setNotice("Execute cancelled — no paid call.");
@@ -185,12 +186,46 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
               .finally(() => setBusy(false));
           }}
         >
-          Execute AI analysis (paid)
+          Execute Claude feedback (paid)
+        </button>
+        <button
+          className="secondary"
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            setNotice("");
+            api(`/api/clients/${clientId}/posts/${postId}/analysis/mock`, {
+              method: "POST",
+              body: { analysis_id: prepareResult?.analysis_id || null },
+            })
+              .then(async (payload) => {
+                const a = payload.analysis || {};
+                setInsight(a.insight_text || "");
+                setAction(a.action_text || "");
+                setRating(a.rating_text || "");
+                setSourceAnalysisId(a.id);
+                setPrepareResult((prev) => prev || { analysis_id: a.id });
+                setNotice(
+                  `Mock feedback #${a.id}: input checked` +
+                    (payload.input_checks
+                      ? ` · prompt=${payload.input_checks.prompt_version || "—"}`
+                      : "") +
+                    " · no paid call"
+                );
+                await reload();
+                await onSaved?.();
+              })
+              .catch((exc) => onError?.(exc.message))
+              .finally(() => setBusy(false));
+          }}
+        >
+          Mock feedback (no paid call)
         </button>
       </div>
       {prepareResult ? (
         <div className="stack">
-          <h5>Ready for AI (after Prepare)</h5>
+          <h5>Ready for Claude (after Prepare)</h5>
           <p className="hint">
             Coverage: {prepareResult.media_prep?.coverage || "—"} · full video to model:{" "}
             {String(prepareResult.media_prep?.full_video_to_model)} · audio:{" "}

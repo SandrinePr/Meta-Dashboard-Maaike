@@ -426,13 +426,40 @@ def _parse_json_loose(text: str) -> dict[str, Any]:
     return {"insight": text[:2000], "action": "", "rating": ""}
 
 
+def resolve_post_analysis_prompt(conn) -> dict[str, Any]:
+    """File defaults, overridden by Maaike's dashboard prompt when saved."""
+    bundle = load_analysis_prompt_bundle()
+    prompt_version = bundle["prompt_version"]
+    system_text = bundle["system_text"]
+    source = "files"
+    try:
+        from maaike.prompt_settings import active_prompt_text
+
+        override = active_prompt_text(conn, "post_analysis")
+        if override.get("source") == "dashboard_override" and override.get("body_text"):
+            system_text = str(override["body_text"])
+            prompt_version = str(override.get("version_tag") or prompt_version)
+            source = "dashboard_override"
+    except Exception:
+        pass
+    return {
+        "bundle": bundle,
+        "system_text": system_text,
+        "prompt_version": prompt_version,
+        "source": source,
+        "ready": bool(bundle.get("ready")) or source == "dashboard_override",
+        "missing_files": bundle.get("missing_files") or [],
+    }
+
+
 def run_claude_post_analysis(conn, client_id: int, post_id: int) -> dict[str, Any]:
     """One Claude Messages API call. No automatic retries."""
     ensure_analysis_tables(conn)
-    bundle = load_analysis_prompt_bundle()
-    if not bundle["ready"]:
+    prompt = resolve_post_analysis_prompt(conn)
+    bundle = prompt["bundle"]
+    if not prompt["ready"]:
         raise ValueError(
-            "Missing Social Agent prompt files: " + ", ".join(bundle["missing_files"])
+            "Missing Social Agent prompt files: " + ", ".join(prompt["missing_files"])
         )
     status = claude_connection_status()
     if not status["configured"]:
@@ -443,6 +470,9 @@ def run_claude_post_analysis(conn, client_id: int, post_id: int) -> dict[str, An
     snapshot = build_post_input_snapshot(conn, client_id, post_id)
     snapshot["analysis_scope"] = "single_post"
     snapshot["prompt_data_limitation"] = bundle.get("data_expectations", {}).get("single_post_limitation")
+    snapshot["prompt_source"] = prompt["source"]
+    snapshot["prompt_version"] = prompt["prompt_version"]
+    prompt_version = prompt["prompt_version"]
     resolved = resolve_claude_api_key()
     api_key = resolved["key"]
     model = status["model"]
@@ -473,7 +503,7 @@ def run_claude_post_analysis(conn, client_id: int, post_id: int) -> dict[str, An
                 "model": model,
                 "max_tokens": 1200,
                 "temperature": 0.2,
-                "system": bundle["system_text"][:100000],
+                "system": prompt["system_text"][:100000],
                 "messages": [{"role": "user", "content": user_text[:80000]}],
             },
             timeout=120,
@@ -497,7 +527,7 @@ def run_claude_post_analysis(conn, client_id: int, post_id: int) -> dict[str, An
                 client_id,
                 post_id,
                 model,
-                PROMPT_VERSION,
+                prompt_version,
                 started,
                 finished,
                 f"Network error without retry: {exc.__class__.__name__}",
@@ -548,7 +578,7 @@ def run_claude_post_analysis(conn, client_id: int, post_id: int) -> dict[str, An
                 client_id,
                 post_id,
                 model,
-                PROMPT_VERSION,
+                prompt_version,
                 started,
                 finished,
                 message or f"HTTP {response.status_code}",
@@ -602,7 +632,8 @@ def run_claude_post_analysis(conn, client_id: int, post_id: int) -> dict[str, An
         "actual_cost_usd": cost,
         "cost_known": known,
         "notes": cost_note,
-        "prompt_version": PROMPT_VERSION,
+        "prompt_version": prompt_version,
+        "prompt_source": prompt["source"],
     }
     cur = conn.execute(
         """
@@ -617,7 +648,7 @@ def run_claude_post_analysis(conn, client_id: int, post_id: int) -> dict[str, An
             client_id,
             post_id,
             model,
-            PROMPT_VERSION,
+            prompt_version,
             started,
             finished,
             insight,

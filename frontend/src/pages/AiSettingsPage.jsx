@@ -43,15 +43,37 @@ export default function AiSettingsPage() {
   return (
     <div className="stack">
       <p className="hint">
-        AI Connections: actieve route is Gemini voor postanalyse, klantrapport en trendrapport. Claude is optioneel.
-        Deze pagina start geen AI-aanvraag. Key values worden niet getoond.
+        AI Connections: Claude voor postfeedback; Gemini voor klantrapport en trendrapport.
+        Bewerkbare prompts hieronder. Deze pagina start geen AI-aanvraag. Key values worden niet getoond.
       </p>
 
       {status.active_provider ? (
-        <p className="banner">Actieve configuratie: {status.active_provider}{status.model ? ` · ${status.model}` : ""}</p>
+        <p className="banner">Actieve configuratie: {status.active_provider}</p>
       ) : (
-        <p className="banner error">Geen actieve AI-configuratie (zet AI_BASE_URL / AI_API_KEY / AI_MODEL).</p>
+        <p className="banner error">
+          Geen actieve AI-configuratie (zet CLAUDE_API_KEY voor postfeedback en AI_* voor rapporten).
+        </p>
       )}
+
+      {status.persist ? (
+        <section className="card stack">
+          <h3>Blijvende opslag (Render Free)</h3>
+          <p className={status.persist.enabled ? "banner" : "banner"}>
+            {status.persist.enabled
+              ? `Remote backup actief${status.persist.url_host ? ` · ${status.persist.url_host}` : ""}${
+                  status.persist.last_pushed_at ? ` · laatste push ${status.persist.last_pushed_at}` : ""
+                }`
+              : status.persist.free_tier_note ||
+                "Remote persist uit. Zonder disk verdwijnen prompts/posts bij herstart."}
+          </p>
+          {(status.persist.missing || []).length ? (
+            <p className="hint">Nog nodig: {(status.persist.missing || []).join(", ")}</p>
+          ) : null}
+          {status.oauth_redirect_uri ? (
+            <p className="hint">Meta OAuth-callback: {status.oauth_redirect_uri}</p>
+          ) : null}
+        </section>
+      ) : null}
 
       {taskProviders.post_analysis || taskProviders.client_report ? (
         <section className="card stack">
@@ -84,7 +106,7 @@ export default function AiSettingsPage() {
       ) : null}
 
       <section className="card stack">
-        <h3>Gemini API (actief)</h3>
+        <h3>Gemini API (rapporten)</h3>
         <p className={gemini.configured ? "banner" : "banner error"}>
           {gemini.configured
             ? `Connected · model ${gemini.model} · host ${gemini.base_host || "—"}`
@@ -124,11 +146,11 @@ export default function AiSettingsPage() {
       </section>
 
       <section className="card stack">
-        <h3>Claude API (optioneel)</h3>
-        <p className={claude.configured ? "banner" : "banner"}>
+        <h3>Claude API (postfeedback)</h3>
+        <p className={claude.configured ? "banner" : "banner error"}>
           {claude.configured
             ? `Connected · model ${claude.model} · host ${claude.base_host}`
-            : `Niet verbonden — niet vereist voor Gemini-rapporten/postanalyse. Optioneel: ${claude.missing_setting || "CLAUDE_API_KEY"} in ${claude.env_file_hint || ".env"}.`}
+            : `Vereist voor postfeedback. Zet ${claude.missing_setting || "CLAUDE_API_KEY"} server-side (${claude.env_file_hint || "Render env / .env"}). Gemini-rapporten werken zonder Claude.`}
         </p>
         <div className="table-wrap">
           <table>
