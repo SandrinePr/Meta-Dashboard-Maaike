@@ -539,8 +539,12 @@ def apply_mock_post_analysis(
         "system_prompt": bool(executable.get("system_text")),
         "user_payload": bool(executable.get("user_text")),
         "post_snapshot": bool(post_snapshot),
+        "has_caption": bool(post_snapshot.get("caption")),
         "metrics": bool(metrics),
+        "images_for_model": len(executable.get("images_for_model") or []),
         "prompt_version": prompt_version,
+        "provider": "Mock Claude",
+        "model": "mock",
     }
     return result
 
@@ -917,18 +921,27 @@ def analysis_panel(conn, client_id: int, post_id: int) -> dict[str, Any]:
         ).fetchall()
     ]
 
-    latest_completed = next((a for a in analyses if a.get("status") == "completed"), None)
+    latest_feedback = next(
+        (
+            a
+            for a in analyses
+            if a.get("status") in {"completed", "mock_completed"} and (a.get("insight_text") or a.get("action_text"))
+        ),
+        None,
+    )
     draft_insight = ""
     draft_action = ""
     draft_rating = ""
-    if latest_completed:
-        draft_insight = latest_completed.get("insight_text") or ""
-        draft_action = latest_completed.get("action_text") or ""
-        draft_rating = latest_completed.get("rating_text") or ""
+    if latest_feedback:
+        draft_insight = latest_feedback.get("insight_text") or ""
+        draft_action = latest_feedback.get("action_text") or ""
+        draft_rating = latest_feedback.get("rating_text") or ""
     elif trial:
         draft_insight = trial["ai_insight"] or ""
         draft_action = trial["ai_action"] or ""
 
+    claude = claude_connection_status()
+    prompt = resolve_post_analysis_prompt(conn)
     return {
         "inventory": inventory,
         "analyses": analyses,
@@ -939,7 +952,29 @@ def analysis_panel(conn, client_id: int, post_id: int) -> dict[str, Any]:
             "insight_text": draft_insight,
             "action_text": draft_action,
             "rating_text": draft_rating,
-            "source_analysis_id": latest_completed["id"] if latest_completed else None,
+            "source_analysis_id": latest_feedback["id"] if latest_feedback else None,
+            "provider": latest_feedback.get("provider") if latest_feedback else None,
+            "model": latest_feedback.get("model") if latest_feedback else None,
+            "prompt_version": latest_feedback.get("prompt_version") if latest_feedback else None,
+            "status": latest_feedback.get("status") if latest_feedback else None,
+        },
+        "claude": claude,
+        "prompt": {
+            "prompt_version": prompt.get("prompt_version"),
+            "source": prompt.get("source"),
+            "title": "Post analysis",
+            "ready": bool(prompt.get("ready")),
+        },
+        "input_preview": {
+            "has_caption": bool(inventory.get("caption_preview")),
+            "caption_preview": inventory.get("caption_preview") or "",
+            "published_media_count": (inventory.get("published_media") or {}).get("count") or 0,
+            "uploaded_media_count": (inventory.get("uploaded_media") or {}).get("count") or 0,
+            "can_use_images": bool((inventory.get("ai_can_use_on_prepare") or {}).get("images_or_frames")),
+            "analysis_role": inventory.get("analysis_role"),
+            "limitations": list(inventory.get("limitations") or []),
+            "prompt_version": prompt.get("prompt_version"),
+            "prompt_source": prompt.get("source"),
         },
         "report_note": (
             "Completed analyses on this post are attached when you prepare a client report "

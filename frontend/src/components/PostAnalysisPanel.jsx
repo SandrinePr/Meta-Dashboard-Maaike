@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { api } from "../api.js";
 
 /**
- * Media inventory + prepare/save insight for one Social post.
- * Opening / preparing does not start a paid AI call.
+ * Claude post feedback panel for one Social post.
+ * Opening / preparing / mock never starts a paid AI call.
  */
 export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }) {
   const [data, setData] = useState(null);
@@ -27,89 +27,87 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
 
   useEffect(() => {
     setNotice("");
+    setPrepareResult(null);
     setData(null);
     reload().catch((exc) => onError?.(exc.message));
   }, [clientId, postId]);
 
   if (!data) {
-    return <p className="muted">Loading media &amp; insight…</p>;
+    return <p className="muted">Loading Claude feedback…</p>;
   }
 
   const inv = data.inventory || {};
   const published = inv.published_media || {};
   const uploads = inv.uploaded_media || {};
-  const figma = inv.figma_planning || {};
+  const claude = data.claude || {};
+  const prompt = data.prompt || {};
+  const preview = data.input_preview || {};
+  const draft = data.draft || {};
+  const claudeReady = Boolean(claude.configured);
+  const missingSetting = claude.missing_setting || "CLAUDE_API_KEY";
 
   return (
-    <section className="card stack" style={{ marginTop: "0.75rem" }}>
-      <h4>Media &amp; post insight</h4>
+    <section className="card stack logs-feedback-panel" style={{ marginTop: "0.75rem" }}>
+      <h4>Claude post feedback</h4>
       <p className="hint">
-        Published Meta material and Figma planning are listed separately. Postfeedback uses Claude
-        with Maaike&apos;s editable prompt. Opening or preparing does{" "}
-        <strong>not</strong> start a paid AI call. Reports stay on Gemini.
+        Request feedback explicitly. Opening this card never starts a paid call. Reports stay on
+        Gemini; post feedback uses Anthropic Claude with Maaike&apos;s saved post prompt.
       </p>
 
-      <div className="stack">
-        <p>
-          <strong>Type:</strong> {inv.content_kind || "—"} → analysis role{" "}
-          <strong>{inv.analysis_role || "—"}</strong>
+      {!claudeReady ? (
+        <p className="banner warn-soft">
+          Claude is not configured. Set <strong>{missingSetting}</strong> server-side on Render (or
+          in <code>.env</code>) and restart. Until then you can still prepare input and run{" "}
+          <strong>Mock feedback</strong>.
         </p>
-        {(inv.limitations || []).length ? (
+      ) : (
+        <p className="hint">
+          Claude ready · model <strong>{claude.model || "—"}</strong> · prompt{" "}
+          <strong>{prompt.prompt_version || "—"}</strong> ({prompt.source || "—"})
+        </p>
+      )}
+
+      {draft.source_analysis_id ? (
+        <div className="stack" style={{ gap: "0.25rem" }}>
+          <p style={{ margin: 0 }}>
+            <strong>Saved feedback</strong> #{draft.source_analysis_id} · {draft.status || "—"} ·{" "}
+            {draft.provider || "—"} · {draft.model || "—"}
+            {draft.prompt_version ? ` · prompt ${draft.prompt_version}` : ""}
+          </p>
+          <p className="hint" style={{ margin: 0 }}>
+            Reloading this card shows the stored text below — no new paid call.
+          </p>
+        </div>
+      ) : null}
+
+      <div className="stack">
+        <h5>Input that Claude can use</h5>
+        <ul className="plain-list">
+          <li>
+            Caption: {preview.has_caption || inv.caption_preview ? "yes" : "missing"}
+            {inv.caption_preview ? ` — “${String(inv.caption_preview).slice(0, 120)}…”` : ""}
+          </li>
+          <li>
+            Published media URLs: {preview.published_media_count ?? published.count ?? 0}
+            {preview.can_use_images || (published.count || 0) || (uploads.count || 0)
+              ? " (images/frames can be prepared for the model)"
+              : ""}
+          </li>
+          <li>Uploads: {preview.uploaded_media_count ?? uploads.count ?? 0}</li>
+          <li>
+            Role: {preview.analysis_role || inv.analysis_role || "—"} · prompt{" "}
+            {preview.prompt_version || prompt.prompt_version || "—"}
+          </li>
+        </ul>
+        {(preview.limitations || inv.limitations || []).length ? (
           <ul className="plain-list">
-            {(inv.limitations || []).map((line) => (
+            {(preview.limitations || inv.limitations || []).map((line) => (
               <li key={line} className="hint">
                 Limitation: {line}
               </li>
             ))}
           </ul>
         ) : null}
-      </div>
-
-      <div className="stack">
-        <h5>Published material ({published.count || 0})</h5>
-        {(published.urls || []).length ? (
-          <ol className="plain-list">
-            {(published.urls || []).map((item) => (
-              <li key={`${item.index}-${item.url}`}>
-                #{item.index} · {item.guessed_kind} · {item.host}
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p className="hint">No Meta media URLs on this post.</p>
-        )}
-      </div>
-
-      <div className="stack">
-        <h5>Uploads ({uploads.count || 0})</h5>
-        {(uploads.assets || []).length ? (
-          <ol className="plain-list">
-            {(uploads.assets || []).map((asset) => (
-              <li key={asset.id}>
-                {asset.position}. {asset.kind} · {asset.original_name}
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p className="hint">No manual uploads.</p>
-        )}
-      </div>
-
-      <div className="stack">
-        <h5>Figma planning ({figma.count || 0}) — planned, not published</h5>
-        {(figma.items || []).length ? (
-          <ul className="plain-list">
-            {(figma.items || []).map((item) => (
-              <li key={item.item_id}>
-                {item.code || "—"} · {item.content_kind || "—"} · node {item.node_id} ·{" "}
-                {item.page_name || "—"}
-                {item.format_usable ? ` · format ${item.format_raw}` : " · format unusable"}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="hint">No linked Figma planning item for this post.</p>
-        )}
       </div>
 
       <div className="row-actions wrap">
@@ -126,8 +124,8 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
                 setPrepareResult(payload);
                 setNotice(
                   `Prepared #${payload.analysis_id}: ${payload.media_prep?.coverage || "—"} · ` +
-                    `${payload.media_prep?.images_for_model || 0} image(s)/frame(s) for model · ` +
-                    `estimate USD ${payload.cost_estimate_usd?.low}–${payload.cost_estimate_usd?.high} (not executed)`
+                    `${payload.media_prep?.images_for_model || 0} image(s)/frame(s) · ` +
+                    `prompt ${payload.prompt_version || "—"} · estimate USD ${payload.cost_estimate_usd?.low}–${payload.cost_estimate_usd?.high} (not executed)`,
                 );
                 setSourceAnalysisId(payload.analysis_id);
                 return reload();
@@ -136,23 +134,31 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
               .finally(() => setBusy(false));
           }}
         >
-          Prepare analysis (no paid call)
+          Prepare input (no paid call)
         </button>
         <button
           className="primary"
           type="button"
-          disabled={busy || !prepareResult?.analysis_id}
+          disabled={busy || !prepareResult?.analysis_id || !claudeReady}
+          title={
+            !claudeReady
+              ? `Set ${missingSetting} first`
+              : !prepareResult?.analysis_id
+                ? "Prepare input first"
+                : "Start paid Claude feedback"
+          }
           onClick={() => {
             const est = prepareResult?.cost_estimate_usd;
-            const mediaN = prepareResult?.media_for_model?.length || prepareResult?.media_prep?.images_for_model || 0;
+            const mediaN =
+              prepareResult?.media_for_model?.length || prepareResult?.media_prep?.images_for_model || 0;
             const ok = window.confirm(
               `Start paid Claude post feedback for post #${postId}?\n\n` +
                 `Provider: ${prepareResult?.provider || est?.provider || "Anthropic Claude"}\n` +
                 `Model: ${est?.model || prepareResult?.model || "—"}\n` +
                 `Prompt: ${prepareResult?.prompt_version || "—"}\n` +
-                `Prepared media (context only): ${mediaN}\n` +
+                `Prepared media for model: ${mediaN}\n` +
                 `Estimate: USD ${est?.low ?? "?"} – ${est?.high ?? "?"}\n\n` +
-                `OK = confirm paid Claude call. Cancel = no call.`
+                `OK = confirm paid Claude call. Cancel = no call.`,
             );
             if (!ok) {
               setNotice("Execute cancelled — no paid call.");
@@ -177,7 +183,7 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
                 setNotice(
                   `Executed analysis #${a.id}: ${a.status}` +
                     (a.cost_known ? ` · USD ${a.actual_cost_usd}` : " · cost unknown") +
-                    (payload.error ? ` · ${payload.error}` : "")
+                    (payload.error ? ` · ${payload.error}` : ""),
                 );
                 await reload();
                 await onSaved?.();
@@ -186,7 +192,7 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
               .finally(() => setBusy(false));
           }}
         >
-          Execute Claude feedback (paid)
+          Ask Claude for feedback (paid)
         </button>
         <button
           className="secondary"
@@ -206,12 +212,11 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
                 setRating(a.rating_text || "");
                 setSourceAnalysisId(a.id);
                 setPrepareResult((prev) => prev || { analysis_id: a.id });
+                const checks = payload.input_checks || {};
                 setNotice(
-                  `Mock feedback #${a.id}: input checked` +
-                    (payload.input_checks
-                      ? ` · prompt=${payload.input_checks.prompt_version || "—"}`
-                      : "") +
-                    " · no paid call"
+                  `Mock feedback #${a.id} saved · prompt=${checks.prompt_version || a.prompt_version || "—"}` +
+                    ` · caption=${checks.has_caption || checks.post_snapshot ? "yes" : "n/a"}` +
+                    ` · metrics=${checks.metrics ? "yes" : "n/a"} · no paid call`,
                 );
                 await reload();
                 await onSaved?.();
@@ -223,17 +228,23 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
           Mock feedback (no paid call)
         </button>
       </div>
+
       {prepareResult ? (
         <div className="stack">
-          <h5>Ready for Claude (after Prepare)</h5>
+          <h5>Prepared for Claude</h5>
           <p className="hint">
-            Coverage: {prepareResult.media_prep?.coverage || "—"} · full video to model:{" "}
+            Provider {prepareResult.provider || "Anthropic Claude"} · model{" "}
+            {prepareResult.model || prepareResult.cost_estimate_usd?.model || "—"} · prompt{" "}
+            {prepareResult.prompt_version || "—"} ({prepareResult.prompt_source || "—"})
+          </p>
+          <p className="hint">
+            Coverage: {prepareResult.media_prep?.coverage || "—"} · images/frames for model:{" "}
+            {prepareResult.media_prep?.images_for_model ?? 0} · full video:{" "}
             {String(prepareResult.media_prep?.full_video_to_model)} · audio:{" "}
             {String(prepareResult.media_prep?.audio_to_model)}
           </p>
           <p>
-            Estimate: USD {prepareResult.cost_estimate_usd?.low}–{prepareResult.cost_estimate_usd?.high} (
-            {prepareResult.cost_estimate_usd?.model})
+            Estimate: USD {prepareResult.cost_estimate_usd?.low}–{prepareResult.cost_estimate_usd?.high}
           </p>
           {(prepareResult.media_for_model || []).length ? (
             <ol className="plain-list">
@@ -245,14 +256,14 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
               ))}
             </ol>
           ) : (
-            <p className="hint">No local images/frames prepared for the model.</p>
+            <p className="hint">No local images/frames prepared — caption/metrics still go in the prompt.</p>
           )}
         </div>
       ) : null}
       {notice ? <p className="hint">{notice}</p> : null}
 
       <div className="stack">
-        <h5>Insight &amp; action (saved for reports)</h5>
+        <h5>Insight &amp; action (saved on this post)</h5>
         <label>
           Rating
           <input value={rating} onChange={(e) => setRating(e.target.value)} placeholder="optional" />
@@ -289,12 +300,12 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
                 action_text: action,
                 rating_text: rating,
                 source_analysis_id: sourceAnalysisId,
-                provider: "Specialist reviewed",
-                model: "manual",
+                provider: draft.provider || "Specialist reviewed",
+                model: draft.model || "manual",
               },
             })
               .then(async (payload) => {
-                setNotice(`Saved analysis #${payload.analysis?.id || "—"} for client reports.`);
+                setNotice(`Saved analysis #${payload.analysis?.id || "—"} for this post / reports.`);
                 await reload();
                 await onSaved?.();
               })
@@ -314,19 +325,12 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
             {(data.analyses || []).map((row) => (
               <li key={row.id}>
                 #{row.id} · {row.status} · {row.provider} · {row.model}
+                {row.prompt_version ? ` · ${row.prompt_version}` : ""}
                 {row.insight_text ? ` — ${(row.insight_text || "").slice(0, 80)}` : ""}
               </li>
             ))}
           </ul>
         </div>
-      ) : null}
-
-      {data.ai_trial ? (
-        <p className="hint">
-          Internal AI Trial row present ({data.ai_trial.status}
-          {data.ai_trial.executed_at ? ` · executed ${data.ai_trial.executed_at}` : " · not executed"}
-          ). Location: {data.ai_trial_location}.
-        </p>
       ) : null}
     </section>
   );

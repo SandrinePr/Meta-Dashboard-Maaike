@@ -85,17 +85,22 @@ export default function ResultCard({
   highlightMetric = null,
   rankBanner = null,
   focused = false,
+  detailsOpen = false,
+  detailsLabel = "Details",
+  detailsOpenLabel = "Hide details",
   onOpenDetails,
   onOpenLogs,
   onOpenFeed,
   onOpenPost,
+  children = null,
 }) {
   const openPost = onOpenPost || onOpenLogs || onOpenFeed;
   const cover = post.cover_url;
   const video = (post.media || []).find((item) => item.kind === "video");
+  const account = post.account || post.cells?.Account || "";
 
   return (
-    <article className={`rro-result-card${focused ? " is-focused" : ""}`}>
+    <article className={`rro-result-card${focused ? " is-focused" : ""}`} id={post.dom_id || undefined}>
       {rankBanner}
       <div className="rro-result-row">
         <div className="rro-result-thumb">
@@ -137,7 +142,10 @@ export default function ResultCard({
             ))}
             {!(post.match_badges || []).length ? matchBadges(post.caption, query) : null}
           </div>
-          <div className="rro-card-date">{post.published_label}</div>
+          <div className="rro-card-date">
+            {post.published_label}
+            {account ? ` · ${account}` : ""}
+          </div>
           {post.formula_rating ? <RatingBadge rating={post.formula_rating} /> : null}
           <div className="rro-card-text">{highlightCaption(post.caption, query)}</div>
           {post.media_note ? <p className="hint">{post.media_note}</p> : null}
@@ -177,7 +185,7 @@ export default function ResultCard({
           <div className="row-actions" style={{ marginTop: "0.45rem" }}>
             {onOpenDetails ? (
               <button className="secondary" type="button" onClick={() => onOpenDetails(post)}>
-                Details
+                {detailsOpen ? detailsOpenLabel : detailsLabel}
               </button>
             ) : null}
             {openPost ? (
@@ -189,6 +197,7 @@ export default function ResultCard({
         </div>
       </div>
       <StatRow metrics={post.metrics} platform={post.platform} highlight={highlightMetric} />
+      {children}
     </article>
   );
 }

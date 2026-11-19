@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, API_URL } from "../api.js";
 import PostAnalysisPanel from "../components/PostAnalysisPanel.jsx";
 import RatingBadge from "../components/RatingBadge.jsx";
+import ResultCard from "../components/ResultCard.jsx";
 
 const EDITABLE = new Set(["Contentformat", "Contentpijler", "Hook"]);
 
@@ -272,9 +273,9 @@ export default function PostsPage({
         <h3>All posts</h3>
       </div>
       <p className="hint">
-        One post overview: search and filter, check figures, and edit format, content pillar, hook,
-        insight and action. CSV/Excel export uses the same filtered selection. Empty, “n.v.t.” and 0
-        stay distinct.
+        Post cards like Performance: image, caption, platform, account, date and figures. Open a
+        card to edit format, pillar, hook and Figma, and to request Claude feedback. Search,
+        filters and CSV/Excel export stay. Empty, “n.v.t.” and 0 stay distinct.
       </p>
       {periodHint ? <p className="hint">{periodHint}</p> : null}
       <p>
@@ -569,62 +570,26 @@ export default function PostsPage({
       ) : null}
 
       {filteredPosts.length ? (
-        <>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  {overview.columns.map((column) => (
-                    <th key={column}>{overview.column_labels?.[column] || column}</th>
-                  ))}
-                  <th>Save</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredPosts.map((post) => (
-                  <PostDesktop
-                    key={post.id}
-                    clientId={client.id}
-                    post={post}
-                    columns={overview.columns}
-                    columnLabels={overview.column_labels}
-                    formats={overview.formats}
-                    pillars={overview.pillars}
-                    hooks={overview.hooks || []}
-                    unsetLabel={overview.unset_label}
-                    onOpenFeed={onOpenFeed}
-                    onSaved={async () => {
-                      await reload();
-                      setNotice("Saved.");
-                    }}
-                    onError={setError}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="cards">
-            {filteredPosts.map((post) => (
-              <PostCard
-                key={`card-${post.id}`}
-                clientId={client.id}
-                post={post}
-                columns={overview.columns}
-                columnLabels={overview.column_labels}
-                formats={overview.formats}
-                pillars={overview.pillars}
-                hooks={overview.hooks || []}
-                unsetLabel={overview.unset_label}
-                onOpenFeed={onOpenFeed}
-                onSaved={async () => {
-                  await reload();
-                  setNotice("Saved.");
-                }}
-                onError={setError}
-              />
-            ))}
-          </div>
-        </>
+        <div className="results-list logs-cards">
+          {filteredPosts.map((post) => (
+            <LogPostCard
+              key={post.id}
+              clientId={client.id}
+              post={post}
+              query={filters.q}
+              formats={overview.formats}
+              pillars={overview.pillars}
+              hooks={overview.hooks || []}
+              unsetLabel={overview.unset_label}
+              focused={Number(focusPostId) === Number(post.id)}
+              onSaved={async () => {
+                await reload();
+                setNotice("Saved.");
+              }}
+              onError={setError}
+            />
+          ))}
+        </div>
       ) : (
         <p className="banner">{overview.empty_message}</p>
       )}
@@ -705,7 +670,7 @@ function ContentMatchSearch({ client, onMatch, onClear, active }) {
     <div className="stack" style={{ marginTop: "0.75rem" }}>
       <p className="hint">
         Optional: search captions, comments, tags and hashtags (Instagram/Facebook). Matches filter
-        this same All posts table — no second post list. Clear to show LinkedIn/imported rows again.
+        this same All posts card list. Clear to show LinkedIn/imported rows again.
       </p>
       <form className="filters-row" onSubmit={runSearch}>
         <label style={{ flex: "1 1 16rem" }}>
@@ -1002,8 +967,14 @@ function AddPostModal({ clientId, onClose, onCreated, onError }) {
 function useDraft(post) {
   const [formatId, setFormatId] = useState(post.format_id == null ? "" : String(post.format_id));
   const [pillarId, setPillarId] = useState(post.pillar_id == null ? "" : String(post.pillar_id));
-  const [hook, setHook] = useState(post.cells.Hook || "");
+  const [hook, setHook] = useState(post.cells?.Hook || post.hook || "");
   const [figmaUrl, setFigmaUrl] = useState(post.figma_url || post.cells?.Figma || "");
+  useEffect(() => {
+    setFormatId(post.format_id == null ? "" : String(post.format_id));
+    setPillarId(post.pillar_id == null ? "" : String(post.pillar_id));
+    setHook(post.cells?.Hook || post.hook || "");
+    setFigmaUrl(post.figma_url || post.cells?.Figma || "");
+  }, [post.id, post.format_id, post.pillar_id, post.hook, post.figma_url, post.cells?.Hook, post.cells?.Figma]);
   return { formatId, setFormatId, pillarId, setPillarId, hook, setHook, figmaUrl, setFigmaUrl };
 }
 
@@ -1025,17 +996,77 @@ async function saveDraft(clientId, post, draft, onSaved, onError) {
   }
 }
 
-function PostDesktop({ clientId, post, columns, columnLabels, formats, pillars, hooks, unsetLabel, onOpenFeed, onSaved, onError }) {
+function LogPostCard({
+  clientId,
+  post,
+  query = "",
+  formats,
+  pillars,
+  hooks,
+  unsetLabel,
+  focused = false,
+  onSaved,
+  onError,
+}) {
   const draft = useDraft(post);
-  const [showAnalysis, setShowAnalysis] = useState(false);
+  const [open, setOpen] = useState(Boolean(focused));
+  const feedback = post.latest_feedback;
+
+  useEffect(() => {
+    if (focused) setOpen(true);
+  }, [focused]);
+
+  const cardPost = {
+    ...post,
+    dom_id: `log-post-${post.id}`,
+    caption: post.caption || post.cells?.Tekst || "",
+    account: post.account || post.cells?.Account || "",
+    published_label: post.published_label || post.cells?.Publicatiedatum || "",
+    platform_label: post.platform_label || post.cells?.Platform || post.platform,
+    content_kind_label: post.content_kind_label || post.cells?.Contentsoort || "",
+    log_rating: feedback?.rating_text || post.log_rating || "",
+    log_insight: feedback?.insight_text || post.log_insight || "",
+    log_action: feedback?.action_text || post.log_action || "",
+  };
+
   return (
-    <>
-      <tr id={`log-post-${post.id}`}>
-        {columns.map((column) => (
-          <td key={column}>
-            {EDITABLE.has(column) ? (
+    <ResultCard
+      post={cardPost}
+      query={query}
+      focused={focused || open}
+      detailsOpen={open}
+      detailsLabel="Indeling & feedback"
+      detailsOpenLabel="Sluit indeling"
+      onOpenDetails={() => setOpen((value) => !value)}
+    >
+      <div className="logs-card-meta">
+        <span>
+          <strong>Format:</strong> {post.cells?.Contentformat || unsetLabel}
+        </span>
+        <span>
+          <strong>Pijler:</strong> {post.cells?.Contentpijler || unsetLabel}
+        </span>
+        <span>
+          <strong>Hook:</strong> {post.hook || post.cells?.Hook || "—"}
+        </span>
+        {feedback ? (
+          <span className="hint" style={{ margin: 0 }}>
+            Feedback: {feedback.provider} · {feedback.model}
+            {feedback.prompt_version ? ` · ${feedback.prompt_version}` : ""}
+          </span>
+        ) : (
+          <span className="hint" style={{ margin: 0 }}>
+            Nog geen Claude-feedback opgeslagen
+          </span>
+        )}
+      </div>
+      {open ? (
+        <div className="logs-card-editor stack">
+          <div className="logs-edit-grid">
+            <label>
+              Contentformat
               <Editor
-                column={column}
+                column="Contentformat"
                 draft={draft}
                 formats={formats}
                 pillars={pillars}
@@ -1043,97 +1074,54 @@ function PostDesktop({ clientId, post, columns, columnLabels, formats, pillars, 
                 unsetLabel={unsetLabel}
                 listId={`hook-list-${post.id}`}
               />
-            ) : (
-              <ReadCell column={column} value={post.cells[column]} post={post} />
-            )}
-          </td>
-        ))}
-        <td>
-          <div className="row-actions">
-            <button className="primary" type="button" onClick={() => saveDraft(clientId, post, draft, onSaved, onError)}>
-              Save
-            </button>
-            <button className="secondary" type="button" onClick={() => setShowAnalysis((v) => !v)}>
-              {showAnalysis ? "Hide media & insight" : "Media & insight"}
-            </button>
-            {onOpenFeed ? (
-              <button className="secondary" type="button" onClick={() => onOpenFeed(post.id)}>
-                Focus post
-              </button>
-            ) : null}
+            </label>
+            <label>
+              Contentpijler
+              <Editor
+                column="Contentpijler"
+                draft={draft}
+                formats={formats}
+                pillars={pillars}
+                hooks={hooks}
+                unsetLabel={unsetLabel}
+                listId={`hook-list-${post.id}`}
+              />
+            </label>
+            <label>
+              Hook
+              <Editor
+                column="Hook"
+                draft={draft}
+                formats={formats}
+                pillars={pillars}
+                hooks={hooks}
+                unsetLabel={unsetLabel}
+                listId={`hook-list-${post.id}`}
+              />
+            </label>
+            <label>
+              Figma-link (optioneel)
+              <input
+                value={draft.figmaUrl}
+                onChange={(e) => draft.setFigmaUrl(e.target.value)}
+                placeholder="https://www.figma.com/…"
+              />
+            </label>
           </div>
-          <label style={{ display: "block", marginTop: "0.5rem" }}>
-            Figma-link (optioneel)
-            <input
-              value={draft.figmaUrl}
-              onChange={(e) => draft.setFigmaUrl(e.target.value)}
-              placeholder="https://www.figma.com/…"
-            />
-          </label>
+          <div className="row-actions wrap">
+            <button
+              className="primary"
+              type="button"
+              onClick={() => saveDraft(clientId, post, draft, onSaved, onError)}
+            >
+              Save format, pillar, hook &amp; Figma
+            </button>
+          </div>
           <MediaUploadPanel clientId={clientId} postId={post.id} onError={onError} onSaved={onSaved} />
-        </td>
-      </tr>
-      {showAnalysis ? (
-        <tr>
-          <td colSpan={columns.length + 1}>
-            <PostAnalysisPanel clientId={clientId} postId={post.id} onError={onError} onSaved={onSaved} />
-          </td>
-        </tr>
+          <PostAnalysisPanel clientId={clientId} postId={post.id} onError={onError} onSaved={onSaved} />
+        </div>
       ) : null}
-    </>
-  );
-}
-
-function PostCard({ clientId, post, columns, columnLabels, formats, pillars, hooks, unsetLabel, onOpenFeed, onSaved, onError }) {
-  const draft = useDraft(post);
-  const [showAnalysis, setShowAnalysis] = useState(false);
-  return (
-    <article className="card post-card" id={`log-post-card-${post.id}`}>
-      {columns.map((column) => (
-        <label key={column}>
-          {columnLabels?.[column] || column}
-          {EDITABLE.has(column) ? (
-            <Editor
-              column={column}
-              draft={draft}
-              formats={formats}
-              pillars={pillars}
-              hooks={hooks}
-              unsetLabel={unsetLabel}
-              listId={`hook-list-card-${post.id}`}
-            />
-          ) : (
-            <ReadCell column={column} value={post.cells[column]} post={post} />
-          )}
-        </label>
-      ))}
-      {post.formula_rating ? <RatingBadge rating={post.formula_rating} showExplanation /> : null}
-      <label>
-        Figma-link (optioneel)
-        <input
-          value={draft.figmaUrl}
-          onChange={(e) => draft.setFigmaUrl(e.target.value)}
-          placeholder="https://www.figma.com/…"
-        />
-      </label>
-      <div className="row-actions">
-        <button className="primary" type="button" onClick={() => saveDraft(clientId, post, draft, onSaved, onError)}>
-          Save format, pillar and hook
-        </button>
-        <button className="secondary" type="button" onClick={() => setShowAnalysis((v) => !v)}>
-          {showAnalysis ? "Hide media & insight" : "Media & insight"}
-        </button>
-        {onOpenFeed ? (
-          <button className="secondary" type="button" onClick={() => onOpenFeed(post.id)}>
-            Focus post
-          </button>
-        ) : null}
-      </div>
-      <MediaUploadPanel clientId={clientId} postId={post.id} onError={onError} onSaved={onSaved} />
-      {showAnalysis ? (
-        <PostAnalysisPanel clientId={clientId} postId={post.id} onError={onError} onSaved={onSaved} />
-      ) : null}
-    </article>
+    </ResultCard>
   );
 }
 

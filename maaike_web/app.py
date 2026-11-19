@@ -2086,7 +2086,9 @@ async def _resolve_excel_upload(client_id: int, file: UploadFile | None) -> Path
 
 
 def _posts_payload(client_id: int) -> dict:
+    from maaike.feed import feed_card
     from maaike.rating import get_rating_settings, rate_post
+    from maaike.thumbnails import cover_api_path
 
     with transaction() as conn:
         client = _require_client(conn, client_id)
@@ -2094,6 +2096,38 @@ def _posts_payload(client_id: int) -> dict:
         moment = latest_sync_at(conn, client_id)
         legend = _legend_out(conn, client_id)
         rating_settings = get_rating_settings(conn, client_id)
+        latest_feedback: dict[int, dict] = {}
+        try:
+            from maaike.claude_analysis import ensure_analysis_tables
+
+            ensure_analysis_tables(conn)
+            for row in conn.execute(
+                """
+                SELECT id, post_id, provider, model, prompt_version, status,
+                       insight_text, action_text, rating_text, finished_at
+                FROM post_ai_analyses
+                WHERE client_id = ?
+                  AND status IN ('completed', 'mock_completed')
+                ORDER BY id DESC
+                """,
+                (client_id,),
+            ):
+                pid = int(row["post_id"])
+                if pid in latest_feedback:
+                    continue
+                latest_feedback[pid] = {
+                    "id": int(row["id"]),
+                    "provider": row["provider"],
+                    "model": row["model"],
+                    "prompt_version": row["prompt_version"],
+                    "status": row["status"],
+                    "insight_text": row["insight_text"] or "",
+                    "action_text": row["action_text"] or "",
+                    "rating_text": row["rating_text"] or "",
+                    "finished_at": row["finished_at"],
+                }
+        except Exception:
+            latest_feedback = {}
     connected = _is_connected(client)
     if client.last_fetch_detail:
         fetch_message = client.last_fetch_detail
@@ -2101,6 +2135,7 @@ def _posts_payload(client_id: int) -> dict:
         fetch_message = "Connection verified. Fetch posts only loads posts for this client."
     else:
         fetch_message = "Fetch posts stays closed until this client is connected and verified."
+
     rated_posts = []
     for post in posts:
         formula = rate_post(post, rating_settings)
@@ -2111,11 +2146,11 @@ def _posts_payload(client_id: int) -> dict:
             cells["Beoordeling"] = formula["label"]
             if formula.get("score_known") and formula.get("score") is not None:
                 cells["Beoordeling"] = f"{formula['label']} ({formula['score']})"
-        from maaike.thumbnails import cover_api_path
-
+        card = feed_card(post, formula_rating=formula, client_id=client_id)
         has_media = bool((post.media_urls or "").strip())
         rated_posts.append(
             {
+                **card,
                 "id": post.post_id,
                 "format_id": post.format_id,
                 "pillar_id": post.pillar_id,
@@ -2130,8 +2165,10 @@ def _posts_payload(client_id: int) -> dict:
                 },
                 "formula_rating": formula,
                 "figma_url": getattr(post, "figma_url", None) or "",
-                "cover_url": cover_api_path(client_id, post.post_id) if has_media else None,
+                "cover_url": card.get("cover_url")
+                or (cover_api_path(client_id, post.post_id) if has_media else None),
                 "cells": cells,
+                "latest_feedback": latest_feedback.get(post.post_id),
             }
         )
     return {
