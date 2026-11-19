@@ -914,13 +914,16 @@ def execute_report(
     bundle = load_report_instruction_bundle(row["report_type"])
     prompt_version_used = bundle.get("prompt_version") or PROMPT_VERSION
     try:
-        from maaike.prompt_settings import active_prompt_text
+        from maaike.prompt_settings import resolve_report_system_prompt
 
-        key = "trend_report" if row["report_type"] == "trend" else "client_report"
-        override = active_prompt_text(conn, key)
-        if override.get("source") == "dashboard_override" and override.get("body_text"):
-            bundle = {**bundle, "system_text": override["body_text"], "prompt_version": override["version_tag"]}
-            prompt_version_used = override["version_tag"]
+        resolved = resolve_report_system_prompt(conn, row["report_type"])
+        if resolved.get("system_text"):
+            bundle = {
+                **bundle,
+                "system_text": resolved["system_text"],
+                "prompt_version": resolved.get("prompt_version") or prompt_version_used,
+            }
+            prompt_version_used = bundle["prompt_version"]
     except Exception:
         pass
     research_mode = (snap.get("research_mode") or "manual").strip()

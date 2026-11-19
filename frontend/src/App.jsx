@@ -29,7 +29,7 @@ const TITLES = {
 };
 
 const REPORTS_TABS = new Set(["reports"]);
-const SETTINGS_TABS = new Set(["ai", "planning", "legend", "backup"]);
+const SETTINGS_TABS = new Set(["ai", "prompts", "planning", "legend", "backup"]);
 const SOCIAL_TABS = new Set(["all_posts", "performance"]);
 
 // Capture deep-link query once at module load so React StrictMode remounts still
@@ -101,6 +101,14 @@ function resolveRoute(requestedPage) {
       page: "settings",
       reportsTab: "reports",
       settingsTab: "ai",
+      socialTab: "all_posts",
+    };
+  }
+  if (raw === "prompts" || raw === "prompt_settings" || raw === "prompten") {
+    return {
+      page: "settings",
+      reportsTab: "reports",
+      settingsTab: "prompts",
       socialTab: "all_posts",
     };
   }

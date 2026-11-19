@@ -42,8 +42,10 @@ export default function SocialPostsPage({
   const [period, setPeriod] = useState(periodSelection || "");
   const [skipPeriodFilter, setSkipPeriodFilter] = useState(false);
   const [logsWeekly, setLogsWeekly] = useState(null);
+  const [weeklyDraft, setWeeklyDraft] = useState(null);
   const [weeklyBusy, setWeeklyBusy] = useState(false);
   const [weeklyError, setWeeklyError] = useState("");
+  const [weeklyNotice, setWeeklyNotice] = useState("");
 
   useEffect(() => {
     setTab(initialTab);
@@ -60,8 +62,22 @@ export default function SocialPostsPage({
 
   useEffect(() => {
     setWeeklyError("");
+    setWeeklyNotice("");
     api(`/api/clients/${client.id}/logs/weekly-plan`)
-      .then((data) => setLogsWeekly(data.weekly_plan || null))
+      .then((data) => {
+        const plan = data.weekly_plan || null;
+        setLogsWeekly(plan);
+        setWeeklyDraft(
+          plan
+            ? {
+                enabled: Boolean(plan.enabled),
+                weekday: Number(plan.weekday ?? 0),
+                time: plan.time || "09:00",
+                note: plan.note || "",
+              }
+            : null,
+        );
+      })
       .catch((exc) => setWeeklyError(exc.message));
   }, [client.id]);
 
@@ -76,21 +92,39 @@ export default function SocialPostsPage({
     onPeriodChange?.(next || "");
   }
 
-  async function saveLogsWeekly(patch) {
+  async function saveLogsWeekly(event) {
+    event?.preventDefault?.();
+    if (!weeklyDraft) return;
     setWeeklyBusy(true);
     setWeeklyError("");
+    setWeeklyNotice("");
     try {
-      const next = { ...(logsWeekly || {}), ...patch };
       const data = await api(`/api/clients/${client.id}/logs/weekly-plan`, {
         method: "PUT",
         body: {
-          enabled: Boolean(next.enabled),
-          weekday: Number(next.weekday || 0),
-          time: next.time || "09:00",
-          note: next.note || "",
+          enabled: Boolean(weeklyDraft.enabled),
+          weekday: Number(weeklyDraft.weekday || 0),
+          time: weeklyDraft.time || "09:00",
+          note: weeklyDraft.note || "",
         },
       });
-      setLogsWeekly(data.weekly_plan || null);
+      const plan = data.weekly_plan || null;
+      setLogsWeekly(plan);
+      setWeeklyDraft(
+        plan
+          ? {
+              enabled: Boolean(plan.enabled),
+              weekday: Number(plan.weekday ?? 0),
+              time: plan.time || "09:00",
+              note: plan.note || "",
+            }
+          : null,
+      );
+      setWeeklyNotice(
+        plan?.enabled
+          ? `Opgeslagen. Volgende check ${plan.next_check_date} · venster ${plan.window_from} t/m ${plan.window_to}.`
+          : "Opgeslagen. Wekelijkse Logs-controle staat uit.",
+      );
     } catch (exc) {
       setWeeklyError(exc.message);
     } finally {
@@ -136,28 +170,39 @@ export default function SocialPostsPage({
 
       {tab === "all_posts" ? (
         <>
-          <div className="card stack" style={{ gap: "0.6rem" }}>
-            <strong>Wekelijkse Logs-controle</strong>
-            <p className="hint" style={{ margin: 0 }}>
-              Los van Competitors. Alleen schema + datavenster; geen automatische AI-run.
-            </p>
+          <form className="card stack logs-weekly-card" style={{ gap: "0.75rem" }} onSubmit={saveLogsWeekly}>
+            <div>
+              <strong>Wekelijkse Logs-controle</strong>
+              <p className="hint" style={{ margin: "0.25rem 0 0" }}>
+                Los van Competitors. Alleen schema + datavenster; geen automatische AI-run. Wijzigingen
+                worden pas bewaard als je op Opslaan klikt.
+              </p>
+            </div>
             {weeklyError ? <p className="banner error">{weeklyError}</p> : null}
-            <div className="filters" style={{ alignItems: "end" }}>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={Boolean(logsWeekly?.enabled)}
-                  disabled={weeklyBusy || !logsWeekly}
-                  onChange={(e) => saveLogsWeekly({ enabled: e.target.checked })}
-                />{" "}
-                Actief
-              </label>
+            {weeklyNotice ? <p className="banner">{weeklyNotice}</p> : null}
+            <label className="logs-weekly-switch">
+              <input
+                type="checkbox"
+                role="switch"
+                checked={Boolean(weeklyDraft?.enabled)}
+                disabled={weeklyBusy || !weeklyDraft}
+                onChange={(e) =>
+                  setWeeklyDraft((cur) => (cur ? { ...cur, enabled: e.target.checked } : cur))
+                }
+              />
+              <span>Wekelijkse Logs-controle inschakelen</span>
+            </label>
+            <div className="logs-weekly-fields">
               <label>
                 Dag
                 <select
-                  value={String(logsWeekly?.weekday ?? 0)}
-                  disabled={weeklyBusy || !logsWeekly}
-                  onChange={(e) => saveLogsWeekly({ weekday: Number(e.target.value) })}
+                  value={String(weeklyDraft?.weekday ?? 0)}
+                  disabled={weeklyBusy || !weeklyDraft}
+                  onChange={(e) =>
+                    setWeeklyDraft((cur) =>
+                      cur ? { ...cur, weekday: Number(e.target.value) } : cur,
+                    )
+                  }
                 >
                   {(logsWeekly?.weekday_options || []).map((opt) => (
                     <option key={opt.value} value={opt.value}>
@@ -170,36 +215,38 @@ export default function SocialPostsPage({
                 Tijd
                 <input
                   type="time"
-                  value={logsWeekly?.time || "09:00"}
-                  disabled={weeklyBusy || !logsWeekly}
-                  onChange={(e) => saveLogsWeekly({ time: e.target.value })}
+                  value={weeklyDraft?.time || "09:00"}
+                  disabled={weeklyBusy || !weeklyDraft}
+                  onChange={(e) =>
+                    setWeeklyDraft((cur) => (cur ? { ...cur, time: e.target.value } : cur))
+                  }
                 />
               </label>
-              <label>
+              <label className="logs-weekly-note">
                 Notitie
                 <input
                   type="text"
-                  value={logsWeekly?.note || ""}
-                  disabled={weeklyBusy || !logsWeekly}
+                  value={weeklyDraft?.note || ""}
+                  disabled={weeklyBusy || !weeklyDraft}
                   placeholder="bijv. beoordeling + insight bijwerken"
-                  onBlur={(e) => {
-                    if ((logsWeekly?.note || "") !== e.target.value) {
-                      saveLogsWeekly({ note: e.target.value });
-                    }
-                  }}
                   onChange={(e) =>
-                    setLogsWeekly((cur) => (cur ? { ...cur, note: e.target.value } : cur))
+                    setWeeklyDraft((cur) => (cur ? { ...cur, note: e.target.value } : cur))
                   }
                 />
               </label>
             </div>
             {logsWeekly?.enabled ? (
               <p className="hint" style={{ margin: 0 }}>
-                Volgende check: <strong>{logsWeekly.next_check_date}</strong> · venster{" "}
-                {logsWeekly.window_from} t/m {logsWeekly.window_to}
+                Laatst opgeslagen: volgende check <strong>{logsWeekly.next_check_date}</strong> ·
+                venster {logsWeekly.window_from} t/m {logsWeekly.window_to}
               </p>
             ) : null}
-          </div>
+            <div className="row-actions wrap">
+              <button className="primary" type="submit" disabled={weeklyBusy || !weeklyDraft}>
+                {weeklyBusy ? "Opslaan…" : "Opslaan"}
+              </button>
+            </div>
+          </form>
           <PostsPage
             key={`all-posts-${client.id}`}
             client={client}

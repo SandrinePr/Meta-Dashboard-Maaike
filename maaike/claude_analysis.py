@@ -437,19 +437,21 @@ def _parse_json_loose(text: str) -> dict[str, Any]:
 
 
 def resolve_post_analysis_prompt(conn) -> dict[str, Any]:
-    """File defaults, overridden by Maaike's dashboard prompt when saved."""
+    """Compose post-feedback prompts from global dashboard settings + files."""
     bundle = load_analysis_prompt_bundle()
     prompt_version = bundle["prompt_version"]
     system_text = bundle["system_text"]
     source = "files"
+    composition: list[str] = []
     try:
-        from maaike.prompt_settings import active_prompt_text
+        from maaike.prompt_settings import resolve_composed_post_prompt
 
-        override = active_prompt_text(conn, "post_analysis")
-        if override.get("source") == "dashboard_override" and override.get("body_text"):
-            system_text = str(override["body_text"])
-            prompt_version = str(override.get("version_tag") or prompt_version)
-            source = "dashboard_override"
+        resolved = resolve_composed_post_prompt(conn)
+        if resolved.get("system_text"):
+            system_text = str(resolved["system_text"])
+            prompt_version = str(resolved.get("prompt_version") or prompt_version)
+            source = str(resolved.get("source") or source)
+            composition = list(resolved.get("composition") or [])
     except Exception:
         pass
     return {
@@ -457,6 +459,7 @@ def resolve_post_analysis_prompt(conn) -> dict[str, Any]:
         "system_text": system_text,
         "prompt_version": prompt_version,
         "source": source,
+        "composition": composition,
         "ready": bool(bundle.get("ready")) or source == "dashboard_override",
         "missing_files": bundle.get("missing_files") or [],
     }

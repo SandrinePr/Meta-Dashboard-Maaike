@@ -3,10 +3,12 @@ import AiSettingsPage from "./AiSettingsPage.jsx";
 import AiTrialPage from "./AiTrialPage.jsx";
 import DataTransferPage from "./DataTransferPage.jsx";
 import LegendPage from "./LegendPage.jsx";
+import PromptsPage from "./PromptsPage.jsx";
 import ReportPlanningPage from "./ReportPlanningPage.jsx";
 
 const TABS = [
   ["ai", "AI Connections"],
+  ["prompts", "Prompts"],
   ["planning", "Rapportplanning"],
   ["legend", "Legend"],
   ["backup", "Backup & restore"],
@@ -31,6 +33,11 @@ export default function SettingsHubPage({ client, initialTab = "ai", onNotice, o
           <>
             <strong>Rapportplanning is globaal</strong> — voor alle klanten hetzelfde schema. De
             klant links (nu {client ? client.name : "geen"}) verandert dit niet.
+          </>
+        ) : tab === "prompts" ? (
+          <>
+            <strong>Prompts gelden voor alle klanten</strong>. De geselecteerde klant links (
+            {client ? client.name : "geen"}) verandert de prompttekst niet; klantcontext blijft apart.
           </>
         ) : (
           <>
@@ -62,7 +69,7 @@ export default function SettingsHubPage({ client, initialTab = "ai", onNotice, o
 
       {tab === "ai" ? (
         <div className="stack">
-          <AiSettingsPage />
+          <AiSettingsPage onOpenPrompts={() => selectTab("prompts")} />
           <section className="card stack">
             <h3>AI Trial (internal)</h3>
             <p className="hint">
@@ -76,6 +83,9 @@ export default function SettingsHubPage({ client, initialTab = "ai", onNotice, o
             )}
           </section>
         </div>
+      ) : null}
+      {tab === "prompts" ? (
+        <PromptsPage onNotice={onNotice} onError={onError} />
       ) : null}
       {tab === "planning" ? <ReportPlanningPage /> : null}
       {tab === "legend" && client ? (

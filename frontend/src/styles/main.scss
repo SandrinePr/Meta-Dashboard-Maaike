@@ -713,6 +713,64 @@ a.secondary {
   }
 }
 
+.logs-weekly-switch {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  font-weight: 600;
+  line-height: 1.35;
+
+  input[type="checkbox"] {
+    width: 1.15rem;
+    height: 1.15rem;
+    margin-top: 0.15rem;
+    flex: 0 0 auto;
+  }
+}
+
+.logs-weekly-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: 0.65rem 0.85rem;
+
+  label {
+    display: grid;
+    gap: 0.25rem;
+    font-size: 0.86rem;
+  }
+}
+
+.logs-weekly-note {
+  grid-column: 1 / -1;
+}
+
+.prompt-preview {
+  max-height: 14rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid $border;
+  border-radius: $radius-sm;
+  background: $input;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.prompt-textarea {
+  min-height: 16rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 720px) {
+  .logs-weekly-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
 .rro-card-badges,
 .feed-badges {
   display: flex;
