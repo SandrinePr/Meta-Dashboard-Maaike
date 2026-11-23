@@ -289,39 +289,62 @@ def _get_github(url: str) -> dict[str, Any]:
     return {"ok": True, "data": data, "http_status": 200, "provider": "github", "sha": meta.get("sha")}
 
 
+def durable_persist_result(result: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize push result for API clients that wait on durable storage."""
+    payload = dict(result or {})
+    reason = str(payload.get("reason") or "")
+    ok = bool(payload.get("pushed")) or reason == "unchanged"
+    payload["durable"] = ok
+    if not ok and reason == "disabled":
+        payload["error"] = payload.get("error") or "Externe opslag staat uit op deze omgeving."
+    elif not ok and not payload.get("error"):
+        payload["error"] = reason or "Externe opslag mislukt."
+    return payload
+
+
 def push_if_changed(conn) -> dict[str, Any]:
     """Export and upload only when content hash differs from last successful push."""
     cfg = persist_config()
     if not cfg["enabled"]:
-        return {"pushed": False, "reason": "disabled", "config": {k: cfg[k] for k in ("enabled", "missing", "note", "provider")}}
+        return durable_persist_result(
+            {
+                "pushed": False,
+                "reason": "disabled",
+                "config": {k: cfg[k] for k in ("enabled", "missing", "note", "provider")},
+            }
+        )
     load_dotenv(override=False)
     url = os.getenv("MAAIKE_PERSIST_BACKUP_URL", "").strip()
     payload = _data_transfer().export_package_json_bytes(conn)
     digest = content_fingerprint(payload)
     state = _load_state()
     if state.get("last_pushed_sha256") == digest:
-        return {
-            "pushed": False,
-            "reason": "unchanged",
-            "sha256": digest,
-            "bytes": len(payload),
-            "provider": cfg.get("provider"),
-        }
+        return durable_persist_result(
+            {
+                "pushed": False,
+                "reason": "unchanged",
+                "sha256": digest,
+                "bytes": len(payload),
+                "provider": cfg.get("provider"),
+            }
+        )
     provider = cfg.get("provider") or _provider_for_url(url)
     if provider == "github":
         result = _put_github(url, payload)
     else:
         result = _put_http(url, payload)
     if not result.get("ok"):
-        return {
-            "pushed": False,
-            "reason": result.get("reason") or "upload_failed",
-            "http_status": result.get("http_status"),
-            "error": result.get("error"),
-            "body_preview": result.get("body_preview"),
-            "sha256": digest,
-            "provider": provider,
-        }
+        return durable_persist_result(
+            {
+                "pushed": False,
+                "reason": result.get("reason") or "upload_failed",
+                "http_status": result.get("http_status"),
+                "error": result.get("error"),
+                "body_preview": result.get("body_preview"),
+                "sha256": digest,
+                "provider": provider,
+            }
+        )
     state["last_pushed_sha256"] = digest
     state["last_pushed_at"] = __import__("datetime").datetime.now(
         tz=__import__("datetime").timezone.utc
@@ -329,21 +352,46 @@ def push_if_changed(conn) -> dict[str, Any]:
     state["last_pushed_bytes"] = len(payload)
     state["provider"] = provider
     _save_state(state)
-    return {
-        "pushed": True,
-        "reason": "uploaded",
-        "sha256": digest,
-        "bytes": len(payload),
-        "http_status": result.get("http_status"),
-        "provider": provider,
-    }
+    return durable_persist_result(
+        {
+            "pushed": True,
+            "reason": "uploaded",
+            "sha256": digest,
+            "bytes": len(payload),
+            "http_status": result.get("http_status"),
+            "provider": provider,
+        }
+    )
+
+
+def should_run_hamster_seed(persist_result: dict[str, Any] | None) -> bool:
+    """Seed only for a true first start — never after a failed remote restore.
+
+    When remote persist is enabled, a failed/missing restore must not silently
+    fall back to the Red Rock seed (that would wipe newer clients on Free).
+    """
+    cfg = persist_config()
+    result = persist_result or {}
+    reason = str(result.get("reason") or "")
+    if result.get("restored") or result.get("seed_should_skip"):
+        return False
+    if reason == "local_has_data":
+        return False
+    if not cfg["enabled"]:
+        return True
+    # Persist is on: allow seed only when remote is explicitly empty/placeholder
+    # (brand-new persist file). Any download/validation failure blocks seed.
+    if reason == "remote_empty":
+        return True
+    return False
 
 
 def restore_from_remote_if_needed(conn) -> dict[str, Any]:
     """On empty local DB, download remote package and apply (overwrite).
 
     Runs before the HAMSTER seed. When restore succeeds, seed must not replace
-    restored edits. Seed only fills posts when the DB is still empty of posts.
+    restored edits. Seed only fills posts when the DB is still empty of posts
+    and ``should_run_hamster_seed`` allows it.
 
     Note: ``initialize_database`` / migrations always insert an empty Red Rock
     client shell. That alone must not block remote restore — we key off posts
@@ -378,6 +426,7 @@ def restore_from_remote_if_needed(conn) -> dict[str, Any]:
             "clients": client_count,
             "posts": post_count,
             "prompt_settings": prompt_count,
+            "seed_should_skip": True,
         }
 
     load_dotenv(override=False)
@@ -385,19 +434,29 @@ def restore_from_remote_if_needed(conn) -> dict[str, Any]:
     provider = cfg.get("provider") or _provider_for_url(url)
     fetched = _get_github(url) if provider == "github" else _get_http(url)
     if not fetched.get("ok"):
+        reason = fetched.get("reason") or "download_failed"
+        # Empty/placeholder remote = first start → seed may run. Any other
+        # download failure must not fall back to the Red Rock seed.
         return {
             "restored": False,
-            "reason": fetched.get("reason") or "download_failed",
+            "reason": reason,
             "http_status": fetched.get("http_status"),
             "error": fetched.get("error"),
             "provider": provider,
+            "seed_should_skip": reason != "remote_empty",
         }
     data = fetched["data"]
     transfer = _data_transfer()
     try:
         transfer.validate_package(data)
     except ValueError as exc:
-        return {"restored": False, "reason": "invalid_package", "error": str(exc), "provider": provider}
+        return {
+            "restored": False,
+            "reason": "invalid_package",
+            "error": str(exc),
+            "provider": provider,
+            "seed_should_skip": True,
+        }
 
     result = transfer.apply_import(conn, data, overwrite=True)
     digest = content_fingerprint(json.dumps(data, ensure_ascii=False).encode("utf-8"))

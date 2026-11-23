@@ -269,6 +269,16 @@ def export_package(conn, *, client_id: int | None = None) -> dict[str, Any]:
             ).fetchall()
         ]
 
+    comparison_preferences = []
+    if _table_exists(conn, "client_comparison_preferences"):
+        comparison_preferences = [
+            dict(r)
+            for r in conn.execute(
+                f"SELECT * FROM client_comparison_preferences WHERE client_id IN ({placeholders}) ORDER BY client_id",
+                ids,
+            ).fetchall()
+        ]
+
     return {
         "format": FORMAT_ID,
         "version": FORMAT_VERSION,
@@ -295,6 +305,7 @@ def export_package(conn, *, client_id: int | None = None) -> dict[str, Any]:
             "figma_files": len(figma_files),
             "figma_items": len(figma_items),
             "post_ai_analyses": len(post_ai_analyses),
+            "comparison_preferences": len(comparison_preferences),
         },
         "clients": clients_out,
         "content_formats": formats,
@@ -315,6 +326,8 @@ def export_package(conn, *, client_id: int | None = None) -> dict[str, Any]:
         "client_figma_files": figma_files,
         "figma_planning_items": figma_items,
         "post_ai_analyses": post_ai_analyses,
+        # Optional for older packages that omit this key — import must stay compatible.
+        "client_comparison_preferences": comparison_preferences,
     }
 
 
@@ -469,6 +482,7 @@ def apply_import(
         "figma_files_upserted": 0,
         "figma_items_upserted": 0,
         "post_ai_analyses_added": 0,
+        "comparison_preferences_upserted": 0,
         "skipped": 0,
     }
 
@@ -1143,6 +1157,47 @@ def apply_import(
                 ),
             )
             stats["figma_items_upserted"] += 1
+
+    # Comparison / competitors (optional in older packages)
+    if data.get("client_comparison_preferences"):
+        from maaike.comparison_service import ensure_tables as ensure_comparison_tables
+
+        ensure_comparison_tables(conn)
+        for row in data.get("client_comparison_preferences") or []:
+            live_client = pkg_client_to_live.get(int(row["client_id"]))
+            if live_client is None:
+                continue
+            conn.execute(
+                """
+                INSERT INTO client_comparison_preferences (
+                    client_id, competitors_json, period_key, custom_start, custom_end, updated_at,
+                    weekly_enabled, weekly_weekday, weekly_time, weekly_note
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(client_id) DO UPDATE SET
+                    competitors_json = excluded.competitors_json,
+                    period_key = excluded.period_key,
+                    custom_start = excluded.custom_start,
+                    custom_end = excluded.custom_end,
+                    updated_at = excluded.updated_at,
+                    weekly_enabled = excluded.weekly_enabled,
+                    weekly_weekday = excluded.weekly_weekday,
+                    weekly_time = excluded.weekly_time,
+                    weekly_note = excluded.weekly_note
+                """,
+                (
+                    live_client,
+                    str(row.get("competitors_json") or "[]"),
+                    str(row.get("period_key") or "3m"),
+                    row.get("custom_start"),
+                    row.get("custom_end"),
+                    str(row.get("updated_at") or now),
+                    int(row.get("weekly_enabled") or 0),
+                    int(row.get("weekly_weekday") or 0),
+                    str(row.get("weekly_time") or "09:00"),
+                    str(row.get("weekly_note") or ""),
+                ),
+            )
+            stats["comparison_preferences_upserted"] += 1
 
     # Stored post analyses / Claude feedback (no secrets)
     if data.get("post_ai_analyses"):

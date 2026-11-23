@@ -190,16 +190,27 @@ def create_app() -> FastAPI:
             raise RuntimeError(str(exc)) from exc
         try:
             with transaction() as conn:
+                persist_boot: dict = {"restored": False, "reason": "not_attempted"}
                 try:
-                    from maaike.persist_remote import restore_from_remote_if_needed
+                    from maaike.persist_remote import (
+                        restore_from_remote_if_needed,
+                        should_run_hamster_seed,
+                    )
 
-                    restore_from_remote_if_needed(conn)
-                except Exception:
-                    pass
+                    persist_boot = restore_from_remote_if_needed(conn)
+                except Exception as exc:
+                    persist_boot = {
+                        "restored": False,
+                        "reason": "restore_exception",
+                        "error": exc.__class__.__name__,
+                        "seed_should_skip": True,
+                    }
                 try:
                     from maaike.hamster_seed import restore_hamster_seed_if_empty
+                    from maaike.persist_remote import should_run_hamster_seed as _should_seed
 
-                    restore_hamster_seed_if_empty(conn)
+                    if _should_seed(persist_boot):
+                        restore_hamster_seed_if_empty(conn)
                 except Exception:
                     pass
                 try:
@@ -209,7 +220,7 @@ def create_app() -> FastAPI:
                 except Exception:
                     pass
         except Exception:
-            # Seed/persist are optional; boot even if restore fails.
+            # Persist/seed are best-effort; boot even if restore fails.
             pass
         try:
             from maaike.competitor_scheduler import start_competitor_scheduler
@@ -302,11 +313,19 @@ def create_app() -> FastAPI:
 
     def _safe_persist_push(conn) -> dict:
         try:
-            from maaike.persist_remote import push_if_changed
+            from maaike.persist_remote import durable_persist_result, push_if_changed
 
-            return push_if_changed(conn)
+            return durable_persist_result(push_if_changed(conn))
         except Exception as exc:
-            return {"pushed": False, "reason": "persist_unavailable", "error": exc.__class__.__name__}
+            from maaike.persist_remote import durable_persist_result
+
+            return durable_persist_result(
+                {
+                    "pushed": False,
+                    "reason": "persist_unavailable",
+                    "error": exc.__class__.__name__,
+                }
+            )
 
     @app.put("/api/prompt-settings/{prompt_key}")
     def put_prompt_settings(prompt_key: str, body: dict) -> dict:
@@ -908,11 +927,14 @@ def create_app() -> FastAPI:
             with transaction() as conn:
                 client_id = add_client(conn, body.name)
                 client = get_client(conn, client_id)
+                persist = _safe_persist_push(conn)
         except ClientInputError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if client is None:
             raise HTTPException(status_code=400, detail="The client could not be added.")
-        return _client_out(client)
+        payload = _client_out(client)
+        payload["persist"] = persist
+        return payload
 
     @app.patch("/api/clients/{client_id}")
     def update_client(client_id: int, body: NameBody) -> dict:
@@ -921,11 +943,14 @@ def create_app() -> FastAPI:
                 _require_client(conn, client_id)
                 rename_client(conn, client_id, body.name)
                 client = get_client(conn, client_id)
+                persist = _safe_persist_push(conn)
         except ClientInputError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if client is None:
             raise HTTPException(status_code=404, detail="This client is not in the list.")
-        return _client_out(client)
+        payload = _client_out(client)
+        payload["persist"] = persist
+        return payload
 
     @app.delete("/api/clients/{client_id}")
     def remove_client(client_id: int) -> dict:
@@ -933,16 +958,7 @@ def create_app() -> FastAPI:
         try:
             with transaction() as conn:
                 result = delete_client(conn, client_id)
-                try:
-                    from maaike.persist_remote import push_if_changed
-
-                    result["persist"] = push_if_changed(conn)
-                except Exception as exc:
-                    result["persist"] = {
-                        "pushed": False,
-                        "reason": "persist_unavailable",
-                        "error": exc.__class__.__name__,
-                    }
+                result["persist"] = _safe_persist_push(conn)
         except ClientInputError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {
@@ -1275,7 +1291,10 @@ def create_app() -> FastAPI:
         with transaction() as conn:
             _require_client(conn, client_id)
             try:
-                return comparison_add_competitor(conn, client_id, body.name)
+                result = comparison_add_competitor(conn, client_id, body.name)
+                if isinstance(result, dict):
+                    result["persist"] = _safe_persist_push(conn)
+                return result
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1284,7 +1303,10 @@ def create_app() -> FastAPI:
         with transaction() as conn:
             _require_client(conn, client_id)
             try:
-                return comparison_remove_competitor(conn, client_id, username)
+                result = comparison_remove_competitor(conn, client_id, username)
+                if isinstance(result, dict):
+                    result["persist"] = _safe_persist_push(conn)
+                return result
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1741,7 +1763,10 @@ def create_app() -> FastAPI:
                     proposed=(body or {}).get("proposed") or {},
                     preserve_manual=bool((body or {}).get("preserve_manual", True)),
                 )
-                return strategy_overview(conn, client_id)
+                overview = strategy_overview(conn, client_id)
+                if isinstance(overview, dict):
+                    overview["persist"] = _safe_persist_push(conn)
+                return overview
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1931,7 +1956,10 @@ def create_app() -> FastAPI:
 
         with transaction() as conn:
             _require_client(conn, client_id)
-            return upsert_target(conn, client_id, body or {})
+            result = upsert_target(conn, client_id, body or {})
+            if isinstance(result, dict):
+                result["persist"] = _safe_persist_push(conn)
+            return result
 
     @app.post("/api/clients/{client_id}/targets/{target_id}/measurements")
     def post_target_measurement(client_id: int, target_id: int, body: dict) -> dict:

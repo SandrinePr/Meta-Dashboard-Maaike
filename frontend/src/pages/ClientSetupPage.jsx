@@ -585,11 +585,13 @@ export default function ClientSetupPage({
       setSaveStatus("saving");
       setLocalError("");
       try {
+        let lastPersist = null;
         if (needsName) {
-          await api(`/api/clients/${activeId}`, {
+          const renamed = await api(`/api/clients/${activeId}`, {
             method: "PATCH",
             body: { name: draft.name },
           });
+          lastPersist = renamed?.persist || lastPersist;
           await loadClients();
         }
 
@@ -614,6 +616,7 @@ export default function ClientSetupPage({
               mark_complete: false,
             },
           });
+          lastPersist = payload?.persist || lastPersist;
           const nextAnswers = payload.start_answers || draft.start_answers;
           answersDraftRef.current = nextAnswers;
           const nextStrategy = {
@@ -630,7 +633,7 @@ export default function ClientSetupPage({
         }
 
         if (needsFigma) {
-          await api(`/api/clients/${activeId}/figma-planning/connection`, {
+          const figmaSaved = await api(`/api/clients/${activeId}/figma-planning/connection`, {
             method: "PUT",
             body: {
               file_key: figmaResolved.key,
@@ -638,12 +641,24 @@ export default function ClientSetupPage({
               source_url: figmaResolved.url,
             },
           });
+          lastPersist = figmaSaved?.persist || lastPersist;
           figmaKeyDraftRef.current = figmaResolved.key;
           figmaUrlDraftRef.current = figmaResolved.url;
           setFigmaKey(figmaResolved.key);
           setFigmaUrl(figmaResolved.url);
           const fig = await api(`/api/clients/${activeId}/figma-planning`);
           setFigma(fig);
+        }
+
+        if (lastPersist && lastPersist.durable !== true) {
+          const err = new Error(
+            lastPersist.error || "Externe opslag bevestigde de wijziging niet.",
+          );
+          dirtyRef.current = true;
+          persistClientDraft(activeId);
+          setSaveStatus("error");
+          setLocalError(dutchSaveError(err));
+          throw err;
         }
 
         lastSyncedRef.current = {
@@ -693,12 +708,24 @@ export default function ClientSetupPage({
       setName(created.name);
       await loadClients();
       chooseClient(created.id);
+      setStep(2);
+      if (created?.persist && created.persist.durable !== true) {
+        dirtyRef.current = true;
+        persistClientDraft(created.id);
+        setSaveStatus("error");
+        const msg =
+          created.persist.error ||
+          "Klant staat lokaal, maar externe opslag bevestigde niet. Probeer opnieuw op te slaan.";
+        setLocalError(msg);
+        onError(msg);
+        return;
+      }
+      setSaveStatus("saved");
       setLocalNotice(`Klant “${created.name}” is aangemaakt. Gegevens worden automatisch bewaard.`);
       onNotice(`Klant “${created.name}” is aangemaakt.`);
-      setStep(2);
     } catch (exc) {
-      setLocalError(exc.message);
-      onError(exc.message);
+      setLocalError(dutchSaveError(exc));
+      onError(dutchSaveError(exc));
     } finally {
       setBusy("");
     }
