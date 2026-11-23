@@ -1986,6 +1986,12 @@ button.linkish {
   border-color: rgba(70, 110, 180, 0.4);
 }
 
+.setup-status.is-optional {
+  color: #c5c9d3;
+  background: rgba(120, 128, 144, 0.16);
+  border-color: rgba(120, 128, 144, 0.35);
+}
+
 .setup-block-head {
   display: flex;
   align-items: center;

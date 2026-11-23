@@ -16,11 +16,54 @@ function statusClass(kind) {
   if (kind === "ready") return "setup-status is-ready";
   if (kind === "review") return "setup-status is-review";
   if (kind === "todo") return "setup-status is-todo";
+  if (kind === "optional") return "setup-status is-optional";
   return "setup-status";
 }
 
 function StatusPill({ kind, label }) {
   return <span className={statusClass(kind)}>{label}</span>;
+}
+
+/** Mirror backend _pending_user_questions required keys for live form state. */
+function computeMissingRequired(answers, questions) {
+  const missing = [];
+  for (const question of questions || []) {
+    if (!question.required_for_complete) continue;
+    const key = question.key;
+    const value = String(answers?.[key] || "").trim();
+    if (!value) {
+      missing.push(key);
+      continue;
+    }
+    if (key === "geografische_regio") {
+      const lowered = value.toLowerCase();
+      if (
+        lowered.includes("niet expliciet") ||
+        lowered.includes("open") ||
+        lowered.includes("onbekend")
+      ) {
+        missing.push(key);
+      }
+    }
+  }
+  return missing;
+}
+
+function mergeAnswersPreferLocal(serverAnswers, localAnswers) {
+  const merged = { ...(serverAnswers || {}) };
+  for (const [key, value] of Object.entries(localAnswers || {})) {
+    if (String(value || "").trim()) merged[key] = value;
+  }
+  return merged;
+}
+
+function dutchSaveError(exc) {
+  const raw = String(exc?.message || exc || "").trim();
+  if (!raw) return "Opslaan mislukt. Controleer je verbinding en probeer opnieuw.";
+  if (/failed to fetch|networkerror|load failed/i.test(raw)) {
+    return "Opslaan mislukt: geen verbinding met de server. Je invoer blijft staan.";
+  }
+  return raw.startsWith("Opslaan mislukt") ? raw : `Opslaan mislukt: ${raw}`;
 }
 
 export default function ClientSetupPage({
@@ -55,6 +98,8 @@ export default function ClientSetupPage({
   const [figmaUrl, setFigmaUrl] = useState("");
   const [figmaKey, setFigmaKey] = useState("");
   const [competitorInput, setCompetitorInput] = useState("");
+  const [importPreview, setImportPreview] = useState(null);
+  const [importNote, setImportNote] = useState("");
   const [targetDraft, setTargetDraft] = useState({
     metric_name: "",
     target_value: "",
@@ -64,6 +109,10 @@ export default function ClientSetupPage({
   });
   const nameRef = useRef(null);
   const oauthSettledFromProps = useRef(false);
+  const answersDraftRef = useRef({});
+  const canvaDraftRef = useRef("");
+  const figmaUrlDraftRef = useRef("");
+  const figmaKeyDraftRef = useRef("");
 
   // oauthClientId is only for OAuth return; never reuse the sidebar selection for a new client.
   const activeId = clientId || client?.id || (isNew ? null : oauthClientId) || null;
@@ -126,26 +175,51 @@ export default function ClientSetupPage({
   const actionBusy = loginBusy || busy;
 
   const reloadContent = useCallback(
-    async (id = activeId) => {
+    async (id = activeId, { preserveDraft = true } = {}) => {
       if (!id) {
         setStrategy(null);
         setFigma(null);
         setComparison(null);
-        return;
+        return null;
       }
       const [strat, fig, cmp] = await Promise.all([
         api(`/api/clients/${id}/strategy`),
         api(`/api/clients/${id}/figma-planning`),
         api(`/api/clients/${id}/comparison`),
       ]);
-      setStrategy(strat);
+      const localAnswers = preserveDraft ? answersDraftRef.current : {};
+      const mergedAnswers = preserveDraft
+        ? mergeAnswersPreferLocal(strat.start_answers, localAnswers)
+        : strat.start_answers || {};
+      const nextStrategy = {
+        ...strat,
+        start_answers: mergedAnswers,
+        missing_required: computeMissingRequired(mergedAnswers, strat.questions || []),
+      };
+      answersDraftRef.current = mergedAnswers;
+      setStrategy(nextStrategy);
       setFigma(fig);
       setComparison(cmp);
+
       const fields = strat.strategy_fields || {};
-      setCanvaUrl(String(fields.canva_strategy_url || fields.canva_url || "").trim());
+      const serverCanva = String(fields.canva_strategy_url || fields.canva_url || "").trim();
+      const localCanva = preserveDraft ? String(canvaDraftRef.current || "").trim() : "";
+      const nextCanva = localCanva || serverCanva;
+      canvaDraftRef.current = nextCanva;
+      setCanvaUrl(nextCanva);
+
       const conn = fig.connection || {};
-      setFigmaUrl(String(conn.source_url || "").trim());
-      setFigmaKey(String(conn.file_key || "").trim());
+      const serverFigmaUrl = String(conn.source_url || "").trim();
+      const serverFigmaKey = String(conn.file_key || "").trim();
+      const localFigmaUrl = preserveDraft ? String(figmaUrlDraftRef.current || "").trim() : "";
+      const localFigmaKey = preserveDraft ? String(figmaKeyDraftRef.current || "").trim() : "";
+      const nextFigmaUrl = localFigmaUrl || serverFigmaUrl;
+      const nextFigmaKey = localFigmaKey || serverFigmaKey;
+      figmaUrlDraftRef.current = nextFigmaUrl;
+      figmaKeyDraftRef.current = nextFigmaKey;
+      setFigmaUrl(nextFigmaUrl);
+      setFigmaKey(nextFigmaKey);
+      return nextStrategy;
     },
     [activeId],
   );
@@ -156,6 +230,15 @@ export default function ClientSetupPage({
       setName(client.name || "");
     }
   }, [client?.id, client?.name, clientId]);
+
+  useEffect(() => {
+    answersDraftRef.current = {};
+    canvaDraftRef.current = "";
+    figmaUrlDraftRef.current = "";
+    figmaKeyDraftRef.current = "";
+    setImportPreview(null);
+    setImportNote("");
+  }, [activeId]);
 
   useEffect(() => {
     if (popupReturn) return;
@@ -170,7 +253,9 @@ export default function ClientSetupPage({
         if (first) setPageIndex(first.index);
       })
       .catch((exc) => reportError(exc.message));
-    reloadContent().catch((exc) => reportError(exc.message));
+    // Drafts are cleared when activeId changes; preserveDraft keeps in-progress
+    // answers across Meta OAuth returns (metaChoice) and sibling reloads.
+    reloadContent(activeId, { preserveDraft: true }).catch((exc) => reportError(exc.message));
   }, [activeId, metaChoice, popupReturn, refreshMeta, reloadContent, reportError, setPageIndex]);
 
   useEffect(() => {
@@ -217,13 +302,17 @@ export default function ClientSetupPage({
   const answers = strategy?.start_answers || {};
   const questions = strategy?.questions || [];
   const requiredQuestions = questions.filter((q) => q.required_for_complete);
-  const missingRequired = strategy?.missing_required || [];
+  const missingRequired = useMemo(
+    () => computeMissingRequired(answers, questions),
+    [answers, questions],
+  );
   const targets = strategy?.targets || [];
   const competitors = (comparison?.competitors || [])
     .map((c) => (typeof c === "string" ? c : c.username || c.name || ""))
     .filter(Boolean);
   const figmaConnected = Boolean(figma?.connection?.file_key);
   const canvaFilled = Boolean(canvaUrl.trim());
+  const figmaFilled = Boolean(figmaConnected || figmaUrl.trim() || figmaKey.trim());
   const metaConnected = Boolean(meta?.connected);
   const nameOk = Boolean((name || "").trim()) && Boolean(activeId);
   const strategyReady = Boolean(strategy) && missingRequired.length === 0;
@@ -268,8 +357,8 @@ export default function ClientSetupPage({
         key: "targets",
         label: "Doelen",
         required: false,
-        kind: targets.length ? "ready" : "todo",
-        status: targets.length ? "Klaar" : "Nog invullen",
+        kind: targets.length ? "ready" : "optional",
+        status: targets.length ? "Klaar" : "Optioneel",
         detail: targets.length ? `${targets.length} doel(en)` : "Nog geen doelen toegevoegd.",
         editor: "Jij zet meetbare doelen (optioneel).",
         hamster: "HAMSTER bewaart doelen bij de klant.",
@@ -278,30 +367,32 @@ export default function ClientSetupPage({
         key: "canva",
         label: "Canva-link",
         required: false,
-        kind: canvaFilled ? "ready" : "todo",
-        status: canvaFilled ? "Klaar" : "Nog invullen",
-        detail: canvaFilled ? canvaUrl : "Nog geen Canva-link. Automatisch invullen volgt later.",
+        kind: canvaFilled ? "ready" : "optional",
+        status: canvaFilled ? "Klaar" : "Optioneel",
+        detail: canvaFilled
+          ? canvaUrl
+          : "Geen Canva-link. Optioneel — blokkeert afronden niet. Alleen de link wordt bewaard; Canva-inhoud wordt niet uitgelezen.",
         editor: "Jij plakt de Canva-link (optioneel).",
-        hamster: "HAMSTER bewaart de link. Inhoud uit Canva wordt later ingelezen.",
+        hamster: "HAMSTER bewaart alleen de link. Velden invullen kan via PDF-export.",
       },
       {
         key: "figma",
         label: "Figma-link",
         required: false,
-        kind: figmaConnected || figmaUrl.trim() ? "ready" : "todo",
-        status: figmaConnected || figmaUrl.trim() ? "Klaar" : "Nog invullen",
+        kind: figmaFilled ? "ready" : "optional",
+        status: figmaFilled ? "Klaar" : "Optioneel",
         detail: figmaConnected
           ? figma.connection.file_name || figma.connection.file_key
-          : figmaUrl.trim() || "Nog geen Figma-koppeling. Automatisch invullen volgt later.",
+          : figmaUrl.trim() || figmaKey.trim() || "Geen Figma-koppeling. Optioneel — blokkeert afronden niet.",
         editor: "Jij plakt de Figma-link of file key (optioneel).",
-        hamster: "HAMSTER bewaart de Figma-koppeling bij de klant.",
+        hamster: "HAMSTER bewaart de Figma-koppeling. Strategievragen worden hier niet automatisch ingevuld.",
       },
       {
         key: "competitors",
         label: "Concurrenten",
         required: false,
-        kind: competitors.length ? "ready" : "todo",
-        status: competitors.length ? "Klaar" : "Nog invullen",
+        kind: competitors.length ? "ready" : "optional",
+        status: competitors.length ? "Klaar" : "Optioneel",
         detail: competitors.length
           ? competitors.map((c) => `@${String(c).replace(/^@/, "")}`).join(", ")
           : "Nog geen concurrenten.",
@@ -321,8 +412,10 @@ export default function ClientSetupPage({
     targets,
     canvaFilled,
     canvaUrl,
+    figmaFilled,
     figmaConnected,
     figmaUrl,
+    figmaKey,
     figma,
     competitors,
   ]);
@@ -447,35 +540,78 @@ export default function ClientSetupPage({
   }
 
   function setAnswer(key, value) {
+    const start_answers = { ...(strategy?.start_answers || {}), [key]: value };
+    answersDraftRef.current = start_answers;
     setStrategy({
       ...strategy,
-      start_answers: { ...(strategy?.start_answers || {}), [key]: value },
+      start_answers,
+      missing_required: computeMissingRequired(start_answers, strategy?.questions || questions),
     });
   }
 
-  async function saveStrategyDraft() {
-    if (!activeId || !strategy) return;
-    setBusy("strategy");
+  async function saveStrategyDraft({
+    notice = true,
+    busyKey = "strategy",
+    markBusy = true,
+  } = {}) {
+    if (!activeId || !strategy) {
+      throw new Error("Er is nog geen klant of strategiestructuur geladen.");
+    }
+    if (markBusy) setBusy(busyKey);
     setLocalError("");
     try {
+      const start_answers = {
+        ...(strategy.start_answers || {}),
+        ...(answersDraftRef.current || {}),
+      };
       const fields = {
         ...(strategy.strategy_fields || {}),
-        canva_strategy_url: canvaUrl.trim(),
+        canva_strategy_url: String(canvaDraftRef.current || canvaUrl || "").trim(),
       };
       const payload = await api(`/api/clients/${activeId}/strategy`, {
         method: "PUT",
         body: {
           account_info: strategy.account_info || {},
-          start_answers: strategy.start_answers || {},
+          start_answers,
           strategy_fields: fields,
           source_notes: strategy.source_notes || [],
           mark_complete: false,
         },
       });
-      setStrategy(payload);
-      setLocalNotice("Strategie opgeslagen. Je kunt later verdergaan.");
+      const nextAnswers = payload.start_answers || start_answers;
+      answersDraftRef.current = nextAnswers;
+      canvaDraftRef.current = String(
+        payload.strategy_fields?.canva_strategy_url || fields.canva_strategy_url || "",
+      ).trim();
+      setCanvaUrl(canvaDraftRef.current);
+      setStrategy({
+        ...payload,
+        start_answers: nextAnswers,
+        missing_required: computeMissingRequired(nextAnswers, payload.questions || questions),
+      });
+      if (notice) {
+        setLocalNotice("Conceptstrategie opgeslagen. Je kunt later verdergaan, ook als nog niet alles is ingevuld.");
+        onNotice("Conceptstrategie opgeslagen.");
+      }
+      return payload;
     } catch (exc) {
-      setLocalError(exc.message);
+      const message = dutchSaveError(exc);
+      setLocalError(message);
+      onError(message);
+      throw new Error(message);
+    } finally {
+      if (markBusy) setBusy("");
+    }
+  }
+
+  async function goToReview() {
+    setLocalError("");
+    setBusy("review");
+    try {
+      await saveStrategyDraft({ notice: true, busyKey: "review", markBusy: false });
+      setStep(4);
+    } catch {
+      setStep(3);
     } finally {
       setBusy("");
     }
@@ -483,7 +619,111 @@ export default function ClientSetupPage({
 
   async function saveCanva() {
     if (!activeId) return;
-    await saveStrategyDraft();
+    setBusy("canva");
+    setLocalError("");
+    setImportNote("");
+    try {
+      await saveStrategyDraft({ notice: false, busyKey: "canva", markBusy: false });
+      const url = String(canvaDraftRef.current || canvaUrl || "").trim();
+      if (url) {
+        try {
+          const preview = await api(`/api/clients/${activeId}/strategy/import/canva-preview`, {
+            method: "POST",
+            body: { url },
+          });
+          setImportNote(
+            preview.note ||
+              "Canva-link bewaard. De ontwerpinhoud zelf wordt niet uitgelezen; gebruik een PDF-export om velden voor te stellen.",
+          );
+        } catch {
+          setImportNote(
+            "Canva-link bewaard. Inhoud uit Canva kan niet worden ingelezen; vul handmatig of via PDF-export.",
+          );
+        }
+      }
+      setLocalNotice("Canva-link opgeslagen (alleen de link, geen automatische velden).");
+      onNotice("Canva-link opgeslagen.");
+    } catch {
+      // error already shown; keep input
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function previewPdfImport(file) {
+    if (!activeId || !file) return;
+    setBusy("import");
+    setLocalError("");
+    setImportNote("");
+    try {
+      const body = new FormData();
+      body.append("file", file);
+      const preview = await api(`/api/clients/${activeId}/strategy/import/pdf-preview`, {
+        method: "POST",
+        body,
+        raw: true,
+      });
+      setImportPreview(preview);
+      const unreadable = preview.content_extracted
+        ? preview.missing || []
+        : ["PDF-inhoud kon niet worden gelezen"];
+      setImportNote(
+        preview.content_extracted
+          ? `PDF gelezen. Voorstellen voor lege velden klaar ter controle. Niet gevonden: ${
+              (unreadable || []).slice(0, 8).join(" · ") || "geen"
+            }.`
+          : "Deze bron kon niet worden uitgelezen. Vul handmatig in of exporteer opnieuw als tekst-PDF.",
+      );
+    } catch (exc) {
+      setLocalError(dutchSaveError(exc));
+      setImportPreview(null);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function applyImportDraftLocally() {
+    if (!importPreview?.proposed) return;
+    const proposed = importPreview.proposed.start_answers || {};
+    const current = { ...(strategy?.start_answers || {}), ...(answersDraftRef.current || {}) };
+    let filled = 0;
+    const skipped = [];
+    for (const [key, value] of Object.entries(proposed)) {
+      const text = String(value || "").trim();
+      if (!text) continue;
+      if (String(current[key] || "").trim()) {
+        skipped.push(key);
+        continue;
+      }
+      current[key] = text;
+      filled += 1;
+    }
+    answersDraftRef.current = current;
+    const fields = {
+      ...(strategy?.strategy_fields || {}),
+      ...(importPreview.proposed.strategy_fields || {}),
+    };
+    if (fields.canva_strategy_url) {
+      canvaDraftRef.current = String(fields.canva_strategy_url).trim();
+      setCanvaUrl(canvaDraftRef.current);
+    }
+    setStrategy({
+      ...strategy,
+      start_answers: current,
+      strategy_fields: fields,
+      missing_required: computeMissingRequired(current, strategy?.questions || questions),
+    });
+    setLocalNotice(
+      filled
+        ? `${filled} lege veld(en) als concept ingevuld. Controleer de teksten en klik daarna op Strategie opslaan.`
+        : "Geen lege velden om te vullen; bestaande antwoorden blijven staan.",
+    );
+    if (skipped.length) {
+      setImportNote(
+        `Handmatige antwoorden behouden (${skipped.length}). Brondata die niet paste of al gevuld was, is overgeslagen.`,
+      );
+    }
+    setImportPreview(null);
   }
 
   async function saveFigma() {
@@ -491,8 +731,15 @@ export default function ClientSetupPage({
     setBusy("figma");
     setLocalError("");
     try {
-      let key = figmaKey.trim();
-      const url = figmaUrl.trim();
+      // Persist strategy draft first so sibling reload cannot wipe answers.
+      try {
+        await saveStrategyDraft({ notice: false, busyKey: "figma", markBusy: false });
+      } catch {
+        setBusy("");
+        return;
+      }
+      let key = String(figmaKeyDraftRef.current || figmaKey || "").trim();
+      const url = String(figmaUrlDraftRef.current || figmaUrl || "").trim();
       if (!key && url) {
         const match = url.match(/figma\.com\/(?:file|design)\/([a-zA-Z0-9]+)/);
         key = match ? match[1] : "";
@@ -502,18 +749,28 @@ export default function ClientSetupPage({
         setBusy("");
         return;
       }
+      const sourceUrl = url || `https://www.figma.com/design/${key}`;
       await api(`/api/clients/${activeId}/figma-planning/connection`, {
         method: "PUT",
         body: {
           file_key: key,
           file_name: "",
-          source_url: url || `https://www.figma.com/design/${key}`,
+          source_url: sourceUrl,
         },
       });
-      await reloadContent();
-      setLocalNotice("Figma-link opgeslagen. Automatisch invullen vanuit Figma volgt later.");
+      figmaKeyDraftRef.current = key;
+      figmaUrlDraftRef.current = sourceUrl;
+      setFigmaKey(key);
+      setFigmaUrl(sourceUrl);
+      await reloadContent(activeId, { preserveDraft: true });
+      setLocalNotice(
+        "Figma-link opgeslagen (alleen de koppeling). Strategievragen worden hier niet automatisch ingelezen.",
+      );
+      setImportNote(
+        "Figma-planning kan later worden gesynchroniseerd; dat vult geen strategievragen in.",
+      );
     } catch (exc) {
-      setLocalError(exc.message);
+      setLocalError(dutchSaveError(exc));
     } finally {
       setBusy("");
     }
@@ -528,6 +785,12 @@ export default function ClientSetupPage({
     setBusy("target");
     setLocalError("");
     try {
+      try {
+        await saveStrategyDraft({ notice: false, busyKey: "target", markBusy: false });
+      } catch {
+        setBusy("");
+        return;
+      }
       await api(`/api/clients/${activeId}/targets`, {
         method: "POST",
         body: {
@@ -544,10 +807,10 @@ export default function ClientSetupPage({
         },
       });
       setTargetDraft({ metric_name: "", target_value: "", unit: "", platform: "instagram", notes: "" });
-      await reloadContent();
+      await reloadContent(activeId, { preserveDraft: true });
       setLocalNotice("Doel opgeslagen.");
     } catch (exc) {
-      setLocalError(exc.message);
+      setLocalError(dutchSaveError(exc));
     } finally {
       setBusy("");
     }
@@ -558,15 +821,21 @@ export default function ClientSetupPage({
     setBusy("competitor");
     setLocalError("");
     try {
+      try {
+        await saveStrategyDraft({ notice: false, busyKey: "competitor", markBusy: false });
+      } catch {
+        setBusy("");
+        return;
+      }
       await api(`/api/clients/${activeId}/comparison/competitors`, {
         method: "POST",
         body: { name: competitorInput.trim() },
       });
       setCompetitorInput("");
-      await reloadContent();
+      await reloadContent(activeId, { preserveDraft: true });
       setLocalNotice("Concurrent toegevoegd.");
     } catch (exc) {
-      setLocalError(exc.message);
+      setLocalError(dutchSaveError(exc));
     } finally {
       setBusy("");
     }
@@ -582,16 +851,20 @@ export default function ClientSetupPage({
     setLocalError("");
     try {
       if (strategy) {
+        const start_answers = {
+          ...(strategy.start_answers || {}),
+          ...(answersDraftRef.current || {}),
+        };
         const fields = {
           ...(strategy.strategy_fields || {}),
-          canva_strategy_url: canvaUrl.trim(),
+          canva_strategy_url: String(canvaDraftRef.current || canvaUrl || "").trim(),
           setup_finished_at: new Date().toISOString(),
         };
         await api(`/api/clients/${activeId}/strategy`, {
           method: "PUT",
           body: {
             account_info: strategy.account_info || {},
-            start_answers: strategy.start_answers || {},
+            start_answers,
             strategy_fields: fields,
             source_notes: strategy.source_notes || [],
             mark_complete: true,
@@ -599,13 +872,15 @@ export default function ClientSetupPage({
         });
       }
       await loadClients();
-      await reloadContent();
+      await reloadContent(activeId, { preserveDraft: false });
       setLocalNotice("Inrichting afgerond. Je kunt alles later nog aanpassen.");
       onNotice("Inrichting afgerond.");
       onFinished?.();
     } catch (exc) {
-      setLocalError(exc.message);
-      onError(exc.message);
+      const message = dutchSaveError(exc);
+      setLocalError(message);
+      onError(message);
+      setStep(3);
     } finally {
       setBusy("");
     }
@@ -773,8 +1048,9 @@ export default function ClientSetupPage({
           <div className="card stack">
             <h3>3. Doelen, strategie, links en concurrenten</h3>
             <p className="hint">
-              Vul in wat je nu weet. Optionele velden mag je later afmaken. Automatisch invullen vanuit
-              Canva of Figma komt later.
+              Vul in wat je nu weet. Optionele velden (Canva, Figma, doelen, concurrenten) mag je
+              overslaan; die blokkeren afronden niet. “Volgende: controleren” bewaart eerst je
+              strategieconcept op de server.
             </p>
           </div>
 
@@ -788,7 +1064,7 @@ export default function ClientSetupPage({
             </div>
             <p className="hint">
               Verplichte vragen moeten ingevuld zijn om de inrichting af te ronden. Optionele vragen
-              mag je overslaan.
+              mag je overslaan. “Strategie opslaan” bewaart ook een gedeeltelijk concept.
             </p>
             {questions.map((question) => {
               const required = Boolean(question.required_for_complete);
@@ -807,7 +1083,14 @@ export default function ClientSetupPage({
                 </label>
               );
             })}
-            <button className="secondary" type="button" disabled={busy === "strategy"} onClick={saveStrategyDraft}>
+            <button
+              className="secondary"
+              type="button"
+              disabled={busy === "strategy"}
+              onClick={() => {
+                saveStrategyDraft().catch(() => {});
+              }}
+            >
               {busy === "strategy" ? "Bezig…" : "Strategie opslaan"}
             </button>
           </section>
@@ -815,7 +1098,10 @@ export default function ClientSetupPage({
           <section className="card stack">
             <div className="setup-block-head">
               <h4>Doelen</h4>
-              <StatusPill kind={targets.length ? "ready" : "todo"} label={targets.length ? "Klaar" : "Nog invullen"} />
+              <StatusPill
+                kind={targets.length ? "ready" : "optional"}
+                label={targets.length ? "Klaar" : "Optioneel"}
+              />
             </div>
             <p className="hint">Optioneel. Voorbeeld: bereik, volgers of leads.</p>
             {targets.length ? (
@@ -873,36 +1159,107 @@ export default function ClientSetupPage({
           <section className="card stack">
             <div className="setup-block-head">
               <h4>Canva-link</h4>
-              <StatusPill kind={canvaFilled ? "ready" : "todo"} label={canvaFilled ? "Klaar" : "Nog invullen"} />
+              <StatusPill
+                kind={canvaFilled ? "ready" : "optional"}
+                label={canvaFilled ? "Klaar" : "Optioneel"}
+              />
             </div>
-            <p className="hint">Optioneel. Plak de strategielink. Automatisch invullen vanuit Canva volgt later.</p>
+            <p className="hint">
+              Optioneel — blokkeert afronden niet. <strong>Canva-link opslaan</strong> bewaart alleen
+              de URL. Canva-ontwerpinhoud wordt niet uitgelezen.
+            </p>
             <label>
               Canva-URL
               <input
                 value={canvaUrl}
-                onChange={(e) => setCanvaUrl(e.target.value)}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  canvaDraftRef.current = value;
+                  setCanvaUrl(value);
+                }}
                 placeholder="https://www.canva.com/design/…"
               />
             </label>
-            <button className="secondary" type="button" disabled={busy === "strategy"} onClick={saveCanva}>
-              Canva-link opslaan
+            <button className="secondary" type="button" disabled={busy === "canva" || busy === "strategy"} onClick={saveCanva}>
+              {busy === "canva" ? "Bezig…" : "Canva-link opslaan"}
             </button>
+          </section>
+
+          <section className="card stack">
+            <div className="setup-block-head">
+              <h4>Voorstellen uit PDF</h4>
+              <StatusPill kind="optional" label="Optioneel" />
+            </div>
+            <p className="hint">
+              Dit <strong>leest wel inhoud in</strong> (in tegenstelling tot alleen een link opslaan).
+              Voorstellen vullen alleen lege velden als concept; handmatige antwoorden blijven staan.
+              Controleer daarna en klik op Strategie opslaan.
+            </p>
+            <label className="secondary file-btn">
+              PDF kiezen voor voorstellen
+              <input
+                type="file"
+                accept="application/pdf,.pdf"
+                hidden
+                disabled={busy === "import" || !activeId}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) previewPdfImport(file);
+                  event.target.value = "";
+                }}
+              />
+            </label>
+            {importNote ? <p className="hint">{importNote}</p> : null}
+            {importPreview ? (
+              <div className="stack">
+                <p className="banner">
+                  Bron: {importPreview.source_kind}
+                  {importPreview.filename ? ` · ${importPreview.filename}` : ""}
+                  {(importPreview.filled_keys || []).length
+                    ? ` · gevonden: ${(importPreview.filled_keys || []).join(", ")}`
+                    : " · geen veldvoorstellen"}
+                </p>
+                {(importPreview.missing || []).length ? (
+                  <p className="banner warn-soft">
+                    Niet inleesbaar / niet gevonden: {(importPreview.missing || []).slice(0, 8).join(" · ")}
+                    {(importPreview.missing || []).length > 8
+                      ? ` · +${(importPreview.missing || []).length - 8}`
+                      : ""}
+                  </p>
+                ) : null}
+                <div className="row-actions">
+                  <button className="primary" type="button" onClick={applyImportDraftLocally}>
+                    Voorstellen in lege velden zetten
+                  </button>
+                  <button className="secondary" type="button" onClick={() => setImportPreview(null)}>
+                    Annuleren
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </section>
 
           <section className="card stack">
             <div className="setup-block-head">
               <h4>Figma-link</h4>
               <StatusPill
-                kind={figmaConnected || figmaUrl.trim() ? "ready" : "todo"}
-                label={figmaConnected || figmaUrl.trim() ? "Klaar" : "Nog invullen"}
+                kind={figmaFilled ? "ready" : "optional"}
+                label={figmaFilled ? "Klaar" : "Optioneel"}
               />
             </div>
-            <p className="hint">Optioneel. Plak de Figma-link. Automatisch invullen vanuit Figma komt later.</p>
+            <p className="hint">
+              Optioneel — blokkeert afronden niet. <strong>Figma-link opslaan</strong> bewaart alleen
+              de koppeling (volledige URL of losse file key). Dat vult geen strategievragen in.
+            </p>
             <label>
               Figma-URL
               <input
                 value={figmaUrl}
-                onChange={(e) => setFigmaUrl(e.target.value)}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  figmaUrlDraftRef.current = value;
+                  setFigmaUrl(value);
+                }}
                 placeholder="https://www.figma.com/design/…"
               />
             </label>
@@ -910,7 +1267,11 @@ export default function ClientSetupPage({
               Of Figma file key
               <input
                 value={figmaKey}
-                onChange={(e) => setFigmaKey(e.target.value)}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  figmaKeyDraftRef.current = value;
+                  setFigmaKey(value);
+                }}
                 placeholder="bestandssleutel"
               />
             </label>
@@ -923,8 +1284,8 @@ export default function ClientSetupPage({
             <div className="setup-block-head">
               <h4>Concurrenten</h4>
               <StatusPill
-                kind={competitors.length ? "ready" : "todo"}
-                label={competitors.length ? "Klaar" : "Nog invullen"}
+                kind={competitors.length ? "ready" : "optional"}
+                label={competitors.length ? "Klaar" : "Optioneel"}
               />
             </div>
             <p className="hint">Optioneel. Instagram-gebruikersnaam van een concurrent.</p>
@@ -957,8 +1318,13 @@ export default function ClientSetupPage({
             <button className="secondary" type="button" onClick={() => setStep(2)}>
               Vorige
             </button>
-            <button className="primary" type="button" onClick={() => setStep(4)}>
-              Volgende: controleren
+            <button
+              className="primary"
+              type="button"
+              disabled={busy === "review" || busy === "strategy"}
+              onClick={goToReview}
+            >
+              {busy === "review" ? "Opslaan…" : "Volgende: controleren"}
             </button>
           </div>
         </section>
