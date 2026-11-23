@@ -1992,6 +1992,35 @@ button.linkish {
   border-color: rgba(120, 128, 144, 0.35);
 }
 
+.setup-save-status {
+  min-height: 1.25rem;
+  font-size: 0.85rem;
+  color: #9aa3b2;
+}
+
+.setup-save-saving {
+  color: #b8c2d4;
+}
+
+.setup-save-ok {
+  color: #9ed6b0;
+}
+
+.setup-save-error {
+  color: #e8b4b4;
+}
+
+.setup-save-error .linkish {
+  margin-left: 0.35rem;
+  background: none;
+  border: none;
+  padding: 0;
+  color: #f0d0d0;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+
 .setup-block-head {
   display: flex;
   align-items: center;
