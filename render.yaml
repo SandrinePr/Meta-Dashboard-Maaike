@@ -61,10 +61,12 @@ services:
         value: claude-sonnet-4-5
       - key: FIGMA_ACCESS_TOKEN
         sync: false
-      # Free-tier lasting storage (GET+PUT HTTPS endpoint; optional Bearer token)
+      # Free-tier lasting storage: private HAMSTER GitHub Contents (no secrets in package)
       - key: MAAIKE_PERSIST_ENABLED
         value: "1"
       - key: MAAIKE_PERSIST_BACKUP_URL
-        sync: false
+        value: https://api.github.com/repos/SandrinePr/hamster-persist/contents/hamster-maaike-backup.json
       - key: MAAIKE_PERSIST_TOKEN
         sync: false
+      - key: MAAIKE_PERSIST_PROVIDER
+        value: github

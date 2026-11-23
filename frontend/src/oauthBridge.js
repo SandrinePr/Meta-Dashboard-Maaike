@@ -4,7 +4,8 @@ export const META_OAUTH_MESSAGE = "maaike-meta-oauth";
 
 export function dashboardClientsUrl({ clientId, metaChoose = true, error = "" } = {}) {
   const params = new URLSearchParams();
-  params.set("page", "client_settings");
+  // Return into the setup wizard so Meta OAuth continues the same route.
+  params.set("page", "client_setup");
   if (clientId) params.set("client", String(clientId));
   if (error) params.set("meta_error", error);
   else if (metaChoose) params.set("meta", "choose");

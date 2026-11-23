@@ -136,8 +136,8 @@ def readiness(redirect_uri: str | None) -> OAuthReadiness:
         )
     if redirect is None:
         missing.append(
-            "Zet MAAIKE_OAUTH_REDIRECT_URI op het exacte adres van dit dashboard, "
-            "of open het dashboard zodat dat adres bekend is."
+            "Zet MAAIKE_WEB_OAUTH_REDIRECT_URI (React/FastAPI) of MAAIKE_OAUTH_REDIRECT_URI "
+            "(Streamlit) op het exacte callback-adres, of laat Render RENDER_EXTERNAL_URL gebruiken."
         )
     config_id = os.getenv("MAAIKE_META_LOGIN_CONFIG_ID", "").strip()
     return OAuthReadiness(

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.js";
 import { subscribeMetaOauth } from "./oauthBridge.js";
-import AddClientModal from "./components/AddClientModal.jsx";
 import ClientsPage from "./pages/ClientsPage.jsx";
+import ClientSetupPage from "./pages/ClientSetupPage.jsx";
 import ComparisonPage from "./pages/ComparisonPage.jsx";
 import ReportsAnalysisPage from "./pages/ReportsAnalysisPage.jsx";
 import SettingsHubPage from "./pages/SettingsHubPage.jsx";
@@ -25,7 +25,8 @@ const TITLES = {
   comparison: "Competitors",
   social_posts: "Social posts",
   settings: "Settings",
-  client_settings: "Client settings",
+  client_settings: "Alle klanten",
+  client_setup: "Klant inrichten",
 };
 
 const REPORTS_TABS = new Set(["reports"]);
@@ -144,6 +145,14 @@ function resolveRoute(requestedPage) {
       socialTab: "all_posts",
     };
   }
+  if (raw === "client_setup" || raw === "klant_inrichten" || raw === "add_client") {
+    return {
+      page: "client_setup",
+      reportsTab: "reports",
+      settingsTab: "ai",
+      socialTab: "all_posts",
+    };
+  }
   if (raw === "comparison" || raw === "strategy" || raw === "social_posts") {
     return {
       page: raw,
@@ -183,7 +192,7 @@ export default function App() {
   const [metaError, setMetaError] = useState("");
   const [popupReturn, setPopupReturn] = useState(false);
   const [focusPostId, setFocusPostId] = useState(null);
-  const [addClientOpen, setAddClientOpen] = useState(false);
+  const [setupIsNew, setSetupIsNew] = useState(false);
   const [totals, setTotals] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [lastSyncMessage, setLastSyncMessage] = useState("");
@@ -194,7 +203,8 @@ export default function App() {
     return payload.clients || [];
   }, []);
 
-  const selected = clients.find((item) => item.id === clientId) || clients[0] || null;
+  // Do not auto-pick the first client: after delete / empty state the overview must stay open.
+  const selected = clients.find((item) => item.id === clientId) || null;
 
   const loadTotals = useCallback(async (id) => {
     if (!id) {
@@ -213,18 +223,21 @@ export default function App() {
         setClientId(returnedId);
         window.localStorage.setItem("maaike-client-id", String(returnedId));
       }
-      setPage("client_settings");
+      setPage("client_setup");
+      setSetupIsNew(false);
       setPopupReturn(false);
       if (data?.ok) {
         setMetaChoice(true);
         setMetaError("");
         setError("");
-        setNotice("Meta login succeeded. Choose the correct accounts below.");
+        setNotice("Inloggen bij Meta gelukt. Kies hieronder de juiste accounts.");
       } else {
         setMetaChoice(false);
-        const message = data?.error || "Meta login was cancelled or denied.";
+        const message = data?.error || "Inloggen bij Meta is geannuleerd of geweigerd.";
+        // Keep the message on metaError only; ClientSetupPage shows the attempt result
+        // and clears prior banners when a new attempt starts.
         setMetaError(message);
-        setError(message);
+        setError("");
         setNotice("");
       }
       loadClients().catch((exc) => setError(exc.message));
@@ -244,16 +257,19 @@ export default function App() {
     setSocialTab(SOCIAL_TABS.has(route.socialTab) ? route.socialTab : "all_posts");
     if (params.get("meta") === "choose") {
       setMetaChoice(true);
-      setPage("client_settings");
+      setPage("client_setup");
+      setSetupIsNew(false);
     }
     if (params.get("meta_error")) {
       setMetaError(params.get("meta_error"));
-      setError(params.get("meta_error"));
-      setPage("client_settings");
+      setError("");
+      setPage("client_setup");
+      setSetupIsNew(false);
     }
     if (params.get("popup") === "1") {
       setPopupReturn(true);
-      setPage("client_settings");
+      setPage("client_setup");
+      setSetupIsNew(false);
     }
     if (Number.isInteger(requestedClient) && requestedClient > 0) {
       setClientId(requestedClient);
@@ -291,8 +307,13 @@ export default function App() {
   }, [selected?.id, loadTotals]);
 
   function chooseClient(id) {
-    setClientId(id);
-    window.localStorage.setItem("maaike-client-id", String(id));
+    if (id == null) {
+      setClientId(null);
+      window.localStorage.removeItem("maaike-client-id");
+    } else {
+      setClientId(id);
+      window.localStorage.setItem("maaike-client-id", String(id));
+    }
     setFocusPostId(null);
     setSocialPeriod("");
     setNotice("");
@@ -313,14 +334,45 @@ export default function App() {
     openPage("social_posts", postId);
   }
 
-  function openAddClient() {
-    setAddClientOpen(true);
-    setMenuOpen(false);
+  function clearMetaAttemptError() {
+    setMetaError("");
+    setError("");
   }
 
-  function openClientSettings() {
+  function openAddClient() {
+    setSetupIsNew(true);
+    setPage("client_setup");
+    setMenuOpen(false);
+    setNotice("");
+    setError("");
+    setMetaError("");
+    setMetaChoice(false);
+  }
+
+  function openClientSetup(client = null) {
+    if (client?.id) {
+      chooseClient(client.id);
+    }
+    setSetupIsNew(false);
+    setPage("client_setup");
+    setMenuOpen(false);
+    setMetaError("");
+    setMetaChoice(false);
+  }
+
+  function openClientsOverview() {
+    setSetupIsNew(false);
     setPage("client_settings");
     setMenuOpen(false);
+    setNotice("");
+    setError("");
+  }
+
+  function openClientDashboard(client) {
+    chooseClient(client.id);
+    setSetupIsNew(false);
+    setSocialTab("all_posts");
+    setPage("social_posts");
   }
 
   async function syncMeta() {
@@ -351,21 +403,19 @@ export default function App() {
         <main className="main">
           <section className="panel">
             <h1 className="rro-page-title">{APP_NAME}</h1>
-            <ClientsPage
+            <ClientSetupPage
               client={selected}
+              isNew={false}
               oauthClientId={clientId}
               chooseClient={chooseClient}
               loadClients={loadClients}
               metaChoice={metaChoice}
               metaError={metaError}
               popupReturn
-              settingsMode
               onMetaReturnHandled={() => setMetaChoice(true)}
-              addClientOpen={false}
-              onOpenAddClient={() => {}}
-              onCloseAddClient={() => {}}
               onNotice={setNotice}
               onError={setError}
+              onClearMetaError={clearMetaAttemptError}
               onFetchPosts={async () => {}}
             />
           </section>
@@ -404,28 +454,30 @@ export default function App() {
             <button
               className="icon-btn add-client-icon"
               type="button"
-              title="Add client"
-              aria-label="Add client"
+              title="Nieuwe klant toevoegen"
+              aria-label="Nieuwe klant toevoegen"
               onClick={openAddClient}
             >
               +
             </button>
+            <button
+              className="icon-btn gear-btn"
+              type="button"
+              title="Alle klanten"
+              aria-label="Alle klanten"
+              onClick={openClientsOverview}
+            >
+              ⚙
+            </button>
           </div>
           {selected ? (
             <div className="client-active-row">
-              <span className="badge badge-active">Active</span>
+              <span className="badge badge-active">Actief</span>
               <span className="client-active-name">{selected.name}</span>
-              <button
-                className="icon-btn gear-btn"
-                type="button"
-                title="Client settings"
-                aria-label="Client settings"
-                onClick={openClientSettings}
-              >
-                ⚙
-              </button>
             </div>
-          ) : null}
+          ) : (
+            <p className="hint">Geen klant geselecteerd. Open Alle klanten via het tandwiel.</p>
+          )}
         </div>
 
         <div className="sidebar-block sync-block">
@@ -461,7 +513,7 @@ export default function App() {
             {syncing ? "Bezig met synchroniseren…" : "Synchroniseer Meta"}
           </button>
           {selected && !fetchAvailable ? (
-            <p className="hint">Connect Meta in client settings first.</p>
+            <p className="hint">Koppel eerst Meta via Bewerken in Alle klanten.</p>
           ) : null}
         </div>
 
@@ -491,43 +543,69 @@ export default function App() {
             small screens.
           </div>
           {notice ? <p className="banner">{notice}</p> : null}
-          {error && page !== "client_settings" ? <p className="banner error">{error}</p> : null}
-          {error && page === "client_settings" ? <p className="banner error">{error}</p> : null}
+          {error ? <p className="banner error">{error}</p> : null}
 
-          {page === "client_settings" ? (
-            <ClientsPage
-              key={selected ? `client-${selected.id}` : "none"}
-              client={selected}
-              oauthClientId={clientId}
-              chooseClient={chooseClient}
+          {page === "client_setup" ? (
+            <ClientSetupPage
+              key={setupIsNew ? "setup-new" : selected ? `setup-${selected.id}` : "setup-none"}
+              client={setupIsNew ? null : selected}
+              isNew={setupIsNew}
+              oauthClientId={setupIsNew ? null : clientId}
+              chooseClient={(id) => {
+                chooseClient(id);
+                setSetupIsNew(false);
+              }}
               loadClients={loadClients}
               metaChoice={metaChoice}
               metaError={metaError}
               popupReturn={false}
-              settingsMode
               onMetaReturnHandled={() => setMetaChoice(true)}
-              addClientOpen={false}
-              onOpenAddClient={openAddClient}
-              onCloseAddClient={() => {}}
               onNotice={setNotice}
               onError={setError}
+              onClearMetaError={clearMetaAttemptError}
+              onFinished={() => {
+                setSetupIsNew(false);
+                setNotice("Inrichting afgerond. Je kunt gegevens later via Alle klanten → Bewerken aanpassen.");
+                openClientsOverview();
+              }}
               onFetchPosts={async () => {
-                await syncMeta();
-                setSocialTab("all_posts");
+                await syncMeta();                setSocialTab("all_posts");
                 openPage("social_posts");
               }}
             />
           ) : null}
 
-          {!selected && page !== "settings" && page !== "client_settings" ? (
+          {page === "client_settings" ? (
+            <ClientsPage
+              clients={clients}
+              selectedClientId={selected?.id || null}
+              loadClients={loadClients}
+              onOpenClient={openClientDashboard}
+              onEditClient={openClientSetup}
+              onAddClient={openAddClient}
+              onDeletedSelected={() => {
+                chooseClient(null);
+                setPage("client_settings");
+              }}
+              onNotice={setNotice}
+              onError={setError}
+            />
+          ) : null}
+
+          {!selected && page !== "settings" && page !== "client_settings" && page !== "client_setup" ? (
             <div className="stack">
               <p className="banner">
-                Select a client in the sidebar or add one with <strong>+</strong>. Then open client
-                settings (gear) to connect Meta.
+                Er is geen klant geselecteerd. Open <strong>Alle klanten</strong> via het tandwiel of
+                voeg een nieuwe klant toe.
               </p>
-              <button className="primary" type="button" onClick={openAddClient}>
-                + Add client
-              </button>
+              <div className="row-actions">
+                <button className="primary" type="button" onClick={openClientsOverview}>
+                  Alle klanten
+                </button>
+                <button className="secondary" type="button" onClick={openAddClient}>
+                  Nieuwe klant toevoegen
+                </button>
+              </div>
             </div>
           ) : null}
 
@@ -566,18 +644,6 @@ export default function App() {
         </section>
       </main>
 
-      <AddClientModal
-        open={addClientOpen}
-        onClose={() => setAddClientOpen(false)}
-        onError={setError}
-        onCreated={(created) => {
-          loadClients().then(() => {
-            chooseClient(created.id);
-            setPage("client_settings");
-            setNotice(`Client “${created.name}” was added. Connect Facebook and Instagram next.`);
-          });
-        }}
-      />
     </div>
   );
 }

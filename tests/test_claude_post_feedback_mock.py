@@ -125,6 +125,36 @@ def test_render_external_url_sets_oauth_callback(monkeypatch):
     assert settings.oauth_redirect_uri == "https://hamster-8zgq.onrender.com/api/meta/callback"
 
 
+def test_render_overrides_stale_onrender_oauth_redirect(monkeypatch):
+    monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://hamster-8zgq.onrender.com")
+    monkeypatch.setenv("MAAIKE_FRONTEND_URL", "https://old-hamster.onrender.com")
+    monkeypatch.setenv("MAAIKE_BACKEND_URL", "https://old-hamster.onrender.com")
+    monkeypatch.setenv(
+        "MAAIKE_WEB_OAUTH_REDIRECT_URI",
+        "https://old-hamster.onrender.com/api/meta/callback",
+    )
+    from maaike_web.settings import load_settings
+
+    settings = load_settings()
+    assert settings.frontend_url == "https://hamster-8zgq.onrender.com"
+    assert settings.backend_url == "https://hamster-8zgq.onrender.com"
+    assert settings.oauth_redirect_uri == "https://hamster-8zgq.onrender.com/api/meta/callback"
+
+
+def test_local_oauth_callback_keeps_explicit_loopback(monkeypatch):
+    monkeypatch.delenv("RENDER_EXTERNAL_URL", raising=False)
+    monkeypatch.setenv("MAAIKE_FRONTEND_URL", "https://127.0.0.1:5173")
+    monkeypatch.setenv("MAAIKE_BACKEND_URL", "https://127.0.0.1:8000")
+    monkeypatch.setenv(
+        "MAAIKE_WEB_OAUTH_REDIRECT_URI",
+        "https://127.0.0.1:8000/api/meta/callback",
+    )
+    from maaike_web.settings import load_settings
+
+    settings = load_settings()
+    assert settings.oauth_redirect_uri == "https://127.0.0.1:8000/api/meta/callback"
+
+
 def test_persist_skips_unchanged_upload(tmp_path, monkeypatch):
     from maaike.db import initialize_database, transaction
     from maaike.persist_remote import content_fingerprint, push_if_changed

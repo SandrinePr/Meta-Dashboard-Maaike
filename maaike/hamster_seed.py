@@ -34,7 +34,11 @@ def load_seed_package() -> dict[str, Any] | None:
 
 
 def restore_hamster_seed_if_empty(conn) -> dict[str, Any]:
-    """If there are no posts yet, import the tracked HAMSTER Red Rock seed."""
+    """If there are no posts yet, import the tracked HAMSTER Red Rock seed.
+
+    Never runs after a successful remote persist restore that already left posts
+    (or any non-empty post table). Remote persist is applied first on boot.
+    """
     thumbs_info: dict[str, Any] = {}
     try:
         from maaike.thumbnails import ensure_seed_thumbs_extracted
@@ -50,6 +54,7 @@ def restore_hamster_seed_if_empty(conn) -> dict[str, Any]:
             "reason": "local_has_posts",
             "posts": post_count,
             "thumbs": thumbs_info,
+            "note": "Seed skipped so existing/restored posts and edits stay intact.",
         }
 
     package = load_seed_package()

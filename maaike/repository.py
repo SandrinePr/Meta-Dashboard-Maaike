@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -213,6 +214,199 @@ def rename_client(conn: sqlite3.Connection, client_id: int, name: str) -> None:
         )
     except sqlite3.IntegrityError as exc:
         raise DuplicateClientName(f"Client '{cleaned}' already exists.") from exc
+
+
+def delete_client(conn: sqlite3.Connection, client_id: int) -> dict[str, object]:
+    """Remove one client and all rows that belong only to that client.
+
+    Other clients are left untouched. Global settings (e.g. prompt overrides)
+    are not deleted.
+    """
+    client = get_client(conn, client_id)
+    if client is None:
+        raise ClientInputError("Deze klant staat niet meer in de lijst.")
+
+    def _table_exists(name: str) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (name,),
+        ).fetchone()
+        return row is not None
+
+    def _count(sql: str, params: tuple = ()) -> int:
+        return int(conn.execute(sql, params).fetchone()[0])
+
+    post_ids = [
+        int(r[0])
+        for r in conn.execute("SELECT id FROM posts WHERE client_id = ?", (client_id,)).fetchall()
+    ]
+    report_ids = []
+    if _table_exists("client_reports"):
+        report_ids = [
+            int(r[0])
+            for r in conn.execute(
+                "SELECT id FROM client_reports WHERE client_id = ?", (client_id,)
+            ).fetchall()
+        ]
+    target_ids = []
+    if _table_exists("client_targets"):
+        target_ids = [
+            int(r[0])
+            for r in conn.execute(
+                "SELECT id FROM client_targets WHERE client_id = ?", (client_id,)
+            ).fetchall()
+        ]
+    trial_ids = []
+    if _table_exists("ai_trial_runs"):
+        trial_ids = [
+            int(r[0])
+            for r in conn.execute(
+                "SELECT id FROM ai_trial_runs WHERE client_id = ?", (client_id,)
+            ).fetchall()
+        ]
+
+    summary = {
+        "client_id": client_id,
+        "name": client.name,
+        "posts": _count("SELECT COUNT(*) FROM posts WHERE client_id = ?", (client_id,)),
+        "comments": (
+            _count("SELECT COUNT(*) FROM comments WHERE client_id = ?", (client_id,))
+            if _table_exists("comments")
+            else 0
+        ),
+        "reports": len(report_ids),
+        "had_meta_secrets": (
+            _count(
+                "SELECT COUNT(*) FROM client_meta_secrets WHERE client_id = ?",
+                (client_id,),
+            )
+            > 0
+            if _table_exists("client_meta_secrets")
+            else False
+        ),
+        "had_strategy": (
+            _count("SELECT COUNT(*) FROM client_strategy WHERE client_id = ?", (client_id,)) > 0
+            if _table_exists("client_strategy")
+            else False
+        ),
+        "targets": len(target_ids),
+        "figma_items": (
+            _count(
+                "SELECT COUNT(*) FROM figma_planning_items WHERE client_id = ?",
+                (client_id,),
+            )
+            if _table_exists("figma_planning_items")
+            else 0
+        ),
+        "competitors": 0,
+    }
+    if _table_exists("client_comparison_preferences"):
+        row = conn.execute(
+            "SELECT competitors_json FROM client_comparison_preferences WHERE client_id = ?",
+            (client_id,),
+        ).fetchone()
+        if row is not None:
+            try:
+                summary["competitors"] = len(json.loads(row[0] or "[]"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                summary["competitors"] = 0
+
+    # Children of posts / reports / targets / trials first (no client_id on some tables).
+    if post_ids:
+        placeholders = ",".join("?" for _ in post_ids)
+        for table in (
+            "post_editorial",
+            "post_assessments",
+            "post_import_links",
+            "post_metrics",
+            "post_metric_readings",
+            "ai_trial_posts",
+            "excel_import_rows",
+        ):
+            if _table_exists(table):
+                conn.execute(f"DELETE FROM {table} WHERE post_id IN ({placeholders})", post_ids)
+        if _table_exists("figma_planning_items"):
+            conn.execute(
+                f"UPDATE figma_planning_items SET linked_post_id = NULL "
+                f"WHERE linked_post_id IN ({placeholders})",
+                post_ids,
+            )
+
+    if report_ids:
+        placeholders = ",".join("?" for _ in report_ids)
+        for table in ("client_report_sources", "client_report_reviews"):
+            if _table_exists(table):
+                conn.execute(f"DELETE FROM {table} WHERE report_id IN ({placeholders})", report_ids)
+        # Clear self-references before deleting reports.
+        if _table_exists("client_reports"):
+            conn.execute(
+                f"UPDATE client_reports SET supersedes_id = NULL, linked_trend_report_id = NULL "
+                f"WHERE id IN ({placeholders})",
+                report_ids,
+            )
+
+    if target_ids and _table_exists("client_target_measurements"):
+        placeholders = ",".join("?" for _ in target_ids)
+        conn.execute(
+            f"DELETE FROM client_target_measurements WHERE target_id IN ({placeholders})",
+            target_ids,
+        )
+
+    if trial_ids and _table_exists("ai_trial_posts"):
+        placeholders = ",".join("?" for _ in trial_ids)
+        conn.execute(
+            f"DELETE FROM ai_trial_posts WHERE trial_run_id IN ({placeholders})",
+            trial_ids,
+        )
+
+    if _table_exists("report_plan_run_clients"):
+        conn.execute("DELETE FROM report_plan_run_clients WHERE client_id = ?", (client_id,))
+
+    # All tables that store client_id (order: dependents already cleared above).
+    client_tables = [
+        "ai_analysis_feedback",
+        "ai_usage_events",
+        "ai_trial_runs",
+        "post_ai_analyses",
+        "post_editorial_revisions",
+        "post_media_assets",
+        "comments",
+        "posts",
+        "excel_import_runs",
+        "figma_planning_items",
+        "client_figma_files",
+        "client_reports",
+        "client_targets",
+        "client_strategy",
+        "client_meta_secrets",
+        "client_rating_settings",
+        "client_comparison_preferences",
+        "client_crawl_accounts",
+        "client_logs_weekly_preferences",
+        "content_hooks",
+        "content_formats",
+        "content_pillars",
+        "dashboard_activity_events",
+    ]
+    for table in client_tables:
+        if _table_exists(table):
+            conn.execute(f"DELETE FROM {table} WHERE client_id = ?", (client_id,))
+
+    conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+    summary["deleted"] = True
+    summary["removed_kinds"] = [
+        "klantnaam en klantrecord",
+        "Meta-koppeling en tokens",
+        "posts, comments en media",
+        "strategie, doelen en Canva-gegevens",
+        "Figma-koppeling en planningitems",
+        "legenda (formats, pillars, hooks)",
+        "rapporten en reviews",
+        "concurrenten en crawl-accounts",
+        "AI-analyses en proefruns",
+        "activiteitenlog voor deze klant",
+    ]
+    return summary
 
 
 def is_verified_link(client: Client) -> bool:

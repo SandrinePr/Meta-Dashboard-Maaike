@@ -43,11 +43,14 @@ export default function AddClientModal({ open, onClose, onCreated, onError }) {
         aria-labelledby="add-client-title"
         onClick={(event) => event.stopPropagation()}
       >
-        <h2 id="add-client-title">Add client</h2>
-        <p className="hint">Add a client first. Then connect Facebook and Instagram in client settings.</p>
+        <h2 id="add-client-title">Klant toevoegen</h2>
+        <p className="hint">
+          Tip: gebruik liever <strong>Klant inrichten</strong> voor de stapsgewijze route. Hier maak je
+          alleen snel een naam aan.
+        </p>
         <form className="stack" onSubmit={submit}>
           <label>
-            Client name
+            Klantnaam
             <input
               ref={inputRef}
               value={name}
@@ -60,10 +63,10 @@ export default function AddClientModal({ open, onClose, onCreated, onError }) {
           {localError ? <p className="banner error">{localError}</p> : null}
           <div className="row-actions">
             <button className="secondary" type="button" onClick={onClose} disabled={saving}>
-              Cancel
+              Annuleren
             </button>
             <button className="primary" type="submit" disabled={saving || !name.trim()}>
-              {saving ? "Saving…" : "Add client"}
+              {saving ? "Bezig…" : "Klant toevoegen"}
             </button>
           </div>
         </form>

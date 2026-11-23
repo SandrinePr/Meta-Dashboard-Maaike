@@ -918,6 +918,12 @@ def apply_import(
     # Reports (append new versions; preserve relations via mapped trend ids when possible)
     pkg_report_to_live: dict[int, int] = {}
     if _table_exists(conn, "client_reports"):
+        try:
+            from maaike.report_planning import ensure_tables as ensure_report_planning_tables
+
+            ensure_report_planning_tables(conn)
+        except Exception:
+            pass
         for report in data.get("client_reports") or []:
             live_client = pkg_client_to_live.get(int(report["client_id"]))
             if live_client is None:
@@ -940,10 +946,14 @@ def apply_import(
                 pkg_report_to_live[int(report["id"])] = int(existing["id"])
                 stats["skipped"] += 1
                 continue
+            table_cols = {
+                str(r[1]) for r in conn.execute("PRAGMA table_info(client_reports)").fetchall()
+            }
             cols = [
                 c
                 for c in report.keys()
-                if c
+                if c in table_cols
+                and c
                 not in {
                     "id",
                     "client_id",
@@ -1007,7 +1017,7 @@ def apply_import(
             stats["activity_added"] += 1
 
     # Editable dashboard prompts (survive Render Free restarts via remote persist)
-    if data.get("prompt_settings") and _table_exists(conn, "maaike_prompt_settings"):
+    if data.get("prompt_settings"):
         from maaike.prompt_settings import ensure_prompt_settings_table
 
         ensure_prompt_settings_table(conn)

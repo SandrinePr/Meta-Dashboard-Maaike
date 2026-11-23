@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import secrets
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -40,6 +41,21 @@ def _is_loopback(url: str) -> bool:
     return "://127.0.0.1" in lower or "://localhost" in lower
 
 
+def _host(url: str) -> str:
+    return (urlsplit(url).hostname or "").lower()
+
+
+def _stale_onrender_host(url: str, render_url: str) -> bool:
+    """True when url points at a different *.onrender.com host than this service."""
+    if not url or not render_url:
+        return False
+    host = _host(url)
+    render_host = _host(render_url)
+    if not host or not render_host or host == render_host:
+        return False
+    return host.endswith(".onrender.com") and render_host.endswith(".onrender.com")
+
+
 def load_settings() -> WebSettings:
     load_dotenv(override=False)
     render_url = _render_external_url()
@@ -49,10 +65,10 @@ def load_settings() -> WebSettings:
         frontend = render_url or _DEFAULT_FRONTEND
     if not backend:
         backend = render_url or _DEFAULT_BACKEND
-    # On Render, never keep a leftover localhost callback from a copied .env.
-    if render_url and _is_loopback(frontend):
+    # On Render, never keep a leftover localhost or wrong onrender host from a copied .env.
+    if render_url and (_is_loopback(frontend) or _stale_onrender_host(frontend, render_url)):
         frontend = render_url
-    if render_url and _is_loopback(backend):
+    if render_url and (_is_loopback(backend) or _stale_onrender_host(backend, render_url)):
         backend = render_url
     raw_origins = os.getenv("MAAIKE_CORS_ORIGINS", "").strip()
     if raw_origins:
@@ -60,8 +76,16 @@ def load_settings() -> WebSettings:
     else:
         configured = (frontend,)
     origins = _with_loopback_aliases(configured)
-    redirect = os.getenv("MAAIKE_WEB_OAUTH_REDIRECT_URI", "").strip()
-    if not redirect or (render_url and _is_loopback(redirect)):
+    redirect = os.getenv("MAAIKE_WEB_OAUTH_REDIRECT_URI", "").strip().rstrip("/")
+    # Prefer the live service URL: empty, localhost leftovers, or a different onrender host.
+    if (
+        not redirect
+        or (render_url and _is_loopback(redirect))
+        or (render_url and _stale_onrender_host(redirect, render_url))
+    ):
+        redirect = f"{backend}/api/meta/callback"
+    elif not redirect.endswith("/api/meta/callback"):
+        # Keep an explicit full callback if set; otherwise force the known path on backend.
         redirect = f"{backend}/api/meta/callback"
     session_secret = os.getenv("MAAIKE_SESSION_SECRET", "").strip() or secrets.token_urlsafe(32)
     return WebSettings(

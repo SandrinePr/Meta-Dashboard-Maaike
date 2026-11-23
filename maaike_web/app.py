@@ -71,6 +71,7 @@ from maaike.repository import (
     add_hook,
     add_pillar,
     connection_label,
+    delete_client,
     disconnect_meta_link,
     get_client,
     is_verified_link,
@@ -415,7 +416,10 @@ def create_app() -> FastAPI:
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
-                return save_feedback(conn, client_id, post_id, body or {})
+                result = save_feedback(conn, client_id, post_id, body or {})
+                if isinstance(result, dict):
+                    result["persist"] = _safe_persist_push(conn)
+                return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -923,6 +927,43 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="This client is not in the list.")
         return _client_out(client)
 
+    @app.delete("/api/clients/{client_id}")
+    def remove_client(client_id: int) -> dict:
+        """Delete one client and all data that belongs only to that client."""
+        try:
+            with transaction() as conn:
+                result = delete_client(conn, client_id)
+                try:
+                    from maaike.persist_remote import push_if_changed
+
+                    result["persist"] = push_if_changed(conn)
+                except Exception as exc:
+                    result["persist"] = {
+                        "pushed": False,
+                        "reason": "persist_unavailable",
+                        "error": exc.__class__.__name__,
+                    }
+        except ClientInputError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {
+            "deleted": True,
+            "client_id": result["client_id"],
+            "name": result["name"],
+            "message": f"Klant “{result['name']}” is verwijderd.",
+            "removed": result.get("removed_kinds") or [],
+            "counts": {
+                "posts": result.get("posts"),
+                "comments": result.get("comments"),
+                "reports": result.get("reports"),
+                "targets": result.get("targets"),
+                "figma_items": result.get("figma_items"),
+                "competitors": result.get("competitors"),
+                "had_meta_secrets": result.get("had_meta_secrets"),
+                "had_strategy": result.get("had_strategy"),
+            },
+            "persist": result.get("persist"),
+        }
+
     @app.get("/api/clients/{client_id}/legend")
     def read_legend(client_id: int) -> dict:
         with transaction() as conn:
@@ -1080,7 +1121,9 @@ def create_app() -> FastAPI:
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
-                return save_reviewed_insight(conn, client_id, post_id, body or {})
+                result = save_reviewed_insight(conn, client_id, post_id, body or {})
+                result["persist"] = _safe_persist_push(conn)
+                return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1106,7 +1149,9 @@ def create_app() -> FastAPI:
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
-                return apply_mock_post_analysis(conn, client_id, post_id, body or {})
+                result = apply_mock_post_analysis(conn, client_id, post_id, body or {})
+                result["persist"] = _safe_persist_push(conn)
+                return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1308,7 +1353,9 @@ def create_app() -> FastAPI:
                     time=str((body or {}).get("time") or "09:00"),
                     note=str((body or {}).get("note") or ""),
                 )
-                return comparison_state(conn, client_id)
+                state = comparison_state(conn, client_id)
+                state["persist"] = _safe_persist_push(conn)
+                return state
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1328,16 +1375,15 @@ def create_app() -> FastAPI:
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
-                return {
-                    "weekly_plan": save_logs_weekly_plan(
-                        conn,
-                        client_id,
-                        enabled=bool((body or {}).get("enabled")),
-                        weekday=int((body or {}).get("weekday") or 0),
-                        time=str((body or {}).get("time") or "09:00"),
-                        note=str((body or {}).get("note") or ""),
-                    )
-                }
+                plan = save_logs_weekly_plan(
+                    conn,
+                    client_id,
+                    enabled=bool((body or {}).get("enabled")),
+                    weekday=int((body or {}).get("weekday") or 0),
+                    time=str((body or {}).get("time") or "09:00"),
+                    note=str((body or {}).get("note") or ""),
+                )
+                return {"weekly_plan": plan, "persist": _safe_persist_push(conn)}
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1802,7 +1848,7 @@ def create_app() -> FastAPI:
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
-                return apply_link_to_post(
+                result = apply_link_to_post(
                     conn,
                     client_id,
                     item_id,
@@ -1812,6 +1858,9 @@ def create_app() -> FastAPI:
                         payload.get("accept_content_kind_mismatch")
                     ),
                 )
+                if isinstance(result, dict):
+                    result["persist"] = _safe_persist_push(conn)
+                return result
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1830,7 +1879,10 @@ def create_app() -> FastAPI:
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
-                return save_rating_settings(conn, client_id, body or {})
+                result = save_rating_settings(conn, client_id, body or {})
+                if isinstance(result, dict):
+                    result["persist"] = _safe_persist_push(conn)
+                return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1841,7 +1893,7 @@ def create_app() -> FastAPI:
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
-                return save_strategy(
+                result = save_strategy(
                     conn,
                     client_id,
                     account_info=(body or {}).get("account_info"),
@@ -1850,6 +1902,9 @@ def create_app() -> FastAPI:
                     source_notes=(body or {}).get("source_notes"),
                     mark_complete=bool((body or {}).get("mark_complete")),
                 )
+                if isinstance(result, dict):
+                    result["persist"] = _safe_persist_push(conn)
+                return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1983,6 +2038,7 @@ def create_app() -> FastAPI:
             with transaction() as conn:
                 client = _require_client(conn, client_id)
                 before = disconnect_meta_link(conn, client_id)
+                persist = _safe_persist_push(conn)
         except ClientInputError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         account = before.get("page_name") or "Facebook/Instagram"
@@ -1996,6 +2052,7 @@ def create_app() -> FastAPI:
             ),
             "client_id": client_id,
             "client_name": client.name,
+            "persist": persist,
         }
 
     @app.post("/api/clients/{client_id}/meta/recheck")
@@ -2380,12 +2437,21 @@ def _meta_out(client: Client, settings: WebSettings) -> dict:
             "ig_username": client.meta_ig_username,
             "admin": {
                 "redirect_uri": info.redirect_uri,
+                # OAuth client_id only (public in the Facebook login URL). Never the app secret.
+                "meta_app_id": _public_meta_app_id(),
                 "notes": admin_notes,
                 "missing_raw": list(info.missing),
             },
         }
     )
     return base
+
+
+def _public_meta_app_id() -> str | None:
+    """Return the configured Meta App ID when set. Never returns the app secret."""
+    from maaike.meta_connect import _credential
+
+    return _credential("MAAIKE_META_APP_ID")
 
 
 app = create_app()
