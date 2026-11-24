@@ -570,13 +570,11 @@ def _items_have_staff_activity(items: list[dict[str, Any]]) -> bool:
 
 def save_report_review(conn, client_id: int, report_id: int, body: dict[str, Any]) -> dict[str, Any]:
     """Save per-section feedback/edits, auto-compose concept text, or explicitly approve."""
+    from maaike.reports import fetch_accessible_report
+
     ensure_report_review_tables(conn)
-    row = conn.execute(
-        "SELECT * FROM client_reports WHERE id = ? AND client_id = ?",
-        (report_id, client_id),
-    ).fetchone()
-    if row is None:
-        raise ValueError("Report not found for this client.")
+    row = fetch_accessible_report(conn, client_id, report_id)
+    client_id = int(row["client_id"])
 
     executed = bool(row["executed_at"])
     status = str(row["status"] or "")

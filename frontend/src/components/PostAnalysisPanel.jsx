@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 import { api } from "../api.js";
 
 /**
- * Claude post feedback panel for one Social post.
- * Opening / preparing / mock never starts a paid AI call.
+ * AI-feedbackpaneel voor één bericht.
+ * Het openen, voorbereiden of testen met een voorbeeld start nooit een betaalde aanroep.
  */
 export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }) {
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [adminDetail, setAdminDetail] = useState("");
   const [insight, setInsight] = useState("");
   const [action, setAction] = useState("");
   const [rating, setRating] = useState("");
@@ -27,13 +28,17 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
 
   useEffect(() => {
     setNotice("");
+    setAdminDetail("");
     setPrepareResult(null);
     setData(null);
-    reload().catch((exc) => onError?.(exc.message));
+    reload().catch((exc) => {
+      setAdminDetail(exc.message || "");
+      onError?.("De feedback voor dit bericht kon niet worden geladen.");
+    });
   }, [clientId, postId]);
 
   if (!data) {
-    return <p className="muted">Loading Claude feedback…</p>;
+    return <p className="muted">Feedback bij dit bericht laden…</p>;
   }
 
   const inv = data.inventory || {};
@@ -48,67 +53,18 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
 
   return (
     <section className="card stack logs-feedback-panel" style={{ marginTop: "0.75rem" }}>
-      <h4>Claude post feedback</h4>
+      <h4>Inzicht, vervolgactie &amp; AI-feedback</h4>
       <p className="hint">
-        Request feedback explicitly. Opening this card never starts a paid call. Reports stay on
-        Gemini; post feedback uses Anthropic Claude with Maaike&apos;s saved post prompt.
+        Vul hieronder zelf je beoordeling, inzicht en vervolgactie in, of vraag een AI-voorstel op.
+        Het openen van dit blok kost geen tegoed.
       </p>
 
       {!claudeReady ? (
         <p className="banner warn-soft">
-          Claude is not configured. Set <strong>{missingSetting}</strong> server-side on Render (or
-          in <code>.env</code>) and restart. Until then you can still prepare input and run{" "}
-          <strong>Mock feedback</strong>.
+          Live AI-feedback staat nog niet aan. Je kunt wel zelf inzichten invullen of op{" "}
+          <strong>Voorbeeldfeedback testen</strong> klikken.
         </p>
-      ) : (
-        <p className="hint">
-          Claude ready · model <strong>{claude.model || "—"}</strong> · prompt{" "}
-          <strong>{prompt.prompt_version || "—"}</strong> ({prompt.source || "—"})
-        </p>
-      )}
-
-      {draft.source_analysis_id ? (
-        <div className="stack" style={{ gap: "0.25rem" }}>
-          <p style={{ margin: 0 }}>
-            <strong>Saved feedback</strong> #{draft.source_analysis_id} · {draft.status || "—"} ·{" "}
-            {draft.provider || "—"} · {draft.model || "—"}
-            {draft.prompt_version ? ` · prompt ${draft.prompt_version}` : ""}
-          </p>
-          <p className="hint" style={{ margin: 0 }}>
-            Reloading this card shows the stored text below — no new paid call.
-          </p>
-        </div>
       ) : null}
-
-      <div className="stack">
-        <h5>Input that Claude can use</h5>
-        <ul className="plain-list">
-          <li>
-            Caption: {preview.has_caption || inv.caption_preview ? "yes" : "missing"}
-            {inv.caption_preview ? ` — “${String(inv.caption_preview).slice(0, 120)}…”` : ""}
-          </li>
-          <li>
-            Published media URLs: {preview.published_media_count ?? published.count ?? 0}
-            {preview.can_use_images || (published.count || 0) || (uploads.count || 0)
-              ? " (images/frames can be prepared for the model)"
-              : ""}
-          </li>
-          <li>Uploads: {preview.uploaded_media_count ?? uploads.count ?? 0}</li>
-          <li>
-            Role: {preview.analysis_role || inv.analysis_role || "—"} · prompt{" "}
-            {preview.prompt_version || prompt.prompt_version || "—"}
-          </li>
-        </ul>
-        {(preview.limitations || inv.limitations || []).length ? (
-          <ul className="plain-list">
-            {(preview.limitations || inv.limitations || []).map((line) => (
-              <li key={line} className="hint">
-                Limitation: {line}
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </div>
 
       <div className="row-actions wrap">
         <button
@@ -118,23 +74,23 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
           onClick={() => {
             setBusy(true);
             setNotice("");
+            setAdminDetail("");
             setPrepareResult(null);
             api(`/api/clients/${clientId}/posts/${postId}/analysis/prepare`, { method: "POST" })
               .then((payload) => {
                 setPrepareResult(payload);
-                setNotice(
-                  `Prepared #${payload.analysis_id}: ${payload.media_prep?.coverage || "—"} · ` +
-                    `${payload.media_prep?.images_for_model || 0} image(s)/frame(s) · ` +
-                    `prompt ${payload.prompt_version || "—"} · estimate USD ${payload.cost_estimate_usd?.low}–${payload.cost_estimate_usd?.high} (not executed)`,
-                );
+                setNotice("Gegevens van dit bericht staan klaar om AI-feedback op te vragen.");
                 setSourceAnalysisId(payload.analysis_id);
                 return reload();
               })
-              .catch((exc) => onError?.(exc.message))
+              .catch((exc) => {
+                setAdminDetail(exc.message || "");
+                onError?.("Het voorbereiden van de AI-feedback is niet gelukt.");
+              })
               .finally(() => setBusy(false));
           }}
         >
-          Prepare input (no paid call)
+          1. Gegevens klaarzetten (gratis)
         </button>
         <button
           className="primary"
@@ -142,26 +98,20 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
           disabled={busy || !prepareResult?.analysis_id || !claudeReady}
           title={
             !claudeReady
-              ? `Set ${missingSetting} first`
+              ? "Live AI-feedback is nog niet geactiveerd door beheer"
               : !prepareResult?.analysis_id
-                ? "Prepare input first"
-                : "Start paid Claude feedback"
+                ? "Zet eerst de gegevens klaar via stap 1"
+                : "Vraag AI-feedback aan voor dit bericht"
           }
           onClick={() => {
             const est = prepareResult?.cost_estimate_usd;
-            const mediaN =
-              prepareResult?.media_for_model?.length || prepareResult?.media_prep?.images_for_model || 0;
             const ok = window.confirm(
-              `Start paid Claude post feedback for post #${postId}?\n\n` +
-                `Provider: ${prepareResult?.provider || est?.provider || "Anthropic Claude"}\n` +
-                `Model: ${est?.model || prepareResult?.model || "—"}\n` +
-                `Prompt: ${prepareResult?.prompt_version || "—"}\n` +
-                `Prepared media for model: ${mediaN}\n` +
-                `Estimate: USD ${est?.low ?? "?"} – ${est?.high ?? "?"}\n\n` +
-                `OK = confirm paid Claude call. Cancel = no call.`,
+              `Wil je betaalde AI-feedback aanvragen voor dit bericht?\n\n` +
+                `Geschatte kosten: USD ${est?.low ?? "?"} – ${est?.high ?? "?"}\n\n` +
+                `Klik op OK om door te gaan of op Annuleren om niets uit te voeren.`,
             );
             if (!ok) {
-              setNotice("Execute cancelled — no paid call.");
+              setNotice("Geannuleerd — er is geen AI-aanroep gestart.");
               return;
             }
             setBusy(true);
@@ -180,19 +130,18 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
                 setAction(a.action_text || "");
                 setRating(a.rating_text || "");
                 setSourceAnalysisId(a.id);
-                setNotice(
-                  `Executed analysis #${a.id}: ${a.status}` +
-                    (a.cost_known ? ` · USD ${a.actual_cost_usd}` : " · cost unknown") +
-                    (payload.error ? ` · ${payload.error}` : ""),
-                );
+                setNotice("AI-feedback is opgehaald en hieronder ingevuld.");
                 await reload();
                 await onSaved?.();
               })
-              .catch((exc) => onError?.(exc.message))
+              .catch((exc) => {
+                setAdminDetail(exc.message || "");
+                onError?.("Het ophalen van AI-feedback is niet gelukt.");
+              })
               .finally(() => setBusy(false));
           }}
         >
-          Ask Claude for feedback (paid)
+          2. Vraag AI-feedback (betaald)
         </button>
         <button
           className="secondary"
@@ -201,6 +150,7 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
           onClick={() => {
             setBusy(true);
             setNotice("");
+            setAdminDetail("");
             api(`/api/clients/${clientId}/posts/${postId}/analysis/mock`, {
               method: "POST",
               body: { analysis_id: prepareResult?.analysis_id || null },
@@ -212,126 +162,120 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
                 setRating(a.rating_text || "");
                 setSourceAnalysisId(a.id);
                 setPrepareResult((prev) => prev || { analysis_id: a.id });
-                const checks = payload.input_checks || {};
-                setNotice(
-                  `Mock feedback #${a.id} saved · prompt=${checks.prompt_version || a.prompt_version || "—"}` +
-                    ` · caption=${checks.has_caption || checks.post_snapshot ? "yes" : "n/a"}` +
-                    ` · metrics=${checks.metrics ? "yes" : "n/a"} · no paid call`,
-                );
+                setNotice("Voorbeeldfeedback is ingevuld (gratis). Je kunt de tekst hieronder aanpassen.");
                 await reload();
                 await onSaved?.();
               })
-              .catch((exc) => onError?.(exc.message))
+              .catch((exc) => {
+                setAdminDetail(exc.message || "");
+                onError?.("Het maken van voorbeeldfeedback is niet gelukt.");
+              })
               .finally(() => setBusy(false));
           }}
         >
-          Mock feedback (no paid call)
+          Voorbeeldfeedback testen (gratis)
         </button>
       </div>
 
-      {prepareResult ? (
-        <div className="stack">
-          <h5>Prepared for Claude</h5>
-          <p className="hint">
-            Provider {prepareResult.provider || "Anthropic Claude"} · model{" "}
-            {prepareResult.model || prepareResult.cost_estimate_usd?.model || "—"} · prompt{" "}
-            {prepareResult.prompt_version || "—"} ({prepareResult.prompt_source || "—"})
-          </p>
-          <p className="hint">
-            Coverage: {prepareResult.media_prep?.coverage || "—"} · images/frames for model:{" "}
-            {prepareResult.media_prep?.images_for_model ?? 0} · full video:{" "}
-            {String(prepareResult.media_prep?.full_video_to_model)} · audio:{" "}
-            {String(prepareResult.media_prep?.audio_to_model)}
-          </p>
-          <p>
-            Estimate: USD {prepareResult.cost_estimate_usd?.low}–{prepareResult.cost_estimate_usd?.high}
-          </p>
-          {(prepareResult.media_for_model || []).length ? (
-            <ol className="plain-list">
-              {(prepareResult.media_for_model || []).map((item, idx) => (
-                <li key={`${item.path}-${idx}`}>
-                  {item.role || "image"}
-                  {item.timestamp_s != null ? ` @ ${item.timestamp_s}s` : ""} · {item.path}
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p className="hint">No local images/frames prepared — caption/metrics still go in the prompt.</p>
-          )}
-        </div>
-      ) : null}
       {notice ? <p className="hint">{notice}</p> : null}
 
       <div className="stack">
-        <h5>Insight &amp; action (saved on this post)</h5>
         <label>
-          Rating
-          <input value={rating} onChange={(e) => setRating(e.target.value)} placeholder="optional" />
+          Korte beoordeling (optioneel)
+          <input
+            value={rating}
+            onChange={(e) => setRating(e.target.value)}
+            placeholder="bijv. Sterke openingshook, veel opgeslagen"
+          />
         </label>
         <label>
-          Insight
+          Inzicht bij dit bericht
           <textarea
             rows={3}
             value={insight}
             onChange={(e) => setInsight(e.target.value)}
-            placeholder="What did we learn from this post?"
+            placeholder="Wat valt op aan dit bericht en waarom werkte het wel of niet?"
           />
         </label>
         <label>
-          Action
+          Vervolgactie
           <textarea
             rows={2}
             value={action}
             onChange={(e) => setAction(e.target.value)}
-            placeholder="What do we repeat, stop or test?"
+            placeholder="Wat herhalen, aanpassen of testen we de volgende keer?"
           />
         </label>
-        <button
-          className="primary"
-          type="button"
-          disabled={busy || (!insight.trim() && !action.trim())}
-          onClick={() => {
-            setBusy(true);
-            setNotice("");
-            api(`/api/clients/${clientId}/posts/${postId}/analysis/insight`, {
-              method: "PATCH",
-              body: {
-                insight_text: insight,
-                action_text: action,
-                rating_text: rating,
-                source_analysis_id: sourceAnalysisId,
-                provider: draft.provider || "Specialist reviewed",
-                model: draft.model || "manual",
-              },
-            })
-              .then(async (payload) => {
-                setNotice(`Saved analysis #${payload.analysis?.id || "—"} for this post / reports.`);
-                await reload();
-                await onSaved?.();
+        <div>
+          <button
+            className="primary"
+            type="button"
+            disabled={busy || (!insight.trim() && !action.trim() && !rating.trim())}
+            onClick={() => {
+              setBusy(true);
+              setNotice("");
+              api(`/api/clients/${clientId}/posts/${postId}/analysis/insight`, {
+                method: "PATCH",
+                body: {
+                  insight_text: insight,
+                  action_text: action,
+                  rating_text: rating,
+                  source_analysis_id: sourceAnalysisId,
+                  provider: draft.provider || "Handmatig gecontroleerd",
+                  model: draft.model || "manual",
+                },
               })
-              .catch((exc) => onError?.(exc.message))
-              .finally(() => setBusy(false));
-          }}
-        >
-          Save insight for reports
-        </button>
-        <p className="hint">{data.report_note}</p>
+                .then(async () => {
+                  setNotice("Inzicht en vervolgactie zijn opgeslagen bij dit bericht.");
+                  await reload();
+                  await onSaved?.();
+                })
+                .catch((exc) => {
+                  setAdminDetail(exc.message || "");
+                  onError?.("Het opslaan van het inzicht is niet gelukt.");
+                })
+                .finally(() => setBusy(false));
+            }}
+          >
+            Inzicht en vervolgactie opslaan
+          </button>
+        </div>
       </div>
 
-      {(data.analyses || []).length ? (
-        <div className="stack">
-          <h5>Stored analyses</h5>
-          <ul className="plain-list">
-            {(data.analyses || []).map((row) => (
-              <li key={row.id}>
-                #{row.id} · {row.status} · {row.provider} · {row.model}
-                {row.prompt_version ? ` · ${row.prompt_version}` : ""}
-                {row.insight_text ? ` — ${(row.insight_text || "").slice(0, 80)}` : ""}
-              </li>
-            ))}
-          </ul>
+      <details>
+        <summary className="hint" style={{ cursor: "pointer" }}>
+          Technische AI-details (alleen voor beheer)
+        </summary>
+        <div className="stack" style={{ marginTop: "0.5rem", gap: "0.35rem" }}>
+          <p className="hint" style={{ margin: 0 }}>
+            Status koppeling: {claudeReady ? `Gereed (${claude.model || "—"})` : `Mist ${missingSetting}`} ·
+            Promptversie: {prompt.prompt_version || "—"} ({prompt.source || "—"}) · Media:{" "}
+            {preview.published_media_count ?? published.count ?? 0} gepubliceerd /{" "}
+            {preview.uploaded_media_count ?? uploads.count ?? 0} geüpload
+          </p>
+          {prepareResult ? (
+            <p className="hint" style={{ margin: 0 }}>
+              Voorbereide run #{prepareResult.analysis_id} · dekking{" "}
+              {prepareResult.media_prep?.coverage || "—"} · kostenindicatie USD{" "}
+              {prepareResult.cost_estimate_usd?.low}–{prepareResult.cost_estimate_usd?.high}
+            </p>
+          ) : null}
+          {adminDetail ? (
+            <pre className="hint" style={{ whiteSpace: "pre-wrap", margin: 0 }}>
+              {adminDetail}
+            </pre>
+          ) : null}
+          {(data.analyses || []).length ? (
+            <ul className="plain-list">
+              {(data.analyses || []).map((row) => (
+                <li key={row.id} className="hint">
+                  #{row.id} · {row.status} · {row.provider} · {row.model}
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
-      ) : null}
+      </details>
     </section>
   );
 }

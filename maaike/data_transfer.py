@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import csv
 import io
 import json
@@ -127,6 +128,36 @@ def export_package(conn, *, client_id: int | None = None) -> dict[str, Any]:
             ).fetchall()
         ]
 
+    strategy_files = []
+    if _table_exists(conn, "client_strategy_files"):
+        for r in conn.execute(
+            f"""
+            SELECT client_id, file_ref, filename, mime_type, byte_size, sha256,
+                   status, content, created_at, updated_at
+            FROM client_strategy_files
+            WHERE client_id IN ({placeholders})
+            ORDER BY client_id, id
+            """,
+            ids,
+        ).fetchall():
+            raw_content = r["content"] or b""
+            if not raw_content:
+                continue
+            strategy_files.append(
+                {
+                    "client_id": int(r["client_id"]),
+                    "file_ref": str(r["file_ref"] or ""),
+                    "filename": str(r["filename"] or "strategie.pdf"),
+                    "mime_type": str(r["mime_type"] or "application/pdf"),
+                    "byte_size": int(r["byte_size"] or len(raw_content)),
+                    "sha256": str(r["sha256"] or ""),
+                    "status": str(r["status"] or "active"),
+                    "content_b64": base64.b64encode(bytes(raw_content)).decode("ascii"),
+                    "created_at": r["created_at"],
+                    "updated_at": r["updated_at"],
+                }
+            )
+
     targets = []
     if _table_exists(conn, "client_targets"):
         targets = [
@@ -186,6 +217,8 @@ def export_package(conn, *, client_id: int | None = None) -> dict[str, Any]:
 
     reports = []
     report_sources = []
+    report_reviews = []
+    monthly_trend_runs = []
     if _table_exists(conn, "client_reports"):
         reports = [
             dict(r)
@@ -204,6 +237,19 @@ def export_package(conn, *, client_id: int | None = None) -> dict[str, Any]:
                     rparams,
                 ).fetchall()
             ]
+        if _table_exists(conn, "client_report_reviews"):
+            report_reviews = [
+                dict(r)
+                for r in conn.execute(
+                    f"SELECT * FROM client_report_reviews WHERE report_id IN ({rp})",
+                    rparams,
+                ).fetchall()
+            ]
+    if _table_exists(conn, "monthly_trend_schedule_runs"):
+        monthly_trend_runs = [
+            dict(r)
+            for r in conn.execute("SELECT * FROM monthly_trend_schedule_runs ORDER BY id").fetchall()
+        ]
 
     activity = []
     if _table_exists(conn, "dashboard_activity_events"):
@@ -279,6 +325,26 @@ def export_package(conn, *, client_id: int | None = None) -> dict[str, Any]:
             ).fetchall()
         ]
 
+    crawl_accounts = []
+    if _table_exists(conn, "client_crawl_accounts"):
+        crawl_accounts = [
+            dict(r)
+            for r in conn.execute(
+                f"SELECT * FROM client_crawl_accounts WHERE client_id IN ({placeholders}) ORDER BY client_id, id",
+                ids,
+            ).fetchall()
+        ]
+
+    logs_weekly_preferences = []
+    if _table_exists(conn, "client_logs_weekly_preferences"):
+        logs_weekly_preferences = [
+            dict(r)
+            for r in conn.execute(
+                f"SELECT * FROM client_logs_weekly_preferences WHERE client_id IN ({placeholders}) ORDER BY client_id",
+                ids,
+            ).fetchall()
+        ]
+
     return {
         "format": FORMAT_ID,
         "version": FORMAT_VERSION,
@@ -292,6 +358,7 @@ def export_package(conn, *, client_id: int | None = None) -> dict[str, Any]:
             "pillars": len(pillars),
             "hooks_legend": len(hooks_legend),
             "strategies": len(strategies),
+            "strategy_files": len(strategy_files),
             "targets": len(targets),
             "posts": len(posts),
             "hooks_editorial": len(hooks),
@@ -306,6 +373,7 @@ def export_package(conn, *, client_id: int | None = None) -> dict[str, Any]:
             "figma_items": len(figma_items),
             "post_ai_analyses": len(post_ai_analyses),
             "comparison_preferences": len(comparison_preferences),
+            "crawl_accounts": len(crawl_accounts),
         },
         "clients": clients_out,
         "content_formats": formats,
@@ -320,6 +388,8 @@ def export_package(conn, *, client_id: int | None = None) -> dict[str, Any]:
         "post_assessments": assessments,
         "client_reports": reports,
         "client_report_sources": report_sources,
+        "client_report_reviews": report_reviews,
+        "monthly_trend_schedule_runs": monthly_trend_runs,
         "activity_events": activity,
         "logs_export_rows": logs_rows,
         "prompt_settings": prompt_settings,
@@ -328,6 +398,9 @@ def export_package(conn, *, client_id: int | None = None) -> dict[str, Any]:
         "post_ai_analyses": post_ai_analyses,
         # Optional for older packages that omit this key — import must stay compatible.
         "client_comparison_preferences": comparison_preferences,
+        "client_crawl_accounts": crawl_accounts,
+        "client_logs_weekly_preferences": logs_weekly_preferences,
+        "client_strategy_files": strategy_files,
     }
 
 
@@ -475,6 +548,7 @@ def apply_import(
         "editorial_upserted": 0,
         "import_links_added": 0,
         "strategies_upserted": 0,
+        "strategy_files_upserted": 0,
         "targets_added": 0,
         "reports_added": 0,
         "activity_added": 0,
@@ -708,6 +782,61 @@ def apply_import(
                     (*values[1:], live_client),
                 )
                 stats["strategies_upserted"] += 1
+
+    # Private strategy PDF binaries (optional in older packages)
+    if data.get("client_strategy_files"):
+        from maaike.strategy_files import ensure_strategy_file_table
+
+        ensure_strategy_file_table(conn)
+        for item in data.get("client_strategy_files") or []:
+            live_client = pkg_client_to_live.get(int(item["client_id"]))
+            if live_client is None:
+                continue
+            file_ref = str(item.get("file_ref") or "").strip()
+            encoded = str(item.get("content_b64") or "").strip()
+            if not file_ref or not encoded:
+                continue
+            try:
+                raw_pdf = base64.b64decode(encoded)
+            except (ValueError, TypeError):
+                continue
+            if not raw_pdf:
+                continue
+            existing_file = conn.execute(
+                "SELECT id FROM client_strategy_files WHERE client_id = ? AND file_ref = ?",
+                (live_client, file_ref),
+            ).fetchone()
+            if existing_file is not None and not overwrite:
+                continue
+            conn.execute(
+                """
+                INSERT INTO client_strategy_files (
+                    client_id, file_ref, filename, mime_type, byte_size,
+                    sha256, status, content, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(client_id, file_ref) DO UPDATE SET
+                    filename = excluded.filename,
+                    mime_type = excluded.mime_type,
+                    byte_size = excluded.byte_size,
+                    sha256 = excluded.sha256,
+                    status = excluded.status,
+                    content = excluded.content,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    live_client,
+                    file_ref,
+                    str(item.get("filename") or "strategie.pdf"),
+                    str(item.get("mime_type") or "application/pdf"),
+                    int(item.get("byte_size") or len(raw_pdf)),
+                    str(item.get("sha256") or ""),
+                    str(item.get("status") or "active"),
+                    bytes(raw_pdf),
+                    str(item.get("created_at") or now),
+                    str(item.get("updated_at") or now),
+                ),
+            )
+            stats["strategy_files_upserted"] += 1
 
     if _table_exists(conn, "client_targets"):
         for target in data.get("targets") or []:
@@ -985,6 +1114,26 @@ def apply_import(
             pkg_report_to_live[int(report["id"])] = int(cur.lastrowid)
             stats["reports_added"] += 1
 
+        # Second pass: restore linked_trend_report_id and supersedes_id across imported reports
+        for report in data.get("client_reports") or []:
+            live_id = pkg_report_to_live.get(int(report["id"]))
+            if live_id is None:
+                continue
+            raw_linked = report.get("linked_trend_report_id")
+            raw_super = report.get("supersedes_id")
+            mapped_linked = pkg_report_to_live.get(int(raw_linked)) if raw_linked is not None else None
+            mapped_super = pkg_report_to_live.get(int(raw_super)) if raw_super is not None else None
+            if mapped_linked is not None or mapped_super is not None:
+                conn.execute(
+                    """
+                    UPDATE client_reports
+                    SET linked_trend_report_id = COALESCE(?, linked_trend_report_id),
+                        supersedes_id = COALESCE(?, supersedes_id)
+                    WHERE id = ?
+                    """,
+                    (mapped_linked, mapped_super, live_id),
+                )
+
         if _table_exists(conn, "client_report_sources"):
             for src in data.get("client_report_sources") or []:
                 live_report = pkg_report_to_live.get(int(src["report_id"]))
@@ -1007,6 +1156,75 @@ def apply_import(
                         src.get("created_at") or now,
                     ),
                 )
+
+        if data.get("client_report_reviews"):
+            try:
+                from maaike.report_review import ensure_report_review_tables
+
+                ensure_report_review_tables(conn)
+                for rev in data.get("client_report_reviews") or []:
+                    live_report = pkg_report_to_live.get(int(rev["report_id"]))
+                    live_client = pkg_client_to_live.get(int(rev["client_id"]))
+                    if live_report is None or live_client is None:
+                        continue
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO client_report_reviews (
+                            client_id, report_id, execution_key, ai_original_json,
+                            item_feedback_json, final_version_text, reviewer_name,
+                            review_status, reviewed_at, approved_at, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            live_client,
+                            live_report,
+                            rev.get("execution_key") or "",
+                            rev.get("ai_original_json") or "{}",
+                            rev.get("item_feedback_json") or "[]",
+                            rev.get("final_version_text") or "",
+                            rev.get("reviewer_name") or "",
+                            rev.get("review_status") or "",
+                            rev.get("reviewed_at"),
+                            rev.get("approved_at"),
+                            rev.get("created_at") or now,
+                            rev.get("updated_at") or now,
+                        ),
+                    )
+            except Exception:
+                pass
+
+        if data.get("monthly_trend_schedule_runs"):
+            try:
+                from maaike.monthly_trend_scheduler import ensure_monthly_trend_tables
+
+                ensure_monthly_trend_tables(conn)
+                for mrun in data.get("monthly_trend_schedule_runs") or []:
+                    raw_rid = mrun.get("report_id")
+                    live_rid = pkg_report_to_live.get(int(raw_rid)) if raw_rid is not None else None
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO monthly_trend_schedule_runs (
+                            period_year, period_month, timezone, scheduled_for, report_id,
+                            mode, paid_ai_called, attempt_count, status, detail, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            int(mrun["period_year"]),
+                            int(mrun["period_month"]),
+                            mrun.get("timezone") or "Europe/Amsterdam",
+                            mrun.get("scheduled_for") or f"{int(mrun['period_year']):04d}-{int(mrun['period_month']):02d}-01",
+                            live_rid,
+                            mrun.get("mode") or "simulation_no_paid_ai",
+                            int(mrun.get("paid_ai_called") or 0),
+                            int(mrun.get("attempt_count") or 1),
+                            mrun.get("status") or "completed",
+                            mrun.get("detail") or "",
+                            mrun.get("created_at") or now,
+                            mrun.get("updated_at") or now,
+                        ),
+                    )
+            except Exception:
+                pass
 
     # Activity events (create table if needed so full backups keep logs)
     from maaike.activity_log import ensure_activity_table, record_activity
@@ -1171,8 +1389,8 @@ def apply_import(
                 """
                 INSERT INTO client_comparison_preferences (
                     client_id, competitors_json, period_key, custom_start, custom_end, updated_at,
-                    weekly_enabled, weekly_weekday, weekly_time, weekly_note
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    weekly_enabled, weekly_weekday, weekly_time, weekly_note, weekly_responsible
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(client_id) DO UPDATE SET
                     competitors_json = excluded.competitors_json,
                     period_key = excluded.period_key,
@@ -1182,7 +1400,8 @@ def apply_import(
                     weekly_enabled = excluded.weekly_enabled,
                     weekly_weekday = excluded.weekly_weekday,
                     weekly_time = excluded.weekly_time,
-                    weekly_note = excluded.weekly_note
+                    weekly_note = excluded.weekly_note,
+                    weekly_responsible = excluded.weekly_responsible
                 """,
                 (
                     live_client,
@@ -1195,9 +1414,105 @@ def apply_import(
                     int(row.get("weekly_weekday") or 0),
                     str(row.get("weekly_time") or "09:00"),
                     str(row.get("weekly_note") or ""),
+                    str(row.get("weekly_responsible") or ""),
                 ),
             )
             stats["comparison_preferences_upserted"] += 1
+
+    # Competitor crawl status metadata (optional in older packages)
+    if data.get("client_crawl_accounts"):
+        from maaike.account_crawl import ensure_crawl_tables
+
+        ensure_crawl_tables(conn)
+        stats["crawl_accounts_upserted"] = 0
+        for row in data.get("client_crawl_accounts") or []:
+            live_client = pkg_client_to_live.get(int(row["client_id"]))
+            if live_client is None:
+                continue
+            uname = str(row.get("username") or "").strip().lower()
+            if not uname:
+                continue
+            conn.execute(
+                """
+                INSERT INTO client_crawl_accounts (
+                    client_id, username, ig_account_id, display_name, followers_count,
+                    linked_at, last_crawled_at, last_success_at, last_crawl_status,
+                    last_crawl_detail, last_crawl_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(client_id, username) DO UPDATE SET
+                    ig_account_id = excluded.ig_account_id,
+                    display_name = excluded.display_name,
+                    followers_count = excluded.followers_count,
+                    linked_at = excluded.linked_at,
+                    last_crawled_at = excluded.last_crawled_at,
+                    last_success_at = excluded.last_success_at,
+                    last_crawl_status = excluded.last_crawl_status,
+                    last_crawl_detail = excluded.last_crawl_detail,
+                    last_crawl_json = excluded.last_crawl_json
+                """,
+                (
+                    live_client,
+                    uname,
+                    row.get("ig_account_id"),
+                    row.get("display_name"),
+                    row.get("followers_count"),
+                    str(row.get("linked_at") or now),
+                    row.get("last_crawled_at"),
+                    row.get("last_success_at"),
+                    row.get("last_crawl_status"),
+                    row.get("last_crawl_detail"),
+                    str(row.get("last_crawl_json") or "{}"),
+                ),
+            )
+            stats["crawl_accounts_upserted"] += 1
+
+    # Weekly Logs check preferences & completion state (optional in older packages)
+    if data.get("client_logs_weekly_preferences"):
+        from maaike.logs_weekly import ensure_logs_weekly_table
+
+        ensure_logs_weekly_table(conn)
+        stats["logs_weekly_preferences_upserted"] = 0
+        for row in data.get("client_logs_weekly_preferences") or []:
+            live_client = pkg_client_to_live.get(int(row["client_id"]))
+            if live_client is None:
+                continue
+            conn.execute(
+                """
+                INSERT INTO client_logs_weekly_preferences (
+                    client_id, weekly_enabled, weekly_weekday, weekly_time, weekly_note,
+                    responsible_name, last_completed_at, last_completed_by,
+                    last_completed_window_from, last_completed_window_to, last_completed_count,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(client_id) DO UPDATE SET
+                    weekly_enabled = excluded.weekly_enabled,
+                    weekly_weekday = excluded.weekly_weekday,
+                    weekly_time = excluded.weekly_time,
+                    weekly_note = excluded.weekly_note,
+                    responsible_name = excluded.responsible_name,
+                    last_completed_at = excluded.last_completed_at,
+                    last_completed_by = excluded.last_completed_by,
+                    last_completed_window_from = excluded.last_completed_window_from,
+                    last_completed_window_to = excluded.last_completed_window_to,
+                    last_completed_count = excluded.last_completed_count,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    live_client,
+                    int(row.get("weekly_enabled") or 0),
+                    int(row.get("weekly_weekday") or 0),
+                    str(row.get("weekly_time") or "09:00"),
+                    str(row.get("weekly_note") or ""),
+                    str(row.get("responsible_name") or ""),
+                    row.get("last_completed_at"),
+                    str(row.get("last_completed_by") or ""),
+                    str(row.get("last_completed_window_from") or ""),
+                    str(row.get("last_completed_window_to") or ""),
+                    int(row["last_completed_count"]) if row.get("last_completed_count") is not None else None,
+                    str(row.get("updated_at") or now),
+                ),
+            )
+            stats["logs_weekly_preferences_upserted"] += 1
 
     # Stored post analyses / Claude feedback (no secrets)
     if data.get("post_ai_analyses"):

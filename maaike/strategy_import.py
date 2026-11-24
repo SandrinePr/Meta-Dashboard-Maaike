@@ -157,32 +157,112 @@ def apply_strategy_import(
     *,
     proposed: dict[str, Any],
     preserve_manual: bool = True,
+    stage_only: bool = True,
+    source_kind: str = "",
+    filename: str = "",
+    file_ref: str = "",
 ) -> dict[str, Any]:
-    """Merge proposed preview into strategy. Never wipe manual answers when preserve_manual."""
+    """Stage or merge a preview. Default: stage as proposal until the editor approves.
+
+    Manual answers stay untouched. Canva URL may be saved immediately (optional link only).
+    """
     current = get_strategy(conn, client_id)
     answers = dict(current["start_answers"] or {})
     fields = dict(current["strategy_fields"] or {})
     notes = list(current["source_notes"] or [])
 
-    for key, value in (proposed.get("start_answers") or {}).items():
-        text = str(value or "").strip()
-        if not text:
-            continue
+    proposed_answers = {
+        k: str(v).strip()
+        for k, v in (proposed.get("start_answers") or {}).items()
+        if str(v or "").strip()
+    }
+    proposed_fields = {
+        k: str(v).strip()
+        for k, v in (proposed.get("strategy_fields") or {}).items()
+        if str(v or "").strip()
+    }
+
+    # Optional Canva link is not a content proposal — store immediately.
+    canva = str(proposed_fields.pop("canva_strategy_url", "") or proposed_fields.pop("canva_url", "") or "").strip()
+    if canva:
+        fields["canva_strategy_url"] = canva
+
+    activated_pdf: dict[str, Any] | None = None
+    if file_ref:
+        from maaike.strategy_files import activate_strategy_pdf
+
+        activated_pdf = activate_strategy_pdf(conn, client_id, file_ref, filename=filename)
+
+    if activated_pdf is not None:
+        fields["strategy_pdf_ref"] = activated_pdf["file_ref"]
+        fields["last_pdf_meta"] = {
+            "filename": activated_pdf["filename"],
+            "source_kind": source_kind or "strategy_pdf",
+            "file_ref": activated_pdf["file_ref"],
+            "byte_size": activated_pdf["byte_size"],
+            "updated_at": activated_pdf["updated_at"],
+        }
+    elif filename or source_kind == "strategy_pdf":
+        existing_meta = dict(fields.get("last_pdf_meta") or {})
+        fields["last_pdf_meta"] = {
+            **existing_meta,
+            "filename": filename or existing_meta.get("filename") or "strategie.pdf",
+            "source_kind": source_kind or existing_meta.get("source_kind") or "strategy_pdf",
+        }
+
+    if stage_only:
+        # Drop keys the editor already filled manually when preserve_manual.
+        if preserve_manual:
+            proposed_answers = {
+                k: v
+                for k, v in proposed_answers.items()
+                if not str(answers.get(k) or "").strip()
+            }
+            proposed_fields = {
+                k: v
+                for k, v in proposed_fields.items()
+                if not str(fields.get(k) or "").strip()
+            }
+        has_proposal_content = bool(proposed_answers or proposed_fields)
+        if has_proposal_content:
+            fields["pending_proposal"] = {
+                "start_answers": proposed_answers,
+                "strategy_fields": proposed_fields,
+                "source_notes": list(proposed.get("source_notes") or []),
+                "source_kind": source_kind or "import",
+                "filename": filename or "",
+                "preserve_manual": bool(preserve_manual),
+            }
+            fields["review_status"] = "te_controleren"
+        else:
+            # PDF/Canva meta may still be stored; no empty proposal that blocks afronden.
+            fields.pop("pending_proposal", None)
+            if fields.get("review_status") == "te_controleren":
+                fields["review_status"] = "concept"
+        return save_strategy(
+            conn,
+            client_id,
+            account_info=current["account_info"],
+            start_answers=answers,
+            strategy_fields=fields,
+            source_notes=notes,
+            mark_complete=False,
+        )
+
+    # Legacy immediate merge path (still never overwrites filled answers when preserve_manual).
+    provenance_updates: dict[str, str] = {}
+    for key, text in proposed_answers.items():
         if preserve_manual and str(answers.get(key) or "").strip():
-            # keep existing
             continue
         answers[key] = text
-    for key, value in (proposed.get("strategy_fields") or {}).items():
-        text = str(value or "").strip()
-        if not text:
-            continue
-        if preserve_manual and str(fields.get(key) or "").strip() and key != "canva_strategy_url":
+        provenance_updates[key] = "hamster"
+    for key, text in proposed_fields.items():
+        if preserve_manual and str(fields.get(key) or "").strip():
             continue
         fields[key] = text
     for note in proposed.get("source_notes") or []:
         if note and note not in notes:
             notes.append(note)
-
     return save_strategy(
         conn,
         client_id,
@@ -190,6 +270,76 @@ def apply_strategy_import(
         start_answers=answers,
         strategy_fields=fields,
         source_notes=notes,
+        mark_complete=False,
+        provenance_updates=provenance_updates,
+    )
+
+
+def approve_strategy_proposal(
+    conn,
+    client_id: int,
+    *,
+    edited_proposal: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Merge staged proposal into the saved strategy after editor approval."""
+    current = get_strategy(conn, client_id)
+    fields = dict(current["strategy_fields"] or {})
+    pending = edited_proposal or fields.get("pending_proposal")
+    if not isinstance(pending, dict):
+        raise ValueError("Er is geen voorstel om goed te keuren.")
+    answers = dict(current["start_answers"] or {})
+    notes = list(current["source_notes"] or [])
+    preserve_manual = bool(pending.get("preserve_manual", True))
+    provenance_updates: dict[str, str] = {}
+
+    for key, value in (pending.get("start_answers") or {}).items():
+        text = str(value or "").strip()
+        if not text:
+            continue
+        if preserve_manual and str(answers.get(key) or "").strip():
+            continue
+        answers[key] = text
+        provenance_updates[key] = "approved"
+    for key, value in (pending.get("strategy_fields") or {}).items():
+        text = str(value or "").strip()
+        if not text or key in {"canva_strategy_url", "canva_url"}:
+            continue
+        if preserve_manual and str(fields.get(key) or "").strip():
+            continue
+        fields[key] = text
+    for note in pending.get("source_notes") or []:
+        if note and note not in notes:
+            notes.append(note)
+
+    fields.pop("pending_proposal", None)
+    fields["review_status"] = "concept"
+    return save_strategy(
+        conn,
+        client_id,
+        account_info=current["account_info"],
+        start_answers=answers,
+        strategy_fields=fields,
+        source_notes=notes,
+        mark_complete=False,
+        provenance_updates=provenance_updates,
+    )
+
+
+def discard_strategy_proposal(conn, client_id: int) -> dict[str, Any]:
+    """Drop staged proposal without changing saved answers."""
+    current = get_strategy(conn, client_id)
+    fields = dict(current["strategy_fields"] or {})
+    if "pending_proposal" not in fields:
+        return current
+    fields.pop("pending_proposal", None)
+    fields["review_status"] = "concept"
+    return save_strategy(
+        conn,
+        client_id,
+        account_info=current["account_info"],
+        start_answers=current["start_answers"],
+        strategy_fields=fields,
+        source_notes=current["source_notes"],
         mark_complete=False,
     )
 
@@ -267,5 +417,5 @@ def strategy_overview(conn, client_id: int) -> dict[str, Any]:
         **data,
         "overview_sections": sections,
         "missing_overview": missing,
-        "canva_url": fields.get("canva_strategy_url") or "",
+        "canva_url": data.get("canva_url") or fields.get("canva_strategy_url") or "",
     }

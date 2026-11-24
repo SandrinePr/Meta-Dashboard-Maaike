@@ -220,11 +220,18 @@ def build_client_report_pdf_bytes(presentation: dict[str, Any]) -> bytes:
     story.append(
         Paragraph(
             f"Klant: <b>{_esc(presentation.get('client_name'))}</b> · "
-            f"Verslagperiode: {_esc(presentation.get('period_label'))} · "
-            f"Vergelijkingsperiode: {_esc(presentation.get('compare_label'))}",
+            f"Verslagperiode: {_esc(presentation.get('period_label_nl') or presentation.get('period_label'))} · "
+            f"Vergelijkingsperiode: {_esc(presentation.get('compare_label_nl') or presentation.get('compare_label'))}",
             styles["meta"],
         )
     )
+    if presentation.get("format_pattern_period_nl"):
+        story.append(
+            Paragraph(
+                f"Periode voor formats en terugkerende patronen: {_esc(presentation.get('format_pattern_period_nl'))}",
+                styles["meta"],
+            )
+        )
     story.append(
         Paragraph(
             f"Rapportversie v{_esc(presentation.get('version'))} · "

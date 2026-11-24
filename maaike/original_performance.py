@@ -6,7 +6,7 @@ from datetime import date
 
 from maaike.feed import feed_card
 from maaike.presentation import format_sync_moment
-from maaike.repository import get_client, list_posts
+from maaike.repository import get_client, is_verified_link, list_posts
 
 METRIC_KEYS = ("views", "likes", "comments", "saves", "shares")
 METRIC_LABELS = {
@@ -56,6 +56,7 @@ def performance_month_payload(
     if not months:
         return {
             "client_id": client_id,
+            "client_name": client.name,
             "months": [],
             "selected": None,
             "sections": [],
@@ -64,7 +65,7 @@ def performance_month_payload(
             "empty_message": "No posts available yet to show performance by month.",
             "caption": None,
             "latest_month_label": None,
-            "refresh_available": bool(client.meta_status == "connected"),
+            "refresh_available": is_verified_link(client),
             "months_span": span,
             "span_options": [1, 2, 3, 4, 5, 6],
         }
@@ -115,6 +116,7 @@ def performance_month_payload(
         period_label = f"{format_month_label(*oldest)} – {format_month_label(*selected)} ({span} maanden)"
     return {
         "client_id": client_id,
+        "client_name": client.name,
         "months": [
             {
                 "year": y,

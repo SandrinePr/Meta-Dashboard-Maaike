@@ -1,10 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, API_URL } from "../api.js";
 import PostAnalysisPanel from "../components/PostAnalysisPanel.jsx";
-import RatingBadge from "../components/RatingBadge.jsx";
 import ResultCard from "../components/ResultCard.jsx";
-
-const EDITABLE = new Set(["Contentformat", "Contentpijler", "Hook"]);
 
 /** Normalize Publicatiedatum cells (ISO or DD-MM-YYYY) to YYYY-MM-DD for filters/sort. */
 function toIsoDate(value) {
@@ -19,20 +16,29 @@ function toIsoDate(value) {
   return raw.slice(0, 10);
 }
 
+function dutchUnsetLabel(label) {
+  if (!label || label === "not set" || label === "not available") return "Nog niet ingevuld";
+  return label;
+}
+
 export default function PostsPage({
   client,
   focusPostId,
-  onOpenFeed,
+  focusSeq = 0,
   onClearFocus,
   initialDateFrom = "",
   initialDateTo = "",
+  reloadToken = 0,
+  missingFilterSignal = 0,
+  onOpenConnect,
+  onPostsChanged,
   periodHint = "",
   showImportExportButton = true,
 }) {
   const [overview, setOverview] = useState(null);
   const [error, setError] = useState("");
+  const [adminError, setAdminError] = useState("");
   const [notice, setNotice] = useState("");
-  const [fetching, setFetching] = useState(false);
   const [importing, setImporting] = useState(false);
   const [preview, setPreview] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -51,15 +57,29 @@ export default function PostsPage({
   const [sortKey, setSortKey] = useState("date_desc");
   const [contentMatchIds, setContentMatchIds] = useState(null);
   const [contentMatchNote, setContentMatchNote] = useState("");
+  const [expandedPostId, setExpandedPostId] = useState(focusPostId ? Number(focusPostId) : null);
 
-  async function reload() {
-    const payload = await api(`/api/clients/${client.id}/posts`);
-    setOverview(payload);
-  }
+  const reload = useCallback(
+    async (guard = () => true) => {
+      const targetId = client.id;
+      const payload = await api(`/api/clients/${targetId}/posts`);
+      if (!guard()) return null;
+      if (payload?.client_id != null && Number(payload.client_id) !== Number(targetId)) {
+        return null;
+      }
+      setOverview(payload);
+      return payload;
+    },
+    [client.id],
+  );
 
   useEffect(() => {
+    let active = true;
+    setOverview(null);
     setNotice("");
     setError("");
+    setAdminError("");
+    setPreview(null);
     setImportExportOpen(false);
     setDraftQuery("");
     setContentMatchIds(null);
@@ -74,8 +94,28 @@ export default function PostsPage({
       date_to: initialDateTo || "",
       missing: "",
     });
-    reload().catch((exc) => setError(exc.message));
-  }, [client.id]);
+    reload(() => active).catch((exc) => {
+      if (!active) return;
+      setError("De berichten van deze klant konden niet worden geladen.");
+      setAdminError(exc.message || "");
+    });
+    return () => {
+      active = false;
+    };
+  }, [client.id, reload]);
+
+  useEffect(() => {
+    if (!reloadToken) return undefined;
+    let active = true;
+    reload(() => active).catch((exc) => {
+      if (!active) return;
+      setError("Het verversen van de berichtenlijst is niet gelukt.");
+      setAdminError(exc.message || "");
+    });
+    return () => {
+      active = false;
+    };
+  }, [reloadToken, reload]);
 
   useEffect(() => {
     setFilters((current) => ({
@@ -86,14 +126,23 @@ export default function PostsPage({
   }, [initialDateFrom, initialDateTo]);
 
   useEffect(() => {
+    if (!missingFilterSignal) return;
+    setFilters((current) => ({
+      ...current,
+      missing: "any",
+    }));
+  }, [missingFilterSignal]);
+
+  useEffect(() => {
     if (!focusPostId || !overview) return;
+    setExpandedPostId(Number(focusPostId));
     const row = document.getElementById(`log-post-${focusPostId}`);
     if (row) {
       row.scrollIntoView({ behavior: "smooth", block: "center" });
       row.classList.add("is-focused");
     }
     onClearFocus?.();
-  }, [focusPostId, overview]);
+  }, [focusPostId, focusSeq, overview]);
 
   const totalPosts = overview?.posts?.length || 0;
 
@@ -108,8 +157,8 @@ export default function PostsPage({
         seen.add(id);
       }
       const label =
-        String(post.cells?.Platform || post.platform_label || post.platform || "Unknown").trim() ||
-        "Unknown";
+        String(post.cells?.Platform || post.platform_label || post.platform || "Overig").trim() ||
+        "Overig";
       counts.set(label, (counts.get(label) || 0) + 1);
     }
     const preferred = ["Facebook", "Instagram", "LinkedIn", "LinkedIn - Zakelijk"];
@@ -158,7 +207,10 @@ export default function PostsPage({
           .toLowerCase();
         if (!hay.includes(q)) return false;
       }
-      if (filters.platform && !String(cells.Platform || "").toLowerCase().includes(filters.platform.toLowerCase())) {
+      if (
+        filters.platform &&
+        !String(cells.Platform || "").toLowerCase().includes(filters.platform.toLowerCase())
+      ) {
         return false;
       }
       if (
@@ -167,10 +219,16 @@ export default function PostsPage({
       ) {
         return false;
       }
-      if (filters.format && !String(cells.Contentformat || "").toLowerCase().includes(filters.format.toLowerCase())) {
+      if (
+        filters.format &&
+        !String(cells.Contentformat || "").toLowerCase().includes(filters.format.toLowerCase())
+      ) {
         return false;
       }
-      if (filters.pillar && !String(cells.Contentpijler || "").toLowerCase().includes(filters.pillar.toLowerCase())) {
+      if (
+        filters.pillar &&
+        !String(cells.Contentpijler || "").toLowerCase().includes(filters.pillar.toLowerCase())
+      ) {
         return false;
       }
       const missing = post.missing_classification || {
@@ -200,14 +258,30 @@ export default function PostsPage({
       }
       if (sortKey === "format") {
         return (
-          String(ca.Contentformat || "").localeCompare(String(cb.Contentformat || "")) || db.localeCompare(da)
+          String(ca.Contentformat || "").localeCompare(String(cb.Contentformat || "")) ||
+          db.localeCompare(da)
         );
       }
-      // date_desc default
       return db.localeCompare(da) || b.post_id - a.post_id;
     });
     return sorted;
   }, [overview, filters, sortKey, contentMatchIds]);
+
+  function clearAllFilters() {
+    setDraftQuery("");
+    setContentMatchIds(null);
+    setContentMatchNote("");
+    setFilters({
+      q: "",
+      platform: "",
+      content_soort: "",
+      format: "",
+      pillar: "",
+      date_from: "",
+      date_to: "",
+      missing: "",
+    });
+  }
 
   function exportUrl(ext) {
     const params = new URLSearchParams();
@@ -221,6 +295,7 @@ export default function PostsPage({
   async function runPreview(file) {
     setImporting(true);
     setError("");
+    setAdminError("");
     try {
       const body = new FormData();
       if (file) body.append("file", file);
@@ -231,10 +306,11 @@ export default function PostsPage({
       });
       setPreview(payload);
       setNotice(
-        `Import preview: ${payload.counts?.add || 0} new, ${payload.counts?.link || 0} to link, ${payload.counts?.conflict || 0} conflict, ${payload.counts?.skip || 0} skip.`
+        `Voorbeeld klaar: ${payload.counts?.add || 0} nieuw, ${payload.counts?.link || 0} aan te vullen, ${payload.counts?.conflict || 0} verschil, ${payload.counts?.skip || 0} overslaan.`,
       );
     } catch (exc) {
-      setError(exc.message);
+      setError("Het lezen van het Excel-bestand is niet gelukt.");
+      setAdminError(exc.message || "");
     } finally {
       setImporting(false);
     }
@@ -243,6 +319,7 @@ export default function PostsPage({
   async function runImport(file) {
     setImporting(true);
     setError("");
+    setAdminError("");
     try {
       const body = new FormData();
       if (file) body.append("file", file);
@@ -253,109 +330,100 @@ export default function PostsPage({
       });
       setPreview(null);
       await reload();
+      await onPostsChanged?.();
       setNotice(
-        `Import complete: ${payload.applied?.added || 0} added, ${payload.applied?.linked || 0} linked, ${payload.applied?.conflicts || 0} conflict unchanged, ${payload.applied?.skipped || 0} skipped.`
+        `Excel verwerkt: ${payload.applied?.added || 0} toegevoegd, ${payload.applied?.linked || 0} aangevuld, ${payload.applied?.conflicts || 0} verschillen ongewijzigd gelaten.`,
       );
     } catch (exc) {
-      setError(exc.message);
+      setError("Het inlezen van het Excel-bestand is niet gelukt.");
+      setAdminError(exc.message || "");
     } finally {
       setImporting(false);
     }
   }
 
   if (!overview) {
-    return error ? <p className="banner error">{error}</p> : <p className="muted">Loading…</p>;
+    return error ? (
+      <div className="stack">
+        <p className="banner error">{error}</p>
+        {adminError ? (
+          <details>
+            <summary className="hint" style={{ cursor: "pointer" }}>
+              Technische foutdetails (alleen voor beheer)
+            </summary>
+            <pre className="hint" style={{ whiteSpace: "pre-wrap" }}>
+              {adminError}
+            </pre>
+          </details>
+        ) : null}
+      </div>
+    ) : (
+      <p className="muted">Berichten van {client.name} laden…</p>
+    );
   }
+
+  const channelState = overview.channel_status?.state || (overview.fetch_available ? "ready_to_view" : "connect_required");
+  const unsetText = dutchUnsetLabel(overview.unset_label);
 
   return (
     <div className="stack">
-      <div className="search-form-header">
-        <h3>All posts</h3>
-      </div>
-      <p className="hint">
-        Post cards like Performance: image, caption, platform, account, date and figures. Open a
-        card to edit format, pillar, hook and Figma, and to request Claude feedback. Search,
-        filters and CSV/Excel export stay. Empty, “n.v.t.” and 0 stay distinct.
-      </p>
-      {periodHint ? <p className="hint">{periodHint}</p> : null}
-      <p>
-        <strong>Figures last updated:</strong> {overview.synced_at || "not fetched yet"}
-      </p>
-      <p className="banner">
-        <strong>Total posts:</strong> {totalPosts}
-        {platformAvailability.length ? (
-          <>
-            {" "}
-            · <strong>By platform:</strong>{" "}
-            {platformAvailability.map(([label, count]) => `${label} ${count}`).join(" · ")}
-          </>
-        ) : null}
-        . Counts are unique post records for this client (comments and assessments are not posts).
-        LinkedIn and other imported platforms stay visible here.
-      </p>
-
-      <RatingSettingsPanel
-        client={client}
-        summary={overview.rating_settings}
-        onSaved={async () => {
-          await reload();
-          setNotice("Rating settings saved; scores recalculated.");
-        }}
-        onError={setError}
-      />
-
-      <ActivityPanel client={client} />
-
-      <div className="row-actions wrap">
-        {showImportExportButton ? (
-          <button
-            className={importExportOpen ? "primary" : "secondary"}
-            type="button"
-            onClick={() => setImportExportOpen((open) => !open)}
-          >
-            Import &amp; Export
-          </button>
-        ) : null}
-        <button className="secondary" type="button" onClick={() => setShowAdd(true)}>
-          Add post
-        </button>
-        <button
-          className="secondary"
-          type="button"
-          disabled={!overview.fetch_available || fetching}
-          title={
-            overview.fetch_available
-              ? "Fetch posts via the linked Meta accounts"
-              : "Connect Meta first under client settings"
-          }
-          onClick={() => {
-            setFetching(true);
-            setError("");
-            api(`/api/clients/${client.id}/posts/fetch`, { method: "POST", body: {} })
-              .then((payload) => {
-                setOverview(payload);
-                setNotice(payload.fetch_message || "Fetch complete.");
-              })
-              .catch((exc) => setError(exc.message))
-              .finally(() => setFetching(false));
-          }}
+      {/* Uitleg bij Alle berichten voor Jet of Mo (punt 18) */}
+      <section className="card stack" style={{ gap: "0.65rem" }}>
+        <div
+          className="row-actions wrap"
+          style={{ justifyContent: "space-between", alignItems: "flex-start" }}
         >
-          {fetching ? "Fetching…" : "Fetch posts (Meta)"}
-        </button>
-      </div>
+          <div className="stack" style={{ gap: "0.3rem", maxWidth: "46rem" }}>
+            <h3 style={{ margin: 0 }}>Alle berichten</h3>
+            <p className="hint" style={{ margin: 0 }}>
+              Hier staan de opgehaalde berichten van <strong>{client.name}</strong>.{" "}
+              <strong>Jet of Mo</strong> kan hier per bericht het contentformat, de contentpijler,
+              de hook en een Figma-link invullen, beelden toevoegen of een kort inzicht bewaren. Je
+              kunt hieronder ook zoeken, filteren of het overzicht downloaden in Excel of CSV.
+            </p>
+          </div>
+          <div className="row-actions wrap">
+            <button className="secondary" type="button" onClick={() => setShowAdd(true)}>
+              Bericht handmatig toevoegen
+            </button>
+            {showImportExportButton ? (
+              <button
+                className={importExportOpen ? "primary" : "secondary"}
+                type="button"
+                onClick={() => setImportExportOpen((open) => !open)}
+              >
+                Excel inlezen of downloaden
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        {periodHint ? <p className="hint" style={{ margin: 0 }}>{periodHint}</p> : null}
+
+        <p style={{ margin: 0 }}>
+          <strong>Totaal eigen berichten van {client.name}:</strong> {totalPosts}
+          {platformAvailability.length ? (
+            <>
+              {" "}
+              · <strong>Per kanaal:</strong>{" "}
+              {platformAvailability.map(([label, count]) => `${label}: ${count}`).join(" · ")}
+            </>
+          ) : null}
+        </p>
+      </section>
 
       {showImportExportButton && importExportOpen ? (
         <section className="card stack">
           <div className="search-form-header">
-            <h3>Import &amp; Export</h3>
+            <h3>Excel inlezen of downloaden</h3>
           </div>
           <p className="hint">
-            Post/Excel import and filtered post exports for this client. Full dashboard JSON backup
-            lives under Settings → Backup &amp; restore.
+            Lees een bestaand Excel-overzicht in voor {client.name}, of download de huidige selectie
+            als Excel- of CSV-bestand.
           </p>
           <div className="row-actions wrap">
             <label className="secondary file-btn">
-              Import Excel
+              Excel-bestand kiezen
               <input
                 type="file"
                 accept=".xlsx,.xlsm"
@@ -377,41 +445,38 @@ export default function PostsPage({
         </section>
       ) : null}
 
-      {!overview.fetch_available ? (
-        <p className="banner warn-soft">
-          Meta is not yet linked for this client. Go to <strong>client settings</strong> → connect
-          Meta → choose Facebook/Instagram account → return here to fetch posts. Without a link
-          you can still import Excel or edit existing rows.
-        </p>
-      ) : null}
-
       {preview ? (
         <div className="card stack">
           <p>
-            Preview for <strong>{preview.file_name}</strong> / {preview.sheet}: {preview.row_count} rows.
+            Voorbeeld voor <strong>{preview.file_name}</strong> ({preview.sheet}): {preview.row_count}{" "}
+            rijen gecontroleerd.
           </p>
           <p className="hint">
-            Conflicts and unclear matches stay unchanged until manual review. Re-import does not create
-            unwanted duplicate posts.
+            Twijfelgevallen worden niet overschreven. Opnieuw inlezen maakt geen dubbele berichten aan.
           </p>
           <div className="row-actions">
-            <button className="primary" type="button" disabled={importing} onClick={() => runImport(null)}>
-              {importing ? "Importing…" : "Apply safe additions/updates"}
+            <button
+              className="primary"
+              type="button"
+              disabled={importing}
+              onClick={() => runImport(null)}
+            >
+              {importing ? "Bezig met verwerken…" : "Veilige aanvullingen opslaan"}
             </button>
             <button className="secondary" type="button" onClick={() => setPreview(null)}>
-              Cancel preview
+              Annuleren
             </button>
           </div>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Row</th>
-                  <th>Action</th>
-                  <th>Platform</th>
-                  <th>URL</th>
-                  <th>Fields</th>
-                  <th>Conflicts/issues</th>
+                  <th>Rij</th>
+                  <th>Actie</th>
+                  <th>Kanaal</th>
+                  <th>Link</th>
+                  <th>Velden</th>
+                  <th>Aandachtspunten</th>
                 </tr>
               </thead>
               <tbody>
@@ -428,148 +493,205 @@ export default function PostsPage({
               </tbody>
             </table>
           </div>
-          {(preview.rows || []).length > 40 ? (
-            <p className="hint">Showing first 40 preview rows of {preview.rows.length}.</p>
+        </div>
+      ) : null}
+
+      {/* Zoeken en filteren alleen tonen zodra er berichten voor deze klant bestaan */}
+      {totalPosts > 0 ? (
+        <section className="card stack">
+          <div
+            className="row-actions wrap"
+            style={{ justifyContent: "space-between", alignItems: "center" }}
+          >
+            <h3 style={{ margin: 0 }}>Zoeken &amp; filteren</h3>
+            {filtersActive ? (
+              <button className="secondary" type="button" onClick={clearAllFilters}>
+                Alle filters wissen (toon alle {totalPosts} berichten)
+              </button>
+            ) : null}
+          </div>
+          <form
+            className="filters-row"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setFilters({ ...filters, q: draftQuery.trim() });
+            }}
+          >
+            <label style={{ flex: "1 1 16rem" }}>
+              Zoekwoord
+              <input
+                value={draftQuery}
+                onChange={(e) => setDraftQuery(e.target.value)}
+                placeholder="Zoek op berichttekst, hook, inzicht of link…"
+              />
+            </label>
+            <div className="row-actions" style={{ alignItems: "end" }}>
+              <button className="primary" type="submit">
+                Zoeken
+              </button>
+              {filters.q || draftQuery ? (
+                <button
+                  className="secondary"
+                  type="button"
+                  onClick={() => {
+                    setDraftQuery("");
+                    setFilters({ ...filters, q: "" });
+                  }}
+                >
+                  Zoekwoord wissen
+                </button>
+              ) : null}
+            </div>
+          </form>
+          <div className="filters-row">
+            <label>
+              Kanaal
+              <input
+                value={filters.platform}
+                onChange={(e) => setFilters({ ...filters, platform: e.target.value })}
+                placeholder="Instagram, Facebook, LinkedIn…"
+              />
+            </label>
+            <label>
+              Contentformat
+              <input
+                value={filters.format}
+                onChange={(e) => setFilters({ ...filters, format: e.target.value })}
+                placeholder="bijv. Reel of Carrousel"
+              />
+            </label>
+            <label>
+              Contentpijler
+              <input
+                value={filters.pillar}
+                onChange={(e) => setFilters({ ...filters, pillar: e.target.value })}
+                placeholder="bijv. Inspiratie of Kennis"
+              />
+            </label>
+            <label>
+              Controlestatus
+              <select
+                value={filters.missing}
+                onChange={(e) => setFilters({ ...filters, missing: e.target.value })}
+              >
+                <option value="">Alle berichten</option>
+                <option value="any">Nog na te kijken (format, pijler of hook mist)</option>
+                <option value="format">Contentformat ontbreekt</option>
+                <option value="pillar">Contentpijler ontbreekt</option>
+                <option value="hook">Hook ontbreekt</option>
+              </select>
+            </label>
+            <label>
+              Vanaf datum
+              <input
+                type="date"
+                value={filters.date_from}
+                onChange={(e) => setFilters({ ...filters, date_from: e.target.value })}
+              />
+            </label>
+            <label>
+              Tot en met datum
+              <input
+                type="date"
+                value={filters.date_to}
+                onChange={(e) => setFilters({ ...filters, date_to: e.target.value })}
+              />
+            </label>
+            <label>
+              Volgorde
+              <select value={sortKey} onChange={(e) => setSortKey(e.target.value)}>
+                <option value="date_desc">Nieuwste eerst</option>
+                <option value="date_asc">Oudste eerst</option>
+                <option value="platform">Kanaal (A–Z)</option>
+                <option value="format">Contentformat (A–Z)</option>
+              </select>
+            </label>
+          </div>
+          <details>
+            <summary className="hint" style={{ cursor: "pointer" }}>
+              Uitgebreid zoeken in reacties, tags en hashtags
+            </summary>
+            <ContentMatchSearch
+              client={client}
+              onMatch={(ids, note) => {
+                setContentMatchIds(ids);
+                setContentMatchNote(note || "");
+              }}
+              onClear={() => {
+                setContentMatchIds(null);
+                setContentMatchNote("");
+              }}
+              active={contentMatchIds != null}
+            />
+          </details>
+          <p className="hint" style={{ margin: 0 }}>
+            {filtersActive ? (
+              <>
+                <strong> Zichtbaar:</strong> {filteredPosts.length} van {totalPosts} berichten voor{" "}
+                {client.name}
+              </>
+            ) : (
+              <>
+                Alle <strong>{totalPosts}</strong> berichten van {client.name} staan in beeld
+              </>
+            )}
+            {filters.q ? ` · zoekwoord “${filters.q}”` : ""}
+            {contentMatchNote ? ` · ${contentMatchNote}` : ""}.
+          </p>
+        </section>
+      ) : null}
+
+      {error ? (
+        <div className="stack">
+          <p className="banner error">{error}</p>
+          {adminError ? (
+            <details>
+              <summary className="hint" style={{ cursor: "pointer" }}>
+                Technische foutdetails (alleen voor beheer)
+              </summary>
+              <pre className="hint" style={{ whiteSpace: "pre-wrap" }}>
+                {adminError}
+              </pre>
+            </details>
           ) : null}
         </div>
       ) : null}
+      {notice ? <p className="banner">{notice}</p> : null}
 
-      <section className="card stack">
-        <div className="search-form-header">
-          <h3>Search, filters &amp; sorting</h3>
-        </div>
-        <form
-          className="filters-row"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setFilters({ ...filters, q: draftQuery.trim() });
-          }}
-        >
-          <label style={{ flex: "1 1 16rem" }}>
-            Search
-            <input
-              value={draftQuery}
-              onChange={(e) => setDraftQuery(e.target.value)}
-              placeholder="Caption, hook, insight, platform, URL…"
-            />
-          </label>
-          <div className="row-actions" style={{ alignItems: "end" }}>
-            <button className="primary" type="submit">
-              Search
-            </button>
-            <button
-              className="secondary"
-              type="button"
-              onClick={() => {
-                setDraftQuery("");
-                setFilters({ ...filters, q: "" });
-              }}
-            >
-              Clear search
-            </button>
-          </div>
-        </form>
-        <div className="filters-row">
-          <label>
-            Platform/account
-            <input
-              value={filters.platform}
-              onChange={(e) => setFilters({ ...filters, platform: e.target.value })}
-              placeholder="Instagram / LinkedIn…"
-            />
-          </label>
-          <label>
-            Content type
-            <input
-              value={filters.content_soort}
-              onChange={(e) => setFilters({ ...filters, content_soort: e.target.value })}
-            />
-          </label>
-          <label>
-            Format
-            <input value={filters.format} onChange={(e) => setFilters({ ...filters, format: e.target.value })} />
-          </label>
-          <label>
-            Content pillar
-            <input value={filters.pillar} onChange={(e) => setFilters({ ...filters, pillar: e.target.value })} />
-          </label>
-          <label>
-            Missing classification
-            <select value={filters.missing} onChange={(e) => setFilters({ ...filters, missing: e.target.value })}>
-              <option value="">All posts</option>
-              <option value="any">Format, pillar or hook missing</option>
-              <option value="format">Format missing</option>
-              <option value="pillar">Pillar missing</option>
-              <option value="hook">Hook missing</option>
-            </select>
-          </label>
-          <label>
-            From
-            <input
-              type="date"
-              value={filters.date_from}
-              onChange={(e) => setFilters({ ...filters, date_from: e.target.value })}
-            />
-          </label>
-          <label>
-            To
-            <input
-              type="date"
-              value={filters.date_to}
-              onChange={(e) => setFilters({ ...filters, date_to: e.target.value })}
-            />
-          </label>
-          <label>
-            Sort
-            <select value={sortKey} onChange={(e) => setSortKey(e.target.value)}>
-              <option value="date_desc">Newest publication first</option>
-              <option value="date_asc">Oldest publication first</option>
-              <option value="platform">Platform (A–Z)</option>
-              <option value="format">Format (A–Z)</option>
-            </select>
-          </label>
-        </div>
-        <ContentMatchSearch
-          client={client}
-          onMatch={(ids, note) => {
-            setContentMatchIds(ids);
-            setContentMatchNote(note || "");
-          }}
-          onClear={() => {
-            setContentMatchIds(null);
-            setContentMatchNote("");
-          }}
-          active={contentMatchIds != null}
-        />
-        <p className="hint">
-          {filtersActive ? (
+      {/* Lege staten in helder Nederlands (punt 16, 17 & 18) */}
+      {totalPosts === 0 ? (
+        <section className="card stack" style={{ gap: "0.6rem" }}>
+          {channelState === "connect_required" ? (
             <>
-              <strong>Found:</strong> {filteredPosts.length} posts (of {totalPosts} total for this
-              client)
+              <strong>Koppel eerst je accounts voor {client.name}</strong>
+              <p style={{ margin: 0 }}>
+                Er zijn nog geen berichten om te tonen omdat Facebook en Instagram nog niet zijn
+                gekoppeld voor {client.name}. Koppel eerst de accounts via de knop bovenaan, of voeg
+                alvast handmatig een bericht of Excel-bestand toe.
+              </p>
+              <div className="row-actions wrap">
+                {onOpenConnect ? (
+                  <button className="primary" type="button" onClick={onOpenConnect}>
+                    Accounts koppelen
+                  </button>
+                ) : null}
+                <button className="secondary" type="button" onClick={() => setShowAdd(true)}>
+                  Bericht handmatig toevoegen
+                </button>
+              </div>
             </>
           ) : (
             <>
-              Showing all <strong>{totalPosts}</strong> posts for this client
+              <strong>Haal je eerste berichten op voor {client.name}</strong>
+              <p style={{ margin: 0 }}>
+                Facebook en Instagram zijn gekoppeld, maar er zijn nog geen berichten opgehaald voor{" "}
+                {client.name}. Gebruik de knop <strong>Eerste berichten ophalen</strong> bovenaan dit
+                scherm om te beginnen.
+              </p>
             </>
           )}
-          {filters.q ? ` · search “${filters.q}”` : ""}
-          {contentMatchNote ? ` · ${contentMatchNote}` : ""}. Download CSV/Excel uses the same filters
-          (including search and “missing classification”). Sorting applies on screen; export follows
-          publication date newest→oldest.
-        </p>
-      </section>
-
-      {error ? <p className="banner error">{error}</p> : null}
-      {notice ? <p className="banner">{notice}</p> : null}
-
-      {!overview.posts.length ? (
-        <p className="banner">
-          No posts yet for this client. Link Meta under client settings and click “Fetch posts”, or import
-          an Excel file above.
-        </p>
-      ) : null}
-
-      {filteredPosts.length ? (
+        </section>
+      ) : filteredPosts.length > 0 ? (
         <div className="results-list logs-cards">
           {filteredPosts.map((post) => (
             <LogPostCard
@@ -580,19 +702,50 @@ export default function PostsPage({
               formats={overview.formats}
               pillars={overview.pillars}
               hooks={overview.hooks || []}
-              unsetLabel={overview.unset_label}
-              focused={Number(focusPostId) === Number(post.id)}
+              unsetLabel={unsetText}
+              focused={Number(focusPostId) === Number(post.id) || Number(expandedPostId) === Number(post.id)}
               onSaved={async () => {
                 await reload();
-                setNotice("Saved.");
+                await onPostsChanged?.();
+                setNotice("Wijzigingen bij dit bericht zijn opgeslagen.");
               }}
-              onError={setError}
+              onError={(msg) => setError(msg == null ? "" : msg)}
             />
           ))}
         </div>
       ) : (
-        <p className="banner">{overview.empty_message}</p>
+        <section className="card stack" style={{ gap: "0.6rem" }}>
+          <strong>Geen berichten binnen deze filters</strong>
+          <p style={{ margin: 0 }}>
+            Er staan wel {totalPosts} berichten voor {client.name}, maar geen enkel bericht valt
+            binnen de gekozen datum of zoekopdracht.
+          </p>
+          <div>
+            <button className="primary" type="button" onClick={clearAllFilters}>
+              Alle filters wissen en alle {totalPosts} berichten tonen
+            </button>
+          </div>
+        </section>
       )}
+
+      {/* Technische en beheeropties alleen open te klappen voor beheer (punt 17) */}
+      <details className="card">
+        <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+          Beheer &amp; technische controle (alleen voor beheer)
+        </summary>
+        <div className="stack" style={{ marginTop: "0.85rem" }}>
+          <RatingSettingsPanel
+            client={client}
+            summary={overview.rating_settings}
+            onSaved={async () => {
+              await reload();
+              setNotice("Beoordelingsformule bijgewerkt.");
+            }}
+            onError={setError}
+          />
+          <ActivityPanel client={client} />
+        </div>
+      </details>
 
       {showAdd ? (
         <AddPostModal
@@ -601,14 +754,22 @@ export default function PostsPage({
           onCreated={async () => {
             setShowAdd(false);
             await reload();
-            setNotice("Post added manually.");
+            await onPostsChanged?.();
+            setNotice("Bericht is handmatig toegevoegd.");
           }}
-          onError={setError}
+          onError={(msg) => setError(msg == null ? "" : msg)}
         />
       ) : null}
     </div>
   );
 }
+
+const MATCH_TYPE_LABELS = {
+  comment: "Reacties",
+  tag: "Tags (@)",
+  hashtag: "Hashtags (#)",
+  caption: "Berichttekst",
+};
 
 function ContentMatchSearch({ client, onMatch, onClear, active }) {
   const [query, setQuery] = useState("");
@@ -627,7 +788,7 @@ function ContentMatchSearch({ client, onMatch, onClear, active }) {
     event?.preventDefault?.();
     const q = query.trim();
     if (q.length < 3) {
-      setError("Type at least 3 characters for content search.");
+      setError("Vul minimaal 3 tekens in om te zoeken.");
       return;
     }
     const platforms = [
@@ -638,7 +799,7 @@ function ContentMatchSearch({ client, onMatch, onClear, active }) {
       .filter(([, on]) => on)
       .map(([key]) => key);
     if (!platforms.length || !typeList.length) {
-      setError("Select at least one platform and type.");
+      setError("Kies minimaal één kanaal en één onderdeel om in te zoeken.");
       return;
     }
     setBusy(true);
@@ -655,12 +816,9 @@ function ContentMatchSearch({ client, onMatch, onClear, active }) {
         const id = item.post_id || item.id;
         if (id != null && !ids.includes(id)) ids.push(id);
       }
-      onMatch?.(
-        ids,
-        `content search “${q}”: ${ids.length} matching post(s) (Instagram/Facebook captions & comments; LinkedIn rows stay in the full list when this filter is cleared)`,
-      );
-    } catch (exc) {
-      setError(exc.message);
+      onMatch?.(ids, `gevonden via zoeken op “${q}” (${ids.length} berichten)`);
+    } catch {
+      setError("Het zoeken in reacties en hashtags is niet gelukt.");
     } finally {
       setBusy(false);
     }
@@ -668,17 +826,16 @@ function ContentMatchSearch({ client, onMatch, onClear, active }) {
 
   return (
     <div className="stack" style={{ marginTop: "0.75rem" }}>
-      <p className="hint">
-        Optional: search captions, comments, tags and hashtags (Instagram/Facebook). Matches filter
-        this same All posts card list. Clear to show LinkedIn/imported rows again.
+      <p className="hint" style={{ margin: 0 }}>
+        Zoek gericht in Instagram- en Facebook-reacties, tags (@), hashtags (#) en berichtteksten.
       </p>
       <form className="filters-row" onSubmit={runSearch}>
         <label style={{ flex: "1 1 16rem" }}>
-          Content search (comments / tags / hashtags / captions)
+          Zoek in reacties, tags of hashtags
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="At least 3 characters…"
+            placeholder="Minimaal 3 tekens…"
           />
         </label>
         <div className="filter-chips" style={{ alignSelf: "end" }}>
@@ -703,13 +860,13 @@ function ContentMatchSearch({ client, onMatch, onClear, active }) {
               className={on ? "chip is-on" : "chip"}
               onClick={() => setTypes((current) => ({ ...current, [key]: !current[key] }))}
             >
-              {key}
+              {MATCH_TYPE_LABELS[key] || key}
             </button>
           ))}
         </div>
         <div className="row-actions" style={{ alignItems: "end" }}>
           <button className="secondary" type="submit" disabled={busy}>
-            {busy ? "Searching…" : "Filter table"}
+            {busy ? "Zoeken…" : "Lijst filteren"}
           </button>
           {active ? (
             <button
@@ -721,7 +878,7 @@ function ContentMatchSearch({ client, onMatch, onClear, active }) {
                 onClear?.();
               }}
             >
-              Clear content filter
+              Filter wissen
             </button>
           ) : null}
         </div>
@@ -741,14 +898,22 @@ function ActivityPanel({ client }) {
   });
 
   useEffect(() => {
+    let active = true;
     const params = new URLSearchParams();
     if (filters.activity_type) params.set("activity_type", filters.activity_type);
     if (filters.status) params.set("status", filters.status);
     if (filters.errors_only) params.set("errors_only", "true");
     const q = params.toString();
     api(`/api/clients/${client.id}/activity${q ? `?${q}` : ""}`)
-      .then(setData)
-      .catch((exc) => setError(exc.message));
+      .then((res) => {
+        if (active) setData(res);
+      })
+      .catch((exc) => {
+        if (active) setError(exc.message || "");
+      });
+    return () => {
+      active = false;
+    };
   }, [client.id, filters]);
 
   const exportHref = (() => {
@@ -761,32 +926,36 @@ function ActivityPanel({ client }) {
   })();
 
   return (
-    <section className="card stack">
-      <h3>Activity overview</h3>
-      <p className="hint">{data?.note || "Loading…"}</p>
+    <section className="stack" style={{ gap: "0.65rem" }}>
+      <h4 style={{ margin: 0 }}>Technisch activiteitenlogboek ({client.name})</h4>
       <div className="filters-row">
         <label>
-          Type
+          Onderdeel
           <select
             value={filters.activity_type}
             onChange={(e) => setFilters({ ...filters, activity_type: e.target.value })}
           >
-            <option value="">(all)</option>
-            {(data?.activity_types || ["meta_sync", "excel_import", "ai", "report", "data_import"]).map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
+            <option value="">Alle onderdelen</option>
+            {(data?.activity_types || ["meta_sync", "excel_import", "ai", "report", "data_import"]).map(
+              (t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ),
+            )}
           </select>
         </label>
         <label>
           Status
-          <select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
-            <option value="">(all)</option>
-            <option value="ok">ok</option>
-            <option value="pending">pending</option>
-            <option value="error">error</option>
-            <option value="info">info</option>
+          <select
+            value={filters.status}
+            onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+          >
+            <option value="">Alle statussen</option>
+            <option value="ok">Gelukt (ok)</option>
+            <option value="pending">Bezig (pending)</option>
+            <option value="error">Fout (error)</option>
+            <option value="info">Melding (info)</option>
           </select>
         </label>
         <label className="row-actions">
@@ -795,10 +964,10 @@ function ActivityPanel({ client }) {
             checked={filters.errors_only}
             onChange={(e) => setFilters({ ...filters, errors_only: e.target.checked })}
           />
-          Errors only
+          Alleen foutmeldingen
         </label>
         <a className="secondary" href={exportHref}>
-          Activity CSV
+          Download logboek (CSV)
         </a>
       </div>
       {error ? <p className="banner error">{error}</p> : null}
@@ -806,11 +975,11 @@ function ActivityPanel({ client }) {
         <table>
           <thead>
             <tr>
-              <th>Date/time</th>
-              <th>Client</th>
-              <th>Activity type</th>
+              <th>Datum en tijd</th>
+              <th>Klant</th>
+              <th>Onderdeel</th>
               <th>Status</th>
-              <th>Details</th>
+              <th>Technische details</th>
             </tr>
           </thead>
           <tbody>
@@ -820,7 +989,9 @@ function ActivityPanel({ client }) {
           </tbody>
         </table>
       </div>
-      {!data?.events?.length ? <p className="hint">No activity events for these filters yet.</p> : null}
+      {!data?.events?.length ? (
+        <p className="hint">Nog geen technische logregels gevonden voor deze selectie.</p>
+      ) : null}
     </section>
   );
 }
@@ -851,7 +1022,7 @@ function ActivityEventRows({ ev }) {
           <div className="stack" style={{ gap: "0.35rem" }}>
             <span className={showErrorRow ? undefined : "cell-clip"}>
               {ev.display_status === "ready" && ev.has_earlier_failures
-                ? "Latest attempt succeeded. Earlier failures are under Pogingen bekijken."
+                ? "Laatste poging gelukt. Eerdere pogingen staan onder Pogingen bekijken."
                 : summary}
             </span>
             {earlier.length ? (
@@ -876,7 +1047,7 @@ function ActivityEventRows({ ev }) {
               <td>{attempt.occurred_at_label || attempt.occurred_at || "—"}</td>
               <td>{ev.client_name}</td>
               <td>
-                attempt · #{attempt.report_id}
+                poging · #{attempt.report_id}
                 {attempt.title ? ` · ${attempt.title}` : ""}
               </td>
               <td>
@@ -908,22 +1079,28 @@ function AddPostModal({ clientId, onClose, onCreated, onError }) {
   return (
     <div className="modal-backdrop">
       <div className="modal card stack">
-        <h3>Add post</h3>
-        <p className="hint">For Excel/LinkedIn posts without a Meta link. No Meta login required.</p>
+        <h3>Bericht handmatig toevoegen</h3>
+        <p className="hint">
+          Handig voor bijvoorbeeld een LinkedIn-bericht of los bericht zonder directe koppeling.
+        </p>
         <label>
-          Platform label
+          Kanaal
           <input value={platformLabel} onChange={(e) => setPlatformLabel(e.target.value)} />
         </label>
         <label>
-          Post URL
-          <input value={permalink} onChange={(e) => setPermalink(e.target.value)} />
+          Link naar het bericht
+          <input
+            value={permalink}
+            onChange={(e) => setPermalink(e.target.value)}
+            placeholder="https://…"
+          />
         </label>
         <label>
-          Publication date
+          Publicatiedatum
           <input type="date" value={publishedAt} onChange={(e) => setPublishedAt(e.target.value)} />
         </label>
         <label>
-          Hook
+          Hook (optioneel)
           <input value={hook} onChange={(e) => setHook(e.target.value)} />
         </label>
         <div className="row-actions">
@@ -939,7 +1116,10 @@ function AddPostModal({ clientId, onClose, onCreated, onError }) {
                   method: "POST",
                   body: {
                     platform_label: platformLabel,
-                    platform_key: platformLabel.toLowerCase().replace(/\s+/g, "_").replace(/-+/g, "_"),
+                    platform_key: platformLabel
+                      .toLowerCase()
+                      .replace(/\s+/g, "_")
+                      .replace(/-+/g, "_"),
                     permalink,
                     published_at: publishedAt || undefined,
                     hook,
@@ -947,16 +1127,16 @@ function AddPostModal({ clientId, onClose, onCreated, onError }) {
                 });
                 await onCreated();
               } catch (exc) {
-                onError(exc.message);
+                onError(exc.message || "Het bericht kon niet worden opgeslagen.");
               } finally {
                 setBusy(false);
               }
             }}
           >
-            Save
+            {busy ? "Opslaan…" : "Bericht opslaan"}
           </button>
           <button className="secondary" type="button" onClick={onClose}>
-            Cancel
+            Annuleren
           </button>
         </div>
       </div>
@@ -974,7 +1154,15 @@ function useDraft(post) {
     setPillarId(post.pillar_id == null ? "" : String(post.pillar_id));
     setHook(post.cells?.Hook || post.hook || "");
     setFigmaUrl(post.figma_url || post.cells?.Figma || "");
-  }, [post.id, post.format_id, post.pillar_id, post.hook, post.figma_url, post.cells?.Hook, post.cells?.Figma]);
+  }, [
+    post.id,
+    post.format_id,
+    post.pillar_id,
+    post.hook,
+    post.figma_url,
+    post.cells?.Hook,
+    post.cells?.Figma,
+  ]);
   return { formatId, setFormatId, pillarId, setPillarId, hook, setHook, figmaUrl, setFigmaUrl };
 }
 
@@ -991,8 +1179,8 @@ async function saveDraft(clientId, post, draft, onSaved, onError) {
       },
     });
     await onSaved();
-  } catch (exc) {
-    onError(exc.message);
+  } catch {
+    onError("Het opslaan van de indeling is niet gelukt.");
   }
 }
 
@@ -1016,6 +1204,20 @@ function LogPostCard({
     if (focused) setOpen(true);
   }, [focused]);
 
+  const missingLabels = [];
+  if (post.format_id == null) missingLabels.push("Contentformat");
+  if (post.pillar_id == null) missingLabels.push("Contentpijler");
+  if (!String(post.hook || post.cells?.Hook || "").trim()) missingLabels.push("Hook");
+
+  const formatDisplay =
+    post.cells?.Contentformat && post.cells.Contentformat !== "not set"
+      ? post.cells.Contentformat
+      : unsetLabel;
+  const pillarDisplay =
+    post.cells?.Contentpijler && post.cells.Contentpijler !== "not set"
+      ? post.cells.Contentpijler
+      : unsetLabel;
+
   const cardPost = {
     ...post,
     dom_id: `log-post-${post.id}`,
@@ -1035,29 +1237,33 @@ function LogPostCard({
       query={query}
       focused={focused || open}
       detailsOpen={open}
-      detailsLabel="Indeling & feedback"
-      detailsOpenLabel="Sluit indeling"
+      detailsLabel="Bericht nakijken"
+      detailsOpenLabel="Sluiten"
       onOpenDetails={() => setOpen((value) => !value)}
     >
       <div className="logs-card-meta">
         <span>
-          <strong>Format:</strong> {post.cells?.Contentformat || unsetLabel}
+          <strong>Format:</strong> {formatDisplay}
         </span>
         <span>
-          <strong>Pijler:</strong> {post.cells?.Contentpijler || unsetLabel}
+          <strong>Pijler:</strong> {pillarDisplay}
         </span>
         <span>
-          <strong>Hook:</strong> {post.hook || post.cells?.Hook || "—"}
+          <strong>Hook:</strong> {post.hook || post.cells?.Hook || unsetLabel}
         </span>
-        {feedback ? (
-          <span className="hint" style={{ margin: 0 }}>
-            Feedback: {feedback.provider} · {feedback.model}
-            {feedback.prompt_version ? ` · ${feedback.prompt_version}` : ""}
+        {missingLabels.length > 0 ? (
+          <span
+            className="badge"
+            style={{
+              background: "rgba(245, 158, 11, 0.22)",
+              border: "1px solid rgba(251, 191, 36, 0.45)",
+              color: "#fde68a",
+            }}
+          >
+            Nog na te kijken: {missingLabels.join(", ")}
           </span>
         ) : (
-          <span className="hint" style={{ margin: 0 }}>
-            Nog geen Claude-feedback opgeslagen
-          </span>
+          <span className="badge badge-active">Gecontroleerd</span>
         )}
       </div>
       {open ? (
@@ -1114,11 +1320,21 @@ function LogPostCard({
               type="button"
               onClick={() => saveDraft(clientId, post, draft, onSaved, onError)}
             >
-              Save format, pillar, hook &amp; Figma
+              Indeling opslaan
             </button>
           </div>
-          <MediaUploadPanel clientId={clientId} postId={post.id} onError={onError} onSaved={onSaved} />
-          <PostAnalysisPanel clientId={clientId} postId={post.id} onError={onError} onSaved={onSaved} />
+          <MediaUploadPanel
+            clientId={clientId}
+            postId={post.id}
+            onError={onError}
+            onSaved={onSaved}
+          />
+          <PostAnalysisPanel
+            clientId={clientId}
+            postId={post.id}
+            onError={onError}
+            onSaved={onSaved}
+          />
         </div>
       ) : null}
     </ResultCard>
@@ -1133,7 +1349,7 @@ function MediaUploadPanel({ clientId, postId, onError, onSaved }) {
   function reload() {
     return api(`/api/clients/${clientId}/posts/${postId}/media`)
       .then((payload) => setAssets(payload.assets || []))
-      .catch((exc) => onError?.(exc.message));
+      .catch(() => {});
   }
 
   useEffect(() => {
@@ -1142,48 +1358,50 @@ function MediaUploadPanel({ clientId, postId, onError, onSaved }) {
 
   return (
     <div className="stack" style={{ marginTop: "0.75rem" }}>
-      <p className="hint">
-        Upload media (without Meta). Carousel: multiple files, order adjustable. Files belong to
-        this client/post.
+      <p className="hint" style={{ margin: 0 }}>
+        Extra beeld of video bij dit bericht toevoegen (bijvoorbeeld voor een carrousel).
       </p>
-      <label className="secondary file-btn">
-        Upload image/video
-        <input
-          type="file"
-          accept="image/*,video/*,.jpg,.jpeg,.png,.webp,.gif,.mp4,.mov,.m4v,.webm"
-          multiple
-          hidden
-          onChange={(event) => {
-            const list = event.target.files;
-            if (!list?.length) return;
-            const body = new FormData();
-            Array.from(list).forEach((file) => body.append("files", file));
-            setBusy(true);
-            setNotice("");
-            api(`/api/clients/${clientId}/posts/${postId}/media`, { method: "POST", body, raw: true })
-              .then(async (payload) => {
-                setAssets(payload.assets || []);
-                setNotice(
-                  `${(payload.saved || []).length} file(s) saved` +
-                    (payload.errors?.length ? `; ${payload.errors.join(" ")}` : "")
-                );
-                await onSaved?.();
+      <div className="row-actions wrap">
+        <label className="secondary file-btn">
+          Afbeelding of video kiezen
+          <input
+            type="file"
+            accept="image/*,video/*,.jpg,.jpeg,.png,.webp,.gif,.mp4,.mov,.m4v,.webm"
+            multiple
+            hidden
+            onChange={(event) => {
+              const list = event.target.files;
+              if (!list?.length) return;
+              const body = new FormData();
+              Array.from(list).forEach((file) => body.append("files", file));
+              setBusy(true);
+              setNotice("");
+              api(`/api/clients/${clientId}/posts/${postId}/media`, {
+                method: "POST",
+                body,
+                raw: true,
               })
-              .catch((exc) => onError?.(exc.message))
-              .finally(() => {
-                setBusy(false);
-                event.target.value = "";
-              });
-          }}
-        />
-      </label>
-      {busy ? <p className="muted">Working…</p> : null}
+                .then(async (payload) => {
+                  setAssets(payload.assets || []);
+                  setNotice(`${(payload.saved || []).length} bestand(en) toegevoegd.`);
+                  await onSaved?.();
+                })
+                .catch(() => onError?.("Het uploaden van het bestand is niet gelukt."))
+                .finally(() => {
+                  setBusy(false);
+                  event.target.value = "";
+                });
+            }}
+          />
+        </label>
+      </div>
+      {busy ? <p className="muted">Bezig met uploaden…</p> : null}
       {notice ? <p className="hint">{notice}</p> : null}
       {assets.length ? (
         <ol className="plain-list">
           {assets.map((asset, index) => (
             <li key={asset.id}>
-              {asset.position}. {asset.kind} · {asset.original_name} · {asset.byte_size} bytes · {asset.source}
+              {asset.position}. {asset.original_name}{" "}
               <span className="row-actions">
                 <button
                   className="secondary"
@@ -1199,11 +1417,11 @@ function MediaUploadPanel({ clientId, postId, onError, onSaved }) {
                       body: { ordered_ids: next },
                     })
                       .then((payload) => setAssets(payload.assets || []))
-                      .catch((exc) => onError?.(exc.message))
+                      .catch(() => onError?.("Volgorde aanpassen is niet gelukt."))
                       .finally(() => setBusy(false));
                   }}
                 >
-                  Up
+                  Omhoog
                 </button>
                 <button
                   className="secondary"
@@ -1219,19 +1437,17 @@ function MediaUploadPanel({ clientId, postId, onError, onSaved }) {
                       body: { ordered_ids: next },
                     })
                       .then((payload) => setAssets(payload.assets || []))
-                      .catch((exc) => onError?.(exc.message))
+                      .catch(() => onError?.("Volgorde aanpassen is niet gelukt."))
                       .finally(() => setBusy(false));
                   }}
                 >
-                  Down
+                  Omlaag
                 </button>
               </span>
             </li>
           ))}
         </ol>
-      ) : (
-        <p className="hint">No uploads yet. Meta URLs remain available separately if present.</p>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -1240,25 +1456,27 @@ function Editor({ column, draft, formats, pillars, hooks = [], unsetLabel, listI
   if (column === "Hook") {
     return (
       <div className="stack" style={{ gap: "0.35rem" }}>
-        <select
-          value=""
-          onChange={(event) => {
-            const chosen = event.target.value;
-            if (chosen) draft.setHook(chosen);
-          }}
-        >
-          <option value="">Choose hook from legend…</option>
-          {hooks.map((item) => (
-            <option key={item.id} value={item.name}>
-              {item.name}
-            </option>
-          ))}
-        </select>
+        {hooks.length ? (
+          <select
+            value=""
+            onChange={(event) => {
+              const chosen = event.target.value;
+              if (chosen) draft.setHook(chosen);
+            }}
+          >
+            <option value="">Kies een hook uit de legenda…</option>
+            {hooks.map((item) => (
+              <option key={item.id} value={item.name}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+        ) : null}
         <input
           list={listId}
           value={draft.hook}
           onChange={(event) => draft.setHook(event.target.value)}
-          placeholder="Or type a hook"
+          placeholder="Typ de openingszin of hook"
         />
         <datalist id={listId}>
           {hooks.map((item) => (
@@ -1283,51 +1501,6 @@ function Editor({ column, draft, formats, pillars, hooks = [], unsetLabel, listI
   );
 }
 
-function ReadCell({ column, value, post }) {
-  if (column === "Beoordeling") {
-    return <RatingBadge rating={post?.formula_rating} showExplanation />;
-  }
-  if (column === "Media") {
-    if (post?.cover_url) {
-      return (
-        <img
-          className="logs-media-thumb"
-          src={post.cover_url}
-          alt=""
-          loading="lazy"
-          referrerPolicy="no-referrer"
-          onError={(event) => {
-            event.currentTarget.replaceWith(
-              Object.assign(document.createElement("span"), {
-                className: "muted",
-                textContent: "No thumbnail",
-              }),
-            );
-          }}
-        />
-      );
-    }
-    if (typeof value === "string") {
-      const parts = value.split(/\s+/).filter(Boolean);
-      if (parts.length && parts.every((part) => part.startsWith("https://"))) {
-        return <span className="muted">No thumbnail</span>;
-      }
-    }
-    return value || "";
-  }
-  if (column === "Post-URL" && typeof value === "string") {
-    const parts = value.split(/\s+/).filter(Boolean);
-    if (parts.length && parts.every((part) => part.startsWith("https://"))) {
-      return parts.map((part) => (
-        <a key={part} href={part} target="_blank" rel="noreferrer">
-          {part}
-        </a>
-      ));
-    }
-  }
-  return value || "";
-}
-
 function RatingSettingsPanel({ client, summary, onSaved, onError }) {
   const [open, setOpen] = useState(false);
   const [settings, setSettings] = useState(null);
@@ -1345,25 +1518,23 @@ function RatingSettingsPanel({ client, summary, onSaved, onError }) {
 
   if (!open) {
     return (
-      <section className="card stack">
-        <div className="row-actions" style={{ justifyContent: "space-between" }}>
-          <div>
-            <strong>Rating formula</strong>
-            <p className="hint" style={{ margin: "0.25rem 0 0" }}>
-              {summary?.active
-                ? `Active: ${summary.profile_name || "formula"}${summary.is_provisional ? " (Provisional)" : ""}`
-                : "Not active — rating waits for an explicit formula + thresholds."}
-            </p>
-          </div>
-          <button className="secondary" type="button" onClick={() => setOpen(true)}>
-            Settings
-          </button>
+      <div className="row-actions" style={{ justifyContent: "space-between" }}>
+        <div>
+          <strong>Automatische beoordelingsformule</strong>
+          <p className="hint" style={{ margin: "0.2rem 0 0" }}>
+            {summary?.active
+              ? `Actief: ${summary.profile_name || "formule"}${summary.is_provisional ? " (voorlopig)" : ""}`
+              : "Staat uit — wordt pas actief nadat beheer een formule en drempelwaarden instelt."}
+          </p>
         </div>
-      </section>
+        <button className="secondary" type="button" onClick={() => setOpen(true)}>
+          Formule beheren
+        </button>
+      </div>
     );
   }
 
-  if (!settings) return <p className="muted">Loading rating settings…</p>;
+  if (!settings) return <p className="muted">Formule-instellingen laden…</p>;
 
   const weights = settings.weights || {};
 
@@ -1371,7 +1542,10 @@ function RatingSettingsPanel({ client, summary, onSaved, onError }) {
     setBusy(true);
     onError("");
     try {
-      const payload = await api(`/api/clients/${client.id}/rating-settings`, { method: "PUT", body });
+      const payload = await api(`/api/clients/${client.id}/rating-settings`, {
+        method: "PUT",
+        body,
+      });
       setSettings(payload);
       await onSaved();
     } catch (exc) {
@@ -1382,22 +1556,20 @@ function RatingSettingsPanel({ client, summary, onSaved, onError }) {
   }
 
   return (
-    <section className="card stack">
+    <section className="stack">
       <div className="row-actions" style={{ justifyContent: "space-between" }}>
-        <h3 style={{ margin: 0 }}>Rating formula (per client)</h3>
+        <h4 style={{ margin: 0 }}>Beoordelingsformule per klant</h4>
         <button className="secondary" type="button" onClick={() => setOpen(false)}>
-          Collapse
+          Inklappen
         </button>
       </div>
-      <p className="hint">
-        Maaike’s final formula has not been delivered yet. Only use a template with “Voorlopig” in the name.
-        Missing figures are not counted as 0. Activate only after filling in thresholds.
-      </p>
       <p className="hint">{settings.comparison_disclaimer}</p>
       {(settings.activation_blockers || []).length ? (
-        <p className="banner">Still needed before activating: {(settings.activation_blockers || []).join(" ")}</p>
+        <p className="banner">
+          Nog nodig vóór activeren: {(settings.activation_blockers || []).join(" ")}
+        </p>
       ) : (
-        <p className="banner">Thresholds and formula are complete — you can activate.</p>
+        <p className="banner">Drempelwaarden en formule zijn compleet en kunnen geactiveerd worden.</p>
       )}
       <div className="row-actions wrap">
         {(settings.catalog || []).map((item) => (
@@ -1408,31 +1580,36 @@ function RatingSettingsPanel({ client, summary, onSaved, onError }) {
             disabled={busy}
             onClick={() => save({ load_template: item.key, formula_key: item.key })}
           >
-            Load {item.name}
+            Sjabloon laden: {item.name}
           </button>
         ))}
       </div>
       <label>
-        Name
+        Naam formule
         <input
           value={settings.profile_name || ""}
           onChange={(e) => setSettings({ ...settings, profile_name: e.target.value })}
         />
       </label>
       <label>
-        Denominator
+        Delen door
         <select
           value={settings.denominator_metric || "reach"}
           onChange={(e) => setSettings({ ...settings, denominator_metric: e.target.value })}
         >
-          <option value="reach">Reach</option>
-          <option value="views">Views</option>
+          <option value="reach">Bereik</option>
+          <option value="views">Weergaven</option>
         </select>
       </label>
       <div className="filters-row">
-        {["likes", "comments", "shares", "saves"].map((metric) => (
+        {[
+          ["likes", "Weging likes"],
+          ["comments", "Weging reacties"],
+          ["shares", "Weging gedeeld"],
+          ["saves", "Weging opgeslagen"],
+        ].map(([metric, label]) => (
           <label key={metric}>
-            Weight {metric}
+            {label}
             <input
               type="number"
               step="0.1"
@@ -1447,42 +1624,24 @@ function RatingSettingsPanel({ client, summary, onSaved, onError }) {
           </label>
         ))}
         <label>
-          Good ≥
+          Goed vanaf (≥)
           <input
             type="number"
             step="0.1"
             value={settings.good_min ?? ""}
-            placeholder="enter explicitly"
             onChange={(e) => setSettings({ ...settings, good_min: e.target.value })}
           />
         </label>
         <label>
-          Average ≥
+          Gemiddeld vanaf (≥)
           <input
             type="number"
             step="0.1"
             value={settings.average_min ?? ""}
-            placeholder="enter explicitly"
             onChange={(e) => setSettings({ ...settings, average_min: e.target.value })}
           />
         </label>
-        <label>
-          Min. age (hours, optional)
-          <input
-            type="number"
-            step="1"
-            value={settings.min_age_hours ?? ""}
-            onChange={(e) => setSettings({ ...settings, min_age_hours: e.target.value })}
-          />
-        </label>
       </div>
-      <label>
-        Notes
-        <textarea
-          value={settings.notes || ""}
-          onChange={(e) => setSettings({ ...settings, notes: e.target.value })}
-        />
-      </label>
       <div className="row-actions">
         <button
           className="primary"
@@ -1503,7 +1662,7 @@ function RatingSettingsPanel({ client, summary, onSaved, onError }) {
             })
           }
         >
-          Save (stays off)
+          Opslaan (blijft uit)
         </button>
         <button
           className="primary"
@@ -1524,7 +1683,7 @@ function RatingSettingsPanel({ client, summary, onSaved, onError }) {
             })
           }
         >
-          Save + activate
+          Opslaan &amp; aanzetten
         </button>
         <button
           className="secondary"
@@ -1532,7 +1691,7 @@ function RatingSettingsPanel({ client, summary, onSaved, onError }) {
           disabled={busy || !settings.active}
           onClick={() => save({ active: false })}
         >
-          Deactivate
+          Uitzetten
         </button>
       </div>
     </section>

@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from maaike.feed import FEED_PAGE_SIZE, MIN_QUERY_LENGTH, feed_card, parse_media_urls
 from maaike.presentation import NOT_AVAILABLE, _kind_label, _platform_label, format_sync_moment
-from maaike.repository import get_client, list_posts
+from maaike.repository import get_client, is_verified_link, latest_sync_at, list_posts
 
 AMSTERDAM = ZoneInfo("Europe/Amsterdam")
 _HASHTAG = re.compile(r"#([A-Za-z0-9_]+)", re.I)
@@ -17,38 +17,168 @@ _MENTION = re.compile(r"@([A-Za-z0-9._]+)", re.I)
 MATCH_TYPES = ("comment", "tag", "hashtag", "caption")
 
 
+def build_channel_status(conn, client, posts=None) -> dict:
+    """Truthful per-client connection + fetch status for Socialmediaberichten."""
+    own_posts = list(posts) if posts is not None else list_posts(conn, client.client_id)
+    own_count = len(own_posts)
+    ig_count = sum(1 for p in own_posts if p.platform == "instagram")
+    fb_count = sum(1 for p in own_posts if p.platform == "facebook")
+    other_count = max(0, own_count - ig_count - fb_count)
+
+    raw_row = conn.execute(
+        "SELECT meta_page_id, meta_ig_user_id FROM clients WHERE id = ?",
+        (client.client_id,),
+    ).fetchone()
+    has_page_id = bool(raw_row and str(raw_row["meta_page_id"] or "").strip())
+    has_ig_id = bool(raw_row and str(raw_row["meta_ig_user_id"] or "").strip())
+
+    verified = is_verified_link(client)
+    fb_connected = bool(verified and (has_page_id or bool((client.meta_page_name or "").strip())))
+    ig_connected = bool(verified and (has_ig_id or bool((client.meta_ig_username or "").strip())))
+
+    fb_label = (
+        f"Gekoppeld ({client.meta_page_name})"
+        if fb_connected and client.meta_page_name
+        else ("Gekoppeld" if fb_connected else "Niet gekoppeld")
+    )
+    ig_label = (
+        f"Gekoppeld (@{client.meta_ig_username.lstrip('@')})"
+        if ig_connected and client.meta_ig_username
+        else ("Gekoppeld" if ig_connected else "Niet gekoppeld")
+    )
+
+    last_raw = client.last_fetch_at or latest_sync_at(conn, client.client_id)
+    formatted_sync = format_sync_moment(last_raw) if last_raw else None
+    has_fetched = bool(formatted_sync and formatted_sync not in {"not available", "niet beschikbaar", "—"})
+    last_fetched_label = formatted_sync if has_fetched else "Nog nooit opgehaald"
+
+    meta_state = str(client.meta_status or "not_connected")
+    if not verified:
+        state_code = "connect_required"
+        headline = "Koppel eerst je accounts"
+        if meta_state in {"expired", "revoked"}:
+            next_action = (
+                f"De koppeling met Facebook/Instagram voor {client.name} is verlopen. "
+                "Koppel de accounts opnieuw om berichten op te halen."
+            )
+        elif own_count > 0:
+            next_action = (
+                f"Facebook en Instagram zijn nog niet gekoppeld voor {client.name}. "
+                f"Er staan al wel {own_count} ingelezen bericht(en) klaar om te bekijken."
+            )
+        else:
+            next_action = (
+                f"Koppel Facebook en Instagram voor {client.name} om berichten automatisch op te halen."
+            )
+        action_key = "connect_accounts"
+        action_label = "Accounts koppelen"
+    elif own_count == 0:
+        state_code = "fetch_first_posts"
+        headline = "Haal je eerste berichten op"
+        if has_fetched:
+            next_action = (
+                f"De accounts van {client.name} zijn gekoppeld, maar er zijn nog geen berichten gevonden. "
+                "Haal je berichten opnieuw op of voeg handmatig een bericht toe."
+            )
+        else:
+            next_action = (
+                f"Facebook en Instagram zijn gekoppeld voor {client.name}. "
+                "Klik op de knop om de eerste berichten op te halen."
+            )
+        action_key = "fetch_first"
+        action_label = "Eerste berichten ophalen"
+    else:
+        state_code = "ready_to_view"
+        headline = "Je berichten zijn klaar om te bekijken"
+        missing_channels = []
+        if not fb_connected:
+            missing_channels.append("Facebook")
+        if not ig_connected:
+            missing_channels.append("Instagram")
+        extra = (
+            f" Let op: {', '.join(missing_channels)} is nog niet gekoppeld."
+            if missing_channels
+            else ""
+        )
+        next_action = (
+            f"Er staan {own_count} berichten van {client.name} klaar. "
+            f"Haal nieuwe berichten op wanneer je cijfers wilt bijwerken.{extra}"
+        )
+        action_key = "fetch_updates"
+        action_label = "Nieuwe berichten ophalen"
+
+    admin_detail = None
+    if not verified and client.meta_status_detail:
+        admin_detail = str(client.meta_status_detail).strip() or None
+    elif client.last_fetch_status in {"error", "failed"} and client.last_fetch_detail:
+        admin_detail = str(client.last_fetch_detail).strip() or None
+
+    return {
+        "state": state_code,
+        "headline": headline,
+        "next_action": next_action,
+        "action_key": action_key,
+        "action_label": action_label,
+        "connected": verified,
+        "meta_status": meta_state,
+        "facebook": {
+            "connected": fb_connected,
+            "account_name": client.meta_page_name or None,
+            "label": fb_label,
+            "post_count": fb_count,
+        },
+        "instagram": {
+            "connected": ig_connected,
+            "account_name": f"@{client.meta_ig_username.lstrip('@')}" if client.meta_ig_username else None,
+            "label": ig_label,
+            "post_count": ig_count,
+        },
+        "other_post_count": other_count,
+        "own_post_count": own_count,
+        "has_fetched": has_fetched,
+        "last_fetched_at": last_raw,
+        "last_fetched_label": last_fetched_label,
+        "last_fetch_status": client.last_fetch_status,
+        "admin_error_detail": admin_detail,
+    }
+
+
 def sync_totals(conn, client_id: int) -> dict:
     """Sidebar Synchronisatie counts for one client. Missing comments stay null, never invent 0."""
     client = get_client(conn, client_id)
     if client is None:
         raise ValueError("This client is not in the list.")
     posts = list_posts(conn, client_id)
+    own_post_ids = {int(p.post_id) for p in posts}
     ig_posts = sum(1 for p in posts if p.platform == "instagram")
     fb_posts = sum(1 for p in posts if p.platform == "facebook")
     comments_ready = _comments_table_ready(conn)
     ig_comments = None
     fb_comments = None
     # Empty comments table after migration is not the same as “0 comments from Meta”.
-    if comments_ready:
+    if comments_ready and own_post_ids:
+        placeholders = ",".join("?" for _ in own_post_ids)
+        params_all = (client_id, *sorted(own_post_ids))
         total_comments = int(
             conn.execute(
-                "SELECT COUNT(*) FROM comments WHERE client_id = ?",
-                (client_id,),
+                f"SELECT COUNT(*) FROM comments WHERE client_id = ? AND post_id IN ({placeholders})",
+                params_all,
             ).fetchone()[0]
         )
         if total_comments > 0:
             ig_comments = int(
                 conn.execute(
-                    "SELECT COUNT(*) FROM comments WHERE client_id = ? AND platform = 'instagram'",
-                    (client_id,),
+                    f"SELECT COUNT(*) FROM comments WHERE client_id = ? AND platform = 'instagram' AND post_id IN ({placeholders})",
+                    params_all,
                 ).fetchone()[0]
             )
             fb_comments = int(
                 conn.execute(
-                    "SELECT COUNT(*) FROM comments WHERE client_id = ? AND platform = 'facebook'",
-                    (client_id,),
+                    f"SELECT COUNT(*) FROM comments WHERE client_id = ? AND platform = 'facebook' AND post_id IN ({placeholders})",
+                    params_all,
                 ).fetchone()[0]
             )
+    channel_status = build_channel_status(conn, client, posts=posts)
     return {
         "client_id": client_id,
         "instagram_posts": ig_posts,
@@ -56,13 +186,14 @@ def sync_totals(conn, client_id: int) -> dict:
         "instagram_comments": ig_comments,
         "facebook_comments": fb_comments,
         "instagram_comments_label": (
-            str(ig_comments) if ig_comments is not None else "not fetched yet"
+            str(ig_comments) if ig_comments is not None else "Nog niet opgehaald"
         ),
         "facebook_comments_label": (
-            str(fb_comments) if fb_comments is not None else "not fetched yet"
+            str(fb_comments) if fb_comments is not None else "Nog niet opgehaald"
         ),
-        "synced_at": format_sync_moment(client.last_fetch_at) if client.last_fetch_at else "not fetched yet",
+        "synced_at": channel_status["last_fetched_label"],
         "comments_synced": ig_comments is not None or fb_comments is not None,
+        "channel_status": channel_status,
     }
 
 
@@ -182,6 +313,9 @@ def _comments_table_ready(conn) -> bool:
 def _list_comments(conn, client_id, platforms, date_from, date_to) -> list[dict]:
     if not _comments_table_ready(conn):
         return []
+    own_post_ids = {int(p.post_id) for p in list_posts(conn, client_id)}
+    if not own_post_ids:
+        return []
     rows = conn.execute(
         """
         SELECT id, post_id, platform, external_id, text, permalink, published_at, author_name
@@ -193,6 +327,8 @@ def _list_comments(conn, client_id, platforms, date_from, date_to) -> list[dict]
     ).fetchall()
     out = []
     for row in rows:
+        if int(row["post_id"]) not in own_post_ids:
+            continue
         if row["platform"] not in platforms:
             continue
         if not _in_date(row["published_at"], date_from, date_to):

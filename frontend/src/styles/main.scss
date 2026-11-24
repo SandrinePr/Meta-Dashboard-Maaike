@@ -2021,6 +2021,54 @@ button.linkish {
   font: inherit;
 }
 
+.strategy-header-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.strategy-status {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  max-width: 42rem;
+}
+
+.strategy-status.is-draft {
+  border-color: rgba(180, 190, 210, 0.35);
+}
+
+.strategy-status.is-review {
+  border-color: rgba(220, 170, 70, 0.55);
+  background: rgba(220, 170, 70, 0.1);
+}
+
+.strategy-status.is-final {
+  border-color: rgba(110, 180, 130, 0.55);
+  background: rgba(110, 180, 130, 0.12);
+}
+
+.strategy-status-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+}
+
+.strategy-proposal-card {
+  border-color: rgba(220, 170, 70, 0.45);
+}
+
+a.button.secondary {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
 .setup-block-head {
   display: flex;
   align-items: center;

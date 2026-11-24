@@ -41,37 +41,37 @@ START_QUESTIONS = [
     {
         "key": "website",
         "label": "Website",
-        "short_question": "Wat is de website van Red Rock Agency?",
+        "short_question": "Wat is de website van deze klant?",
         "required_for_complete": True,
     },
     {
         "key": "bedrijfsomschrijving",
         "label": "Bedrijfsomschrijving",
-        "short_question": "Hoe omschrijven jullie Red Rock Agency kort?",
+        "short_question": "Hoe omschrijven jullie dit bedrijf kort?",
         "required_for_complete": True,
     },
     {
         "key": "sectoren",
         "label": "Sectoren",
-        "short_question": "Voor welke sectoren werken jullie?",
+        "short_question": "Voor welke sectoren werkt deze klant?",
         "required_for_complete": True,
     },
     {
         "key": "geografische_regio",
         "label": "Geografisch werkgebied",
-        "short_question": "Wat is jullie geografische werkgebied? (Alleen invullen als dit vaststaat.)",
+        "short_question": "Wat is het geografische werkgebied? (Alleen invullen als dit vaststaat.)",
         "required_for_complete": True,
     },
     {
         "key": "producten_diensten",
         "label": "Producten / diensten",
-        "short_question": "Welke producten/diensten bieden jullie aan?",
+        "short_question": "Welke producten/diensten biedt deze klant aan?",
         "required_for_complete": True,
     },
     {
         "key": "onderscheidend_vermogen",
         "label": "Onderscheidend vermogen",
-        "short_question": "Wat maakt Red Rock anders volgens jullie?",
+        "short_question": "Wat maakt dit merk onderscheidend?",
         "required_for_complete": True,
     },
     {
@@ -83,13 +83,13 @@ START_QUESTIONS = [
     {
         "key": "platforms",
         "label": "Platforms",
-        "short_question": "Kloppen de platforms en accountlabels uit de bronbestanden?",
+        "short_question": "Welke platforms en accountlabels gelden voor deze klant?",
         "required_for_complete": True,
     },
     {
         "key": "tone_of_voice",
         "label": "Tone of voice",
-        "short_question": "Wil je de overgenomen tone of voice aanpassen?",
+        "short_question": "Wat is de tone of voice? Pas een voorstel gerust aan.",
         "required_for_complete": True,
     },
     {
@@ -111,6 +111,18 @@ START_QUESTIONS = [
         "required_for_complete": False,
     },
 ]
+
+# Internal strategy_fields keys — not shown as free-text strategy fields in the UI.
+STRATEGY_META_KEYS = {
+    "pending_proposal",
+    "answer_provenance",
+    "field_provenance",
+    "review_status",
+    "last_pdf_meta",
+    "strategy_pdf_ref",
+    "canva_strategy_url",
+    "canva_url",
+}
 
 
 def _is_manual_answer(value: str) -> bool:
@@ -142,17 +154,109 @@ def _now() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
+def _infer_provenance(value: str) -> str:
+    """Guess source of an already stored answer when no explicit provenance exists."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.upper().startswith("HAMSTER-HANDMATIG"):
+        return "editor"
+    markers = ("(bron:", "bron:", "red-rock-agency", "redrockagency.nl", "pdf-strategie")
+    lowered = text.lower()
+    if any(marker in lowered for marker in markers):
+        return "hamster"
+    return "editor"
+
+
+def _public_strategy_fields(fields: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in (fields or {}).items() if k not in STRATEGY_META_KEYS}
+
+
+def _build_field_status(
+    *,
+    answers: dict[str, Any],
+    fields: dict[str, Any],
+    pending_proposal: dict[str, Any] | None,
+) -> dict[str, Any]:
+    provenance = dict((fields or {}).get("answer_provenance") or {})
+    proposed_answers = dict((pending_proposal or {}).get("start_answers") or {})
+    editor_filled: list[dict[str, str]] = []
+    hamster_ready: list[dict[str, str]] = []
+    missing_required: list[dict[str, str]] = []
+    for question in START_QUESTIONS:
+        key = question["key"]
+        label = question["label"]
+        value = str(answers.get(key) or "").strip()
+        proposed = str(proposed_answers.get(key) or "").strip()
+        source = str(provenance.get(key) or "").strip() or (_infer_provenance(value) if value else "")
+        if value and source == "editor":
+            editor_filled.append({"key": key, "label": label, "value": value})
+        elif value and source in {"hamster", "approved"}:
+            hamster_ready.append(
+                {
+                    "key": key,
+                    "label": label,
+                    "value": value,
+                    "state": "opgenomen" if source == "approved" else "voorstel_opgenomen",
+                }
+            )
+        elif proposed:
+            hamster_ready.append(
+                {
+                    "key": key,
+                    "label": label,
+                    "value": proposed,
+                    "state": "te_controleren",
+                }
+            )
+        elif question.get("required_for_complete") and not value:
+            missing_required.append({"key": key, "label": label})
+        elif value:
+            # Unknown provenance with content → treat as editor-owned.
+            editor_filled.append({"key": key, "label": label, "value": value})
+    return {
+        "editor_filled": editor_filled,
+        "hamster_proposals": hamster_ready,
+        "missing_required_items": missing_required,
+    }
+
+
+def resolve_review_status(
+    *,
+    completed_at: str | None,
+    fields: dict[str, Any],
+    answers: dict[str, Any],
+    pending_proposal: dict[str, Any] | None,
+) -> str:
+    explicit = str((fields or {}).get("review_status") or "").strip().lower()
+    if completed_at:
+        return "definitief"
+    if pending_proposal:
+        return "te_controleren"
+    if explicit in {"concept", "te_controleren", "definitief"}:
+        return explicit
+    if any(str(v or "").strip() for v in (answers or {}).values()):
+        return "concept"
+    return "concept"
+
+
 def get_strategy(conn, client_id: int) -> dict[str, Any]:
     row = conn.execute(
         "SELECT * FROM client_strategy WHERE client_id = ?",
         (client_id,),
     ).fetchone()
     if row is None:
+        from maaike.strategy_files import resolve_strategy_pdf_status
+
         pending = _pending_user_questions({})
+        empty_fields: dict[str, Any] = {}
+        status = _build_field_status(answers={}, fields=empty_fields, pending_proposal=None)
+        pdf_status = resolve_strategy_pdf_status(conn, client_id, empty_fields)
         return {
             "account_info": {},
             "start_answers": {},
             "strategy_fields": {},
+            "public_strategy_fields": {},
             "source_notes": [],
             "completed_at": None,
             "updated_at": None,
@@ -160,14 +264,60 @@ def get_strategy(conn, client_id: int) -> dict[str, Any]:
             "pending_questions": pending,
             "targets": list_targets(conn, client_id),
             "missing_required": [item["key"] for item in pending if item.get("required")],
+            "review_status": "concept",
+            "review_status_label": "Concept",
+            "pending_proposal": None,
+            "canva_url": "",
+            "last_pdf_meta": None,
+            "strategy_pdf": pdf_status,
+            "editor_filled": status["editor_filled"],
+            "hamster_proposals": status["hamster_proposals"],
+            "missing_required_items": status["missing_required_items"],
+            "next_step": "Vul de verplichte vragen in, of lees een PDF-voorstel in ter controle.",
         }
+    from maaike.strategy_files import resolve_strategy_pdf_status
+
     answers = json.loads(row["start_answers_json"] or "{}")
+    fields = json.loads(row["strategy_fields_json"] or "{}")
+    pdf_status = resolve_strategy_pdf_status(conn, client_id, fields)
+    pending_proposal = fields.get("pending_proposal")
+    if isinstance(pending_proposal, dict) and not (
+        pending_proposal.get("start_answers") or pending_proposal.get("strategy_fields")
+    ):
+        pending_proposal = None
     pending = _pending_user_questions(answers)
     missing = [item["key"] for item in pending if item.get("required")]
+    review_status = resolve_review_status(
+        completed_at=row["completed_at"],
+        fields=fields,
+        answers=answers,
+        pending_proposal=pending_proposal if isinstance(pending_proposal, dict) else None,
+    )
+    status = _build_field_status(
+        answers=answers,
+        fields=fields,
+        pending_proposal=pending_proposal if isinstance(pending_proposal, dict) else None,
+    )
+    if review_status == "definitief":
+        next_step = "Strategie is definitief. Pas velden aan als er iets wijzigt; markeer opnieuw als nodig."
+    elif review_status == "te_controleren":
+        next_step = "Controleer het HAMSTER-voorstel, pas aan waar nodig en keur het goed."
+    elif status["missing_required_items"]:
+        next_step = (
+            "Vul de ontbrekende verplichte informatie in, of lees een PDF in voor voorstellen."
+        )
+    else:
+        next_step = "Alles vereiste staat erin — markeer de strategie als definitief als die klopt."
+    label_map = {
+        "concept": "Concept",
+        "te_controleren": "Te controleren",
+        "definitief": "Definitief",
+    }
     return {
         "account_info": json.loads(row["account_info_json"] or "{}"),
         "start_answers": answers,
-        "strategy_fields": json.loads(row["strategy_fields_json"] or "{}"),
+        "strategy_fields": fields,
+        "public_strategy_fields": _public_strategy_fields(fields),
         "source_notes": json.loads(row["source_notes_json"] or "[]"),
         "completed_at": row["completed_at"],
         "updated_at": row["updated_at"],
@@ -175,6 +325,16 @@ def get_strategy(conn, client_id: int) -> dict[str, Any]:
         "pending_questions": pending,
         "targets": list_targets(conn, client_id),
         "missing_required": missing,
+        "review_status": review_status,
+        "review_status_label": label_map.get(review_status, "Concept"),
+        "pending_proposal": pending_proposal if isinstance(pending_proposal, dict) else None,
+        "canva_url": str(fields.get("canva_strategy_url") or fields.get("canva_url") or "").strip(),
+        "last_pdf_meta": fields.get("last_pdf_meta"),
+        "strategy_pdf": pdf_status,
+        "editor_filled": status["editor_filled"],
+        "hamster_proposals": status["hamster_proposals"],
+        "missing_required_items": status["missing_required_items"],
+        "next_step": next_step,
     }
 
 
@@ -187,22 +347,77 @@ def save_strategy(
     strategy_fields: dict | None = None,
     source_notes: list | None = None,
     mark_complete: bool = False,
+    clear_complete: bool = False,
+    provenance_updates: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     current = get_strategy(conn, client_id)
     account = account_info if account_info is not None else current["account_info"]
-    answers = start_answers if start_answers is not None else current["start_answers"]
-    fields = strategy_fields if strategy_fields is not None else current["strategy_fields"]
+    answers = dict(start_answers if start_answers is not None else current["start_answers"])
+    existing_fields = dict(current.get("strategy_fields") or {})
+    if strategy_fields is not None:
+        fields = dict(strategy_fields)
+        # Preserve server-managed PDF reference if the caller sent an older strategy_fields snapshot.
+        for meta_key in ("last_pdf_meta", "strategy_pdf_ref"):
+            if meta_key not in fields and meta_key in existing_fields:
+                fields[meta_key] = existing_fields[meta_key]
+    else:
+        fields = existing_fields
     notes = source_notes if source_notes is not None else current["source_notes"]
     pending = _pending_user_questions(answers)
     missing = [item["question"] for item in pending if item.get("required")]
     completed_at = current["completed_at"]
+    if clear_complete:
+        completed_at = None
+        fields["review_status"] = "concept"
     if mark_complete:
         if missing:
             raise ValueError(
                 "Strategie-afronding vereist nog antwoorden op: " + " | ".join(missing)
             )
+        pending_block = fields.get("pending_proposal")
+        if isinstance(pending_block, dict) and (
+            pending_block.get("start_answers") or pending_block.get("strategy_fields")
+        ):
+            raise ValueError(
+                "Er staat nog een voorstel klaar ter controle. Keur het goed of verwerp het "
+                "voordat je de strategie definitief maakt."
+            )
+        if "pending_proposal" in fields:
+            fields.pop("pending_proposal", None)
         completed_at = _now()
-    # If user filled gaps that remove the "open laten" markers, pending clears naturally.
+        fields["review_status"] = "definitief"
+
+    provenance = dict(fields.get("answer_provenance") or {})
+    previous_answers = dict(current.get("start_answers") or {})
+    for key, value in answers.items():
+        text = str(value or "").strip()
+        prev = str(previous_answers.get(key) or "").strip()
+        if text != prev:
+            if provenance_updates and key in provenance_updates:
+                provenance[key] = provenance_updates[key]
+            elif text:
+                # Editor edits become editor-owned unless caller sets provenance.
+                provenance[key] = provenance.get(key) if text == prev else "editor"
+                if text != prev:
+                    provenance[key] = "editor"
+            elif key in provenance:
+                provenance.pop(key, None)
+    if provenance_updates:
+        for key, source in provenance_updates.items():
+            if str(answers.get(key) or "").strip():
+                provenance[key] = source
+    fields["answer_provenance"] = provenance
+
+    pending_proposal = fields.get("pending_proposal")
+    if isinstance(pending_proposal, dict) and (
+        pending_proposal.get("start_answers") or pending_proposal.get("strategy_fields")
+    ):
+        if not completed_at:
+            fields["review_status"] = "te_controleren"
+    elif not completed_at:
+        fields["review_status"] = str(fields.get("review_status") or "concept")
+        if fields["review_status"] == "te_controleren":
+            fields["review_status"] = "concept"
 
     now = _now()
     conn.execute(

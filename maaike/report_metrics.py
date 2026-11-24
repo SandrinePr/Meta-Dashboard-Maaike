@@ -25,9 +25,71 @@ def _parse_day(value: str | None) -> date | None:
     return None
 
 
+MONTHS_NL = {
+    1: "januari",
+    2: "februari",
+    3: "maart",
+    4: "april",
+    5: "mei",
+    6: "juni",
+    7: "juli",
+    8: "augustus",
+    9: "september",
+    10: "oktober",
+    11: "november",
+    12: "december",
+}
+
+SOCIAL_TREND_CHANNELS = [
+    {"key": "instagram", "label": "Instagram"},
+    {"key": "facebook", "label": "Facebook"},
+    {"key": "linkedin", "label": "LinkedIn"},
+    {"key": "tiktok", "label": "TikTok"},
+    {"key": "overig", "label": "YouTube & overige kanalen"},
+]
+
+
+def format_date_nl(d: date, *, include_year: bool = True) -> str:
+    month_name = MONTHS_NL.get(d.month, f"{d.month:02d}")
+    if include_year:
+        return f"{d.day} {month_name} {d.year}"
+    return f"{d.day} {month_name}"
+
+
+def format_range_nl(start: date, end: date, *, always_year: bool = True) -> str:
+    if always_year or start.year != end.year:
+        return f"{format_date_nl(start, include_year=True)} t/m {format_date_nl(end, include_year=True)}"
+    return f"{format_date_nl(start, include_year=False)} t/m {format_date_nl(end, include_year=False)}"
+
+
 def month_bounds(year: int, month: int) -> tuple[date, date]:
     last = monthrange(year, month)[1]
     return date(year, month, 1), date(year, month, last)
+
+
+def _prev_year_month(year: int, month: int) -> tuple[int, int]:
+    if month == 1:
+        return year - 1, 12
+    return year, month - 1
+
+
+def client_report_21_20_bounds(report_year: int, report_month: int) -> tuple[date, date, date, date]:
+    """Automatic client report windows for report month (Y, M):
+    - Analysis:   21st of (M-1) through 20th of M
+    - Comparison: 21st of (M-2) through 20th of (M-1)
+    Handles year rollover (e.g. Jan -> 21 Dec Y-1 .. 20 Jan Y vs 21 Nov Y-1 .. 20 Dec Y-1).
+    """
+    if not (1 <= int(report_month) <= 12) or int(report_year) < 1900:
+        raise ValueError("Ongeldige rapportmaand.")
+    y = int(report_year)
+    m = int(report_month)
+    prev_y, prev_m = _prev_year_month(y, m)
+    prev2_y, prev2_m = _prev_year_month(prev_y, prev_m)
+    start_d = date(prev_y, prev_m, 21)
+    end_d = date(y, m, 20)
+    compare_start_d = date(prev2_y, prev2_m, 21)
+    compare_end_d = date(prev_y, prev_m, 20)
+    return start_d, end_d, compare_start_d, compare_end_d
 
 
 def previous_equal_length(start: date, end: date) -> tuple[date, date]:
@@ -48,8 +110,16 @@ def resolve_period_window(
     end: str | date | None = None,
     compare_start: str | date | None = None,
     compare_end: str | date | None = None,
+    period_mode: str = "client_21_20",
 ) -> dict[str, Any]:
-    """Resolve primary + comparison windows. Default comparison = equal-length previous."""
+    """Resolve primary + comparison windows.
+
+    Default for client reports (`period_mode='client_21_20'`):
+    - Primary:    21st of previous month through 20th of report month
+    - Comparison: 21st of two months prior through 20th of previous month
+    """
+    auto_c_start: date | None = None
+    auto_c_end: date | None = None
     if start is not None and end is not None:
         start_d = start if isinstance(start, date) else _parse_day(str(start))
         end_d = end if isinstance(end, date) else _parse_day(str(end))
@@ -58,17 +128,21 @@ def resolve_period_window(
         if end_d < start_d:
             raise ValueError("Einddatum ligt vóór startdatum.")
         mode = "custom"
-        year = start_d.year
-        month = start_d.month
+        year = int(period_year) if period_year is not None else end_d.year
+        month = int(period_month) if period_month is not None else end_d.month
     elif period_year is not None and period_month is not None:
         if not (1 <= int(period_month) <= 12):
             raise ValueError("Ongeldige maand.")
-        start_d, end_d = month_bounds(int(period_year), int(period_month))
-        mode = "calendar_month"
         year = int(period_year)
         month = int(period_month)
+        if period_mode == "calendar_month":
+            start_d, end_d = month_bounds(year, month)
+            mode = "calendar_month"
+        else:
+            start_d, end_d, auto_c_start, auto_c_end = client_report_21_20_bounds(year, month)
+            mode = "client_21_20"
     else:
-        raise ValueError("Geef een kalendermaand of start/eind-datums op.")
+        raise ValueError("Geef een rapportmaand of start/eind-datums op.")
 
     if compare_start is not None and compare_end is not None:
         c_start = compare_start if isinstance(compare_start, date) else _parse_day(str(compare_start))
@@ -78,16 +152,21 @@ def resolve_period_window(
         if c_end < c_start:
             raise ValueError("Vergelijking: einddatum ligt vóór startdatum.")
         compare_mode = "custom"
+    elif auto_c_start is not None and auto_c_end is not None:
+        c_start, c_end = auto_c_start, auto_c_end
+        compare_mode = "previous_21_20"
     else:
         c_start, c_end = previous_equal_length(start_d, end_d)
         compare_mode = "previous_equal_length"
 
     primary_len = (end_d - start_d).days + 1
     compare_len = (c_end - c_start).days + 1
+    crosses_year = start_d.year != end_d.year or c_start.year != c_end.year or c_end.year != end_d.year
     return {
         "mode": mode,
         "year": year,
         "month": month,
+        "month_label_nl": f"{MONTHS_NL.get(month, str(month))} {year}",
         "start": start_d.isoformat(),
         "end": end_d.isoformat(),
         "length_days": primary_len,
@@ -96,33 +175,47 @@ def resolve_period_window(
         "previous_end": c_end.isoformat(),
         "compare_length_days": compare_len,
         "lengths_equal": primary_len == compare_len,
+        "crosses_year_boundary": crosses_year,
         "label": f"{start_d.isoformat()} to {end_d.isoformat()}",
         "compare_label": f"{c_start.isoformat()} to {c_end.isoformat()}",
+        "label_nl": format_range_nl(start_d, end_d, always_year=True),
+        "label_short_nl": format_range_nl(start_d, end_d, always_year=crosses_year),
+        "compare_label_nl": format_range_nl(c_start, c_end, always_year=True),
+        "compare_label_short_nl": format_range_nl(c_start, c_end, always_year=crosses_year),
+    }
+
+
+def trend_month_meta(run_year: int, run_month: int) -> dict[str, Any]:
+    """Standalone monthly general trend report metadata (per social channel).
+    Contains NO client period, NO 21-20 lookback, and NO X+2 planning month.
+    """
+    if not (1 <= int(run_month) <= 12) or int(run_year) < 2000:
+        raise ValueError("Ongeldige rapportmaand.")
+    y = int(run_year)
+    m = int(run_month)
+    month_nl = MONTHS_NL[m]
+    return {
+        "year": y,
+        "month": m,
+        "month_label_nl": f"{month_nl} {y}",
+        "scope": "algemeen_per_kanaal",
+        "scope_label_nl": "Zelfstandig rapport over trends per socialmediakanaal",
+        "channels": [dict(ch) for ch in SOCIAL_TREND_CHANNELS],
+        "title_nl": f"Algemeen trendrapport – {month_nl} {y}",
     }
 
 
 def trend_lookback_bounds(run_year: int, run_month: int) -> dict[str, Any]:
-    """Terugblik: 21e vorige maand t/m 20e runmaand (Social Agent trendinstructie)."""
-    if run_month == 1:
-        prev_y, prev_m = run_year - 1, 12
-    else:
-        prev_y, prev_m = run_year, run_month - 1
-    start = date(prev_y, prev_m, 21)
-    end = date(run_year, run_month, 20)
-    # Vooruitblik = runmaand + 2
-    fwd_m = run_month + 2
-    fwd_y = run_year
-    while fwd_m > 12:
-        fwd_m -= 12
-        fwd_y += 1
+    """21st-to-20th window helper used by single-post analysis context (not by general trend reports)."""
+    start_d, end_d, prev_s, prev_e = client_report_21_20_bounds(run_year, run_month)
     return {
-        "run_year": run_year,
-        "run_month": run_month,
-        "lookback_start": start.isoformat(),
-        "lookback_end": end.isoformat(),
-        "planning_year": fwd_y,
-        "planning_month": fwd_m,
-        "title_hint": f"Created in {run_year}-{run_month:02d} | For {fwd_y}-{fwd_m:02d}",
+        "run_year": int(run_year),
+        "run_month": int(run_month),
+        "lookback_start": start_d.isoformat(),
+        "lookback_end": end_d.isoformat(),
+        "previous_start": prev_s.isoformat(),
+        "previous_end": prev_e.isoformat(),
+        "label_nl": f"{start_d.day} {MONTHS_NL[start_d.month]} {start_d.year} t/m {end_d.day} {MONTHS_NL[end_d.month]} {end_d.year}",
     }
 
 
@@ -136,11 +229,22 @@ def _metric_int(value: Any) -> int | None:
 
 
 def collect_period_posts(conn, client_id: int, start: date, end: date) -> list[dict[str, Any]]:
+    from maaike.repository import _competitor_handles_for_client, _is_competitor_post_row
+
+    post_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(posts)").fetchall()}
+    extra_select = []
+    if "source_origin" in post_cols:
+        extra_select.append("p.source_origin")
+    if "account_name" in post_cols:
+        extra_select.append("p.account_name")
+    extra_sql = (", " + ", ".join(extra_select)) if extra_select else ""
+    competitor_handles = _competitor_handles_for_client(conn, client_id)
+
     rows = conn.execute(
-        """
+        f"""
         SELECT p.id, p.platform, p.content_kind, p.published_at, p.permalink, p.caption,
                p.views, p.likes, p.comments, p.shares, p.saves, p.clicks, p.reach,
-               f.name AS format_name, pl.name AS pillar_name, e.hook
+               f.name AS format_name, pl.name AS pillar_name, e.hook{extra_sql}
         FROM posts p
         LEFT JOIN post_editorial e ON e.post_id = p.id
         LEFT JOIN content_formats f ON f.id = e.format_id
@@ -152,6 +256,8 @@ def collect_period_posts(conn, client_id: int, start: date, end: date) -> list[d
     ).fetchall()
     out = []
     for row in rows:
+        if _is_competitor_post_row(row, competitor_handles):
+            continue
         pub = _parse_day(row["published_at"])
         if pub is None or pub < start or pub > end:
             continue
@@ -461,6 +567,107 @@ def compare_group_lists(
     return rows
 
 
+def _verdict_bucket(post: dict[str, Any]) -> str:
+    """Classify any attached human/excel/AI verdict lightly as 'good', 'weak', or 'other'."""
+    candidates = [
+        (post.get("human_feedback") or {}).get("final_verdict"),
+        (post.get("excel_assessment") or {}).get("rating_text"),
+        (post.get("ai_analysis") or {}).get("rating_text"),
+    ]
+    for raw in candidates:
+        txt = str(raw or "").strip().lower()
+        if not txt:
+            continue
+        if any(w in txt for w in ("slecht", "zwak", "matig", "onder", "poor", "weak", "bad", "stop")):
+            return "weak"
+        if any(w in txt for w in ("goed", "sterk", "uitstekend", "boven", "good", "strong", "top")):
+            return "good"
+        return "other"
+    return "unknown"
+
+
+def build_calendar_year_format_patterns(
+    conn,
+    client_id: int,
+    *,
+    report_end: date,
+    attach_enrichment: bool = True,
+) -> dict[str, Any]:
+    """Calendar-year window (1 Jan <end.year> .. <report_end>) for evaluating formats & recurring patterns."""
+    ytd_start = date(report_end.year, 1, 1)
+    ytd_end = report_end
+    ytd_posts = collect_period_posts(conn, client_id, ytd_start, ytd_end)
+    if attach_enrichment and ytd_posts:
+        ytd_posts = attach_assessments_and_ai(conn, client_id, ytd_posts)
+    ytd_metrics = aggregate_posts(ytd_posts)
+
+    pub_days = sorted(
+        d for d in (_parse_day(p.get("published_date") or p.get("published_at")) for p in ytd_posts) if d is not None
+    )
+    earliest = pub_days[0] if pub_days else None
+    latest = pub_days[-1] if pub_days else None
+    label_nl = format_range_nl(ytd_start, ytd_end, always_year=True)
+    if ytd_posts and earliest is not None and latest is not None:
+        used_note_nl = (
+            f"{label_nl} ({len(ytd_posts)} beschikbare berichten; "
+            f"oudste bericht op {format_date_nl(earliest, include_year=True)})"
+        )
+    else:
+        used_note_nl = f"{label_nl} (nog geen beschikbare berichten in dit kalenderjaar)"
+
+    by_format_posts: dict[str, list[dict[str, Any]]] = {}
+    for p in ytd_posts:
+        fname = str(p.get("format_name") or "").strip()
+        if fname:
+            by_format_posts.setdefault(fname, []).append(p)
+
+    recurring_formats: list[dict[str, Any]] = []
+    for fmt_row in ytd_metrics["by_format"]:
+        if fmt_row.get("is_unclassified"):
+            continue
+        fname = fmt_row["name"]
+        fposts = by_format_posts.get(fname, [])
+        good_n = sum(1 for p in fposts if _verdict_bucket(p) == "good")
+        weak_n = sum(1 for p in fposts if _verdict_bucket(p) == "weak")
+        if fmt_row["post_count"] >= 2:
+            if weak_n >= 3:
+                hint = f"{weak_n}× zwak beoordeeld in dit kalenderjaar — kandidaat om te stoppen of grondig aan te passen."
+            elif good_n >= 2:
+                hint = f"{good_n}× goed beoordeeld in dit kalenderjaar — kandidaat om te herhalen."
+            else:
+                hint = f"{fmt_row['post_count']}× ingezet in dit kalenderjaar."
+            recurring_formats.append(
+                {
+                    "name": fname,
+                    "post_count": fmt_row["post_count"],
+                    "reach_sum": fmt_row.get("reach_sum"),
+                    "reach_avg": fmt_row.get("reach_avg"),
+                    "likes_sum": fmt_row.get("likes_sum"),
+                    "good_verdict_count": good_n,
+                    "weak_verdict_count": weak_n,
+                    "pattern_hint_nl": hint,
+                }
+            )
+
+    return {
+        "year": ytd_end.year,
+        "start": ytd_start.isoformat(),
+        "end": ytd_end.isoformat(),
+        "label": f"{ytd_start.isoformat()} to {ytd_end.isoformat()}",
+        "label_nl": label_nl,
+        "used_period_note_nl": used_note_nl,
+        "post_count": len(ytd_posts),
+        "earliest_post_date": earliest.isoformat() if earliest else None,
+        "latest_post_date": latest.isoformat() if latest else None,
+        "by_platform": ytd_metrics.get("by_platform") or {},
+        "by_format": ytd_metrics["by_format"],
+        "by_pillar": ytd_metrics["by_pillar"],
+        "by_hook": ytd_metrics["by_hook"],
+        "unclassified": ytd_metrics["unclassified"],
+        "recurring_formats": recurring_formats,
+    }
+
+
 def build_period_metrics(
     conn,
     client_id: int,
@@ -471,9 +678,10 @@ def build_period_metrics(
     end: str | date | None = None,
     compare_start: str | date | None = None,
     compare_end: str | date | None = None,
+    period_mode: str = "client_21_20",
     attach_enrichment: bool = True,
 ) -> dict[str, Any]:
-    """Collect + aggregate + compare for one client window. No AI."""
+    """Collect + aggregate + compare for one client window, plus calendar-year format patterns. No AI."""
     window = resolve_period_window(
         period_year=period_year,
         period_month=period_month,
@@ -481,6 +689,7 @@ def build_period_metrics(
         end=end,
         compare_start=compare_start,
         compare_end=compare_end,
+        period_mode=period_mode,
     )
     start_d = date.fromisoformat(window["start"])
     end_d = date.fromisoformat(window["end"])
@@ -504,6 +713,12 @@ def build_period_metrics(
     comparison["by_hook"] = compare_group_lists(
         metrics["by_hook"], prev_metrics["by_hook"], value_key="reach_sum"
     )
+    format_pattern_window = build_calendar_year_format_patterns(
+        conn,
+        client_id,
+        report_end=end_d,
+        attach_enrichment=attach_enrichment,
+    )
 
     return {
         "period": window,
@@ -521,6 +736,7 @@ def build_period_metrics(
             "by_platform": prev_metrics.get("by_platform") or {},
         },
         "comparison": comparison,
+        "format_pattern_window": format_pattern_window,
         "posts": posts,
         "previous_post_count": len(prev_posts),
         "ai_analysis_executed": False,

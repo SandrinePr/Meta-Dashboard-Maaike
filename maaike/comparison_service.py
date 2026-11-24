@@ -6,24 +6,44 @@ import json
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from maaike.repository import get_client, list_posts
+from maaike.presentation import format_sync_moment
+from maaike.repository import get_client, is_verified_link, list_posts, load_page_secret
 
 AMSTERDAM = ZoneInfo("Europe/Amsterdam")
-EMPTY_DATA_MESSAGE = "No data fetched yet"
-NOT_FETCHED_MESSAGE = "Not fetched yet"
-NOT_MEASURED = "Not measured"
-INSUFFICIENT_GROWTH = "Not enough measurement history yet"
+EMPTY_DATA_MESSAGE = "Nog geen berichten opgehaald"
+NOT_FETCHED_MESSAGE = "Nog geen berichten opgehaald"
+NOT_MEASURED = "Nog niet gemeten"
+INSUFFICIENT_GROWTH = "Nog onvoldoende meetmomenten om volgersgroei te berekenen"
+META_CONNECT_REQUIRED_MESSAGE = (
+    "Koppel eerst het Facebook- en Instagram-account van deze klant om berichten van concurrenten op te halen."
+)
 MAX_COMPETITORS = 10
 MAX_COMPETITOR_LENGTH = 80
-ERROR_EMPTY = "Enter an account name or username."
-ERROR_DUPLICATE = "This competitor is already on the list."
-ERROR_LIMIT = "You can add at most 10 competitors."
-ERROR_TOO_LONG = "Use at most 80 characters."
+ERROR_EMPTY = "Vul een Instagram-gebruikersnaam in, bijvoorbeeld @gebruikersnaam."
+ERROR_DUPLICATE = "Deze concurrent staat al op de lijst."
+ERROR_LIMIT = "Je kunt maximaal 10 concurrenten toevoegen."
+ERROR_TOO_LONG = "Gebruik maximaal 80 tekens."
 PERIOD_PRESETS = (
-    ("7d", "Last 7 days"),
-    ("30d", "Last 30 days"),
-    ("3m", "Last 3 months"),
-    ("custom", "Custom period"),
+    ("7d", "Laatste 7 dagen"),
+    ("30d", "Laatste 30 dagen"),
+    ("3m", "Laatste 3 maanden"),
+    ("custom", "Eigen periode"),
+)
+
+DUTCH_MONTHS = (
+    "",
+    "januari",
+    "februari",
+    "maart",
+    "april",
+    "mei",
+    "juni",
+    "juli",
+    "augustus",
+    "september",
+    "oktober",
+    "november",
+    "december",
 )
 
 
@@ -63,9 +83,28 @@ def ensure_tables(conn) -> None:
         ("weekly_weekday", "INTEGER NOT NULL DEFAULT 0"),  # 0=ma … 6=zo
         ("weekly_time", "TEXT NOT NULL DEFAULT '09:00'"),
         ("weekly_note", "TEXT NOT NULL DEFAULT ''"),
+        ("weekly_responsible", "TEXT NOT NULL DEFAULT ''"),
     ):
         if name not in cols:
             conn.execute(f"ALTER TABLE client_comparison_preferences ADD COLUMN {name} {declaration}")
+
+
+def _meta_discovery_status(conn, client) -> dict:
+    """Truthful check whether Facebook + Instagram Business Discovery are connected for this client."""
+    fb_connected = bool(is_verified_link(client))
+    secret = load_page_secret(conn, client.client_id)
+    has_ig_secret = bool(secret is not None and secret[1] and secret[2])
+    has_ig_handle_or_id = bool(client.meta_ig_username or (secret is not None and secret[1]))
+    ig_connected = bool(fb_connected and has_ig_handle_or_id and has_ig_secret)
+    ready = bool(fb_connected and ig_connected)
+    return {
+        "connected": ready,
+        "facebook_connected": fb_connected,
+        "facebook_page_name": client.meta_page_name if fb_connected else None,
+        "instagram_connected": ig_connected,
+        "instagram_username": client.meta_ig_username if ig_connected else None,
+        "missing_message": None if ready else META_CONNECT_REQUIRED_MESSAGE,
+    }
 
 
 def normalize_username(value: str) -> str:
@@ -97,6 +136,7 @@ def comparison_state(
     bounds = resolve_period(key, today=datetime.now(tz=AMSTERDAM).date(), custom_start=start, custom_end=end)
     competitors = prefs["competitors"]
     own_username = client.meta_ig_username
+    meta_status = _meta_discovery_status(conn, client)
     own_row = _own_performance_row(conn, client, bounds) if bounds else None
     from maaike.account_crawl import ensure_crawl_tables
 
@@ -105,7 +145,7 @@ def comparison_state(
         str(r["username"]).lower(): dict(r)
         for r in conn.execute(
             """
-            SELECT username, last_crawled_at, last_crawl_status, last_crawl_detail, followers_count
+            SELECT username, last_crawled_at, last_success_at, last_crawl_status, last_crawl_detail, followers_count
             FROM client_crawl_accounts WHERE client_id = ?
             """,
             (client_id,),
@@ -114,31 +154,89 @@ def comparison_state(
     competitor_rows = []
     for name in competitors:
         crawl = crawl_by_user.get(name.lower()) or {}
-        posts_count = conn.execute(
+        comp_post_rows = conn.execute(
             """
-            SELECT COUNT(*) AS n FROM posts
+            SELECT published_at, likes, comments FROM posts
             WHERE client_id = ? AND lower(COALESCE(source_origin, '')) = ?
             """,
             (client_id, f"business_discovery:{name.lower()}"),
-        ).fetchone()["n"]
-        fetched = int(posts_count or 0) > 0 or crawl.get("last_crawl_status") == "completed"
-        if fetched:
-            status_label = (
-                f"Laatst opgehaald {crawl.get('last_crawled_at') or '—'} · "
-                f"{crawl.get('last_crawl_status') or 'ok'}"
+        ).fetchall()
+        posts_count = len(comp_post_rows)
+        in_period_rows = [
+            r for r in comp_post_rows if bounds is not None and _in_bounds(r["published_at"], bounds)
+        ]
+        likes_vals = [int(r["likes"]) for r in in_period_rows if r["likes"] is not None]
+        comment_vals = [int(r["comments"]) for r in in_period_rows if r["comments"] is not None]
+        likes_total = sum(likes_vals) if likes_vals else None
+        comments_total = sum(comment_vals) if comment_vals else None
+        likes_avg = (likes_total / len(likes_vals)) if likes_vals else None
+        comments_avg = (comments_total / len(comment_vals)) if comment_vals else None
+        inter_vals = [
+            (int(r["likes"] or 0) + int(r["comments"] or 0))
+            for r in in_period_rows
+            if r["likes"] is not None or r["comments"] is not None
+        ]
+        interaction_avg = (sum(inter_vals) / len(inter_vals)) if inter_vals else None
+
+        crawl_status = str(crawl.get("last_crawl_status") or "").strip().lower()
+        succeeded_crawl = crawl_status in {"completed", "completed_with_warnings"}
+        fetched = posts_count > 0 or succeeded_crawl
+        last_success_raw = crawl.get("last_success_at") or (
+            crawl.get("last_crawled_at") if (succeeded_crawl or posts_count > 0) else None
+        )
+        last_succeeded_label = (
+            format_sync_moment(last_success_raw) if last_success_raw else "Nog niet gelukt"
+        )
+        if posts_count > 0:
+            posts_fetched_label = (
+                f"Ja ({posts_count} {'bericht' if posts_count == 1 else 'berichten'} opgehaald)"
             )
-        elif crawl.get("last_crawl_status") == "failed":
-            status_label = f"Crawl mislukt · {crawl.get('last_crawl_detail') or ''}"
+        elif succeeded_crawl:
+            posts_fetched_label = "Gecontroleerd (nog geen openbare berichten gevonden)"
+        else:
+            posts_fetched_label = "Nog geen berichten opgehaald"
+
+        if not meta_status["connected"]:
+            action_needed = True
+            action_label = "Koppel eerst het Facebook- en Instagram-account van deze klant."
+        elif crawl_status == "failed":
+            action_needed = True
+            action_label = (
+                f"Laatste ophaalpoging mislukt — klik op ‘Opnieuw ophalen’ of controleer of @{name} een zakelijk Instagram-account is."
+            )
+        elif not fetched:
+            action_needed = True
+            action_label = "Klik op ‘Berichten van concurrenten ophalen’ of ‘Opnieuw ophalen’."
+        else:
+            action_needed = False
+            action_label = "Geen actie nodig — berichten staan klaar."
+
+        if fetched and crawl_status != "failed":
+            status_label = f"Laatst gelukt: {last_succeeded_label}"
+        elif crawl_status == "failed":
+            status_label = "Ophalen mislukt"
         elif crawl:
-            status_label = "Gekoppeld — wacht op automatische ophaal buiten werktijd"
+            status_label = "Nog geen berichten opgehaald"
         else:
             status_label = NOT_FETCHED_MESSAGE
+
         competitor_rows.append(
             {
                 "username": name,
                 "display_name": f"@{name}",
                 "role": "competitor",
                 "has_fetched_data": fetched,
+                "fetched_posts_total": posts_count,
+                "posts_fetched_label": posts_fetched_label,
+                "last_succeeded_at": last_success_raw,
+                "last_succeeded_label": last_succeeded_label,
+                "action_needed": action_needed,
+                "action_label": action_label,
+                "admin_error_detail": (
+                    str(crawl.get("last_crawl_detail") or "").strip()
+                    if crawl_status == "failed"
+                    else None
+                ),
                 "status_label": status_label,
                 "followers": crawl.get("followers_count"),
                 "followers_label": (
@@ -146,12 +244,12 @@ def comparison_state(
                     if crawl.get("followers_count") is not None
                     else (status_label if not fetched else NOT_FETCHED_MESSAGE)
                 ),
-                "posts_in_period": int(posts_count or 0) if fetched else None,
-                "likes_total": None,
-                "comments_total": None,
-                "likes_avg": None,
-                "comments_avg": None,
-                "interaction_avg": None,
+                "posts_in_period": len(in_period_rows) if (fetched and bounds is not None) else None,
+                "likes_total": likes_total,
+                "comments_total": comments_total,
+                "likes_avg": likes_avg,
+                "comments_avg": comments_avg,
+                "interaction_avg": interaction_avg,
                 "last_crawled_at": crawl.get("last_crawled_at"),
                 "last_crawl_status": crawl.get("last_crawl_status"),
             }
@@ -183,16 +281,18 @@ def comparison_state(
 
     return {
         "client_id": client_id,
-        "page_title": "Social comparison",
+        "client_name": client.name,
+        "page_title": "Concurrenten",
+        "meta_connection": meta_status,
         "own_account": {
-            "username": own_username,
-            "label": f"@{own_username}" if own_username else None,
-            "connected": bool(own_username),
-            "hint": (
-                None
-                if own_username
-                else "No own Instagram account linked yet — connect Meta via client settings."
+            "username": own_username if meta_status["connected"] else None,
+            "label": (
+                f"@{own_username}"
+                if (meta_status["connected"] and own_username)
+                else (client.meta_page_name if meta_status["connected"] else None)
             ),
+            "connected": meta_status["connected"],
+            "hint": meta_status["missing_message"],
         },
         "competitors": competitors,
         "period_presets": [{"key": k, "label": label} for k, label in PERIOD_PRESETS],
@@ -200,14 +300,14 @@ def comparison_state(
         "period_start": bounds[0].isoformat() if bounds else None,
         "period_end": bounds[1].isoformat() if bounds else None,
         "period_label": (
-            f"{bounds[0]:%d-%m-%Y} to {bounds[1]:%d-%m-%Y}" if bounds else None
+            f"{bounds[0]:%d-%m-%Y} t/m {bounds[1]:%d-%m-%Y}" if bounds else None
         ),
         "account_rows": account_rows,
         "content_rows": content_rows,
         "growth_rows": [
             {
-                "username": own_username or "own account",
-                "display_name": f"@{own_username}" if own_username else "Own account",
+                "username": own_username or "eigen-account",
+                "display_name": f"@{own_username}" if own_username else f"{client.name} (eigen account)",
                 "insufficient": True,
                 "missing_note": INSUFFICIENT_GROWTH,
                 "followers_start": None,
@@ -220,7 +320,11 @@ def comparison_state(
                     "username": name,
                     "display_name": f"@{name}",
                     "insufficient": True,
-                    "missing_note": NOT_FETCHED_MESSAGE,
+                    "missing_note": (
+                        INSUFFICIENT_GROWTH
+                        if any(r["username"] == name and r.get("has_fetched_data") for r in competitor_rows)
+                        else NOT_FETCHED_MESSAGE
+                    ),
                     "followers_start": None,
                     "followers_end": None,
                     "followers_delta": None,
@@ -233,17 +337,20 @@ def comparison_state(
         "top_posts_empty": EMPTY_DATA_MESSAGE,
         "daily": {
             "message": NOT_MEASURED,
-            "note": "Daily metrics for competitors are filled only after Refresh data (Business Discovery).",
+            "note": "Dagelijkse cijfers van concurrenten worden gevuld zodra hun berichten zijn opgehaald.",
             "rows": [],
         },
         "refresh": {
-            "available": bool(own_username),
-            "message": (
-                "Automatisch: buiten werktijd (ma–vr na 18:00 / weekend) elk uur één concurrent. "
-                "Handmatig: knop ‘Haal concurrenten nu op’ werkt altijd, ook overdag. "
-                "Zonder crawl tonen concurrenten ‘Nog niet opgehaald’, nooit 0."
+            "available": meta_status["connected"],
+            "button_label": "Berichten van concurrenten ophalen",
+            "explanation": (
+                "Haalt de nieuwste openbare Instagram-berichten, likes en reacties van je ingestelde concurrenten op."
             ),
-            "limitation": None,
+            "message": (
+                "Automatisch op de achtergrond: buiten werktijd (ma–vr na 18:00 en in het weekend) wordt elk uur één concurrent bijgewerkt. "
+                "Handmatig: met ‘Berichten van concurrenten ophalen’ haal je de berichten direct op."
+            ),
+            "limitation": meta_status["missing_message"],
         },
         "schedule": _schedule_payload(),
         "weekly_plan": _weekly_plan(conn, client_id),
@@ -267,27 +374,89 @@ def _schedule_payload() -> dict:
 WEEKDAY_LABELS = ("maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag", "zondag")
 
 
-def _weekly_plan(conn, client_id: int) -> dict:
+def _fallback_responsible_for_client(conn, client_id: int) -> str:
+    """Reuse an already-configured responsible person for this client if set on logs or strategy."""
+    has_logs = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'client_logs_weekly_preferences'"
+    ).fetchone()
+    if has_logs:
+        logs_row = conn.execute(
+            "SELECT responsible_name FROM client_logs_weekly_preferences WHERE client_id = ?",
+            (client_id,),
+        ).fetchone()
+        if logs_row and str(logs_row["responsible_name"] or "").strip():
+            return str(logs_row["responsible_name"]).strip()
+    try:
+        from maaike.logs_weekly import _fallback_responsible_from_strategy
+
+        return _fallback_responsible_from_strategy(conn, client_id)
+    except Exception:
+        return ""
+
+
+def _format_dutch_date(day: date) -> str:
+    month_name = DUTCH_MONTHS[day.month] if 1 <= day.month <= 12 else str(day.month)
+    return f"{day.day} {month_name} {day.year}"
+
+
+def _next_weekday(weekday: int, *, today: date | None = None) -> date:
+    base = today or datetime.now(tz=AMSTERDAM).date()
+    wd = max(0, min(6, int(weekday)))
+    delta = (wd - base.weekday()) % 7
+    return base + timedelta(days=delta)
+
+
+def _weekly_plan(conn, client_id: int, *, today: date | None = None) -> dict:
     ensure_tables(conn)
     row = conn.execute(
         """
-        SELECT weekly_enabled, weekly_weekday, weekly_time, weekly_note
+        SELECT weekly_enabled, weekly_weekday, weekly_time, weekly_note, weekly_responsible
         FROM client_comparison_preferences WHERE client_id = ?
         """,
         (client_id,),
     ).fetchone()
     enabled = bool(row["weekly_enabled"]) if row else False
     weekday = int(row["weekly_weekday"]) if row else 0
+    weekday_label = WEEKDAY_LABELS[weekday] if 0 <= weekday <= 6 else WEEKDAY_LABELS[0]
     time_s = str(row["weekly_time"] if row else "09:00") or "09:00"
     note = str(row["weekly_note"] if row else "") or ""
+    explicit_responsible = str(row["weekly_responsible"] if row else "").strip()
+    responsible_name = explicit_responsible or _fallback_responsible_for_client(conn, client_id)
+    next_day = _next_weekday(weekday, today=today)
+    next_day_label = f"{weekday_label} {_format_dutch_date(next_day)} om {time_s}"
+    if enabled:
+        schedule_summary = f"Elke {weekday_label} om {time_s} (eerstvolgende moment: {next_day_label})."
+        status_text = f"Gepland op elke {weekday_label} om {time_s} (handmatige controle)"
+    else:
+        schedule_summary = (
+            "Nog geen vast controlemoment ingepland. Stel via ‘Planning & verantwoordelijke’ een vaste dag en tijd in."
+        )
+        status_text = "Nog niet ingepland (handmatige controle)"
     return {
         "enabled": enabled,
         "weekday": weekday,
-        "weekday_label": WEEKDAY_LABELS[weekday] if 0 <= weekday <= 6 else WEEKDAY_LABELS[0],
+        "weekday_label": weekday_label,
         "time": time_s,
         "note": note,
+        "responsible_name": responsible_name,
+        "has_responsible": bool(responsible_name),
+        "next_check_date": next_day.isoformat(),
+        "next_check_label": next_day_label,
+        "schedule_summary": schedule_summary,
         "auto_execute": False,
-        "status": "gepland (handmatig; auto-uitvoering uit in productie)",
+        "execution_mode_label": "Handmatige controle door het team; berichten ophalen gebeurt op de achtergrond automatisch",
+        "background_fetch_summary": (
+            "Als Facebook en Instagram gekoppeld zijn, werkt HAMSTER buiten werktijd (ma–vr na 18:00 en in het weekend) elk uur automatisch één concurrent bij."
+        ),
+        "manual_check_summary": (
+            "Het bekijken en vergelijken van de concurrenten gebeurt handmatig op het geplande moment."
+        ),
+        "user_steps": [
+            "Controleer in de concurrentenlijst of bij elk account recente berichten klaarstaan en er geen ‘Actie nodig’ staat.",
+            "Klik zo nodig op ‘Berichten van concurrenten ophalen’ (of bij één account op ‘Opnieuw ophalen’).",
+            "Bekijk bij Prestaties en Contentmix welke berichten en formats bij concurrenten opvallen.",
+        ],
+        "status": status_text,
         "weekday_options": [{"value": i, "label": label} for i, label in enumerate(WEEKDAY_LABELS)],
     }
 
@@ -300,6 +469,7 @@ def save_weekly_plan(
     weekday: int = 0,
     time: str = "09:00",
     note: str = "",
+    responsible_name: str | None = None,
 ) -> dict:
     ensure_tables(conn)
     wd = max(0, min(6, int(weekday)))
@@ -308,24 +478,30 @@ def save_weekly_plan(
 
     now = datetime.now(tz=timezone.utc).isoformat()
     row = conn.execute(
-        "SELECT competitors_json, period_key, custom_start, custom_end FROM client_comparison_preferences WHERE client_id = ?",
+        """
+        SELECT competitors_json, period_key, custom_start, custom_end, weekly_responsible
+        FROM client_comparison_preferences WHERE client_id = ?
+        """,
         (client_id,),
     ).fetchone()
     competitors = row["competitors_json"] if row else "[]"
     period_key = (row["period_key"] if row else None) or "3m"
     custom_start = row["custom_start"] if row else None
     custom_end = row["custom_end"] if row else None
+    existing_resp = str(row["weekly_responsible"] if row else "") or ""
+    resp_s = existing_resp if responsible_name is None else str(responsible_name or "").strip()
     conn.execute(
         """
         INSERT INTO client_comparison_preferences (
             client_id, competitors_json, period_key, custom_start, custom_end, updated_at,
-            weekly_enabled, weekly_weekday, weekly_time, weekly_note
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            weekly_enabled, weekly_weekday, weekly_time, weekly_note, weekly_responsible
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(client_id) DO UPDATE SET
             weekly_enabled = excluded.weekly_enabled,
             weekly_weekday = excluded.weekly_weekday,
             weekly_time = excluded.weekly_time,
             weekly_note = excluded.weekly_note,
+            weekly_responsible = excluded.weekly_responsible,
             updated_at = excluded.updated_at
         """,
         (
@@ -339,6 +515,7 @@ def save_weekly_plan(
             wd,
             time_s,
             str(note or "").strip(),
+            resp_s,
         ),
     )
     return _weekly_plan(conn, client_id)
@@ -399,7 +576,7 @@ def save_period(
     custom_end: date | None = None,
 ) -> dict:
     if period_key not in {k for k, _ in PERIOD_PRESETS}:
-        raise ValueError("Unknown period.")
+        raise ValueError("Kies een geldige periode.")
     _write_prefs(
         conn,
         client_id,

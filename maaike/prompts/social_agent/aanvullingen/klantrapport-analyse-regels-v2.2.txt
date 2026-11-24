@@ -30,3 +30,15 @@ Versie: v2.2 — aanvulling op de oorspronkelijke Maaike-bronbestanden (die blij
 - Formatcodes, pijlers en hooks krijgen hun naam en betekenis uitsluitend uit de aangeleverde klantlegenda.
 - Geef formats geen eigen bijnaam of herdefinitie (bijv. “praktische branchecase” of “expert-carrousel” als de legenda iets anders zegt).
 - Ontbreekt een legenda-entry: noem de code als onbekend in de legenda; verzin geen definitie.
+
+7. Vaste rapport- en vergelijkingsperiode (21e t/m 20e)
+- Een klantrapport voor maand M analyseert automatisch de periode van de 21e van maand M-1 t/m de 20e van maand M, en vergelijkt die met de 21e van maand M-2 t/m de 20e van maand M-1 (ook over de jaarwisseling heen).
+- Gebruik exact de in Python berekende datums en aantallen voor beide perioden.
+
+8. Formats en terugkerende patronen over het kalenderjaar
+- Beoordeel formats en terugkerende patronen op basis van de beschikbare eigen berichten van het kalenderjaar tot en met de einddatum van het rapport (`format_pattern_window`).
+- Vermeld in het rapport expliciet welke kalenderjaarperiode hiervoor gebruikt is (bijv. `1 januari 2026 t/m 20 november 2026`).
+
+9. Algemeen trendrapport van dezelfde rapportmaand
+- Het algemene trendrapport van dezelfde rapportmaand wordt automatisch aan het klantrapport gekoppeld. Gebruik de kanaaltrends daaruit om kansen per kanaal voor deze klant te duiden, zonder externe trends als klantfeiten te presenteren.
+

@@ -1,1 +1,44 @@
-# Trendrapport — opbouw en aanpak## Wanneer gebruikenGebruik dit als de gebruiker vraagt om een algemeen social trendrapport. Dit is een marktbreed rapport — geen klantspecifieke vertaling, wel een strategische input voor social planningen.## Tijdslogica- **Terugblik**: 21e van de vorige maand t/m 20e van de huidige maand- **Vooruitblik**: maand x+2 (twee maanden vooruit)- **Titel**: Gemaakt in [runmaand jaar] | Voor [maand x+2 jaar]  Voorbeeld: gemaakt in juni 2026, kijkt vooruit naar augustus 2026Vraag de gebruiker om de runmaand te bevestigen als dat onduidelijk is.## ScopeDit is een overkoepelend marktrapport:- geen klantvertaling, klantspecifieke aanbevelingen of losse klantsecties- wel een strategische vertaling naar wat social specialisten moeten weten, volgen of testen## Vaste rapportopbouwGebruik de geüploade PDF "Social Trend Radar - Voorbeeld rapport" als stijl- en opmaakreferentie. Behoud dezelfde rapportfamilie: professioneel, compact, strategisch, scanbaar en in Red Rock-stijl.Vaste hoofdstukken:1. Titelpagina of openingsblok2. Korte positionering van deze editie3. Managementsamenvatting4. Belangrijkste trends en ontwikkelingen5. Platform- en formatverschuivingen6. Contentkansen voor maand x+27. Zoekclusters en opvallende richtingen8. Conclusie en prioriteiten9. Bronoverzicht## Werkwijze1. Bepaal de terugblikperiode en planningsmaand2. Verzamel social trends, platformupdates, formatontwikkelingen, consumentgedrag en marktbewegingen3. Onderscheid structurele ontwikkelingen, groeiend momentum en tijdelijke signalen4. Vertaal de inzichten naar social planningen van maand x+25. Onderzoek relevante onderwerpen, formats, invalshoeken en zoekclusters6. Gebruik Ahrefs waar nuttig voor volumes, concurrentie en aanpalende zoekbewegingen7. Werk het rapport uit volgens de vaste opbouw en het voorbeeldrapport8. Lever het rapport als tekst in de chat of als artifact — de gebruiker slaat het zelf op## BronnenmixGebruik waar relevant een combinatie van:- Google Trends- Frankwatching- AnswerThePublic- Social Media Today- Officiële platformbronnen van Instagram, TikTok en LinkedIn- Ahrefs- Aanvullende websearchControleer belangrijke conclusies bij voorkeur met meer dan één bron. Maak onderscheid tussen bevestigde ontwikkeling, vroeg signaal en hypothese.## ZoekclusterlogicaGeen lange lijst losse keywords. Beschrijf per cluster:- clusternaam- wat opvalt in zoekgedrag of interesse- waarom dit relevant is voor contentplanning- hoe dit kan doorwerken in formats, rubrieken of invalshoekenVoorbeelden: buitenleven/tuin/buiten koken; interieur/badkamers/materiaalkeuze; vergelijking/keuzehulp/praktische toepassingen.## Schrijfstijl- Specialistisch, direct en helder- Strategisch en compact- Geen wollige marketingtaal- Liever scherp dan uitgebreid- Gebruik altijd **Red Rock Agency**
+# Algemeen trendrapport — opbouw en aanpak
+
+## Wanneer gebruiken
+Gebruik dit voor het maandelijkse **Algemeen trendrapport** in HAMSTER. Dit is een volledig zelfstandig, marktbreed rapport over actuele ontwikkelingen en trends **per socialmediakanaal** voor de gekozen maand.
+
+## Tijdslogica en afbakening
+- **Rapportmaand**: het rapport hoort bij één kalendermaand (bijv. november 2026).
+- **Geen klantperiode, geen terugblik (21e–20e) en geen X+2-planningsmaand**: gebruik geen klantspecifieke periode, geen terugblikvenster en geen planningsmaand twee maanden vooruit in dit rapport.
+- **Titel**: `Algemeen trendrapport – [maand jaar]` (bijv. `Algemeen trendrapport – november 2026`).
+
+## Scope
+Dit is een zelfstandig overzicht van socialmediatrends per kanaal:
+- geen klantdata, geen klantstrategie en geen klantspecifieke aanbevelingen;
+- wél concrete trends, algoritme- en functie-updates, opvallende formats en kansen per socialmediakanaal:
+  - **Instagram** (Reels, carrousels, Stories, interactie en discovery)
+  - **Facebook** (bereik, community, video, link- en fotoposts)
+  - **LinkedIn** (zakelijke zichtbaarheid, documentposts/carrousels, persoonlijke vs. bedrijfspagina’s, video)
+  - **TikTok & YouTube Shorts / overige kanalen** (short-form video, hooks, audio- en zoekgedrag)
+
+## Vaste rapportopbouw
+Gebruik de stijlreferentie van Red Rock Agency: professioneel, compact, helder Nederlands en direct scanbaar.
+
+Vaste onderdelen:
+1. **Korte positionering van deze maandeditie** (`positionering`) — welke maand dit rapport beslaat en welke kanalen centraal staan.
+2. **Managementsamenvatting** (`managementsamenvatting`) — de belangrijkste rode draad van deze maand in enkele alinea’s.
+3. **Belangrijkste socialmediatrends** (`belangrijkste_trends`) — overkoepelende bewegingen in gedrag, aandacht en contentvormen.
+4. **Trends per socialmediakanaal** (`platform_verschuivingen`) — uitgesplitst per kanaal (**Instagram**, **Facebook**, **LinkedIn**, **TikTok / overige kanalen**): wat verandert er en wat werkt nu goed?
+5. **Kansen voor contentformats en rubrieken** (`contentkansen`) — welke formats, hooks en invalshoeken social specialisten direct kunnen inzetten of testen (zonder verwijzing naar een X+2-maand).
+6. **Zoekgedrag en opvallende onderwerpen** (`zoekclusters`) — opvallende zoekvragen en thema’s op social en search.
+7. **Conclusie en aandachtspunten** (`conclusie`) — scherpe samenvatting van wat we meenemen.
+
+## Bronnenmix
+Gebruik uitsluitend daadwerkelijk geraadpleegde bronnen (websearch of handmatig aangeleverde bronnen), zoals:
+- Officiële platformupdates van Instagram, Facebook/Meta, LinkedIn en TikTok
+- Frankwatching, Social Media Today en vergelijkbare vakbronnen
+- Google Trends / zoeksignalen waar beschikbaar
+
+Maak altijd onderscheid tussen **bevestigde feiten**, **waargenomen trends** en **suggesties/hypotheses**. Verzin nooit bronnen of cijfers; ontbreken bronnen, vermeld dan eerlijk `Niet onderzocht / onvoldoende gegevens`.
+
+## Schrijfstijl
+- Eenvoudig, scherp en direct Nederlands
+- Overzichtelijk uitgesplitst per socialmediakanaal
+- Geen wollige marketingtaal
+- Gebruik altijd **Red Rock Agency**

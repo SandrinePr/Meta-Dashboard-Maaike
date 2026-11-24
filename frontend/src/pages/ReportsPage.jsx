@@ -3,9 +3,9 @@ import { api, apiUrl } from "../api.js";
 import NewAnalysisWizard from "../components/NewAnalysisWizard.jsx";
 
 function money(range) {
-  if (!range) return "unknown";
-  if (range.low == null && range.high == null) return "unknown";
-  return `USD ${range.low} – ${range.high} (estimate)`;
+  if (!range) return "onbekend";
+  if (range.low == null && range.high == null) return "onbekend";
+  return `USD ${range.low} – ${range.high} (schatting)`;
 }
 
 const STATUS_LABEL = {
@@ -14,12 +14,12 @@ const STATUS_LABEL = {
   running: "bezig",
   completed: "voltooid",
   failed: "mislukt",
-  mock_completed: "mock voltooid",
+  mock_completed: "simulatie voltooid",
 };
 
 function reportTypeLabel(type) {
   if (type === "client") return "Klantrapport";
-  if (type === "trend") return "Trendrapport";
+  if (type === "trend") return "Algemeen trendrapport";
   return type || "Rapport";
 }
 
@@ -51,6 +51,7 @@ function isTechnicalTitle(title) {
     t.startsWith("client report") ||
     t.startsWith("created in") ||
     t.startsWith("qa real") ||
+    t.startsWith("social trends – planning") ||
     t.includes("json-syntaxherstel")
   );
 }
@@ -59,11 +60,9 @@ function displayReportTitle(r, clientName = "Klant") {
   const raw = String(r?.title || "").trim();
   if (raw && !isTechnicalTitle(raw)) return raw;
   if (r?.report_type === "trend") {
-    const y = r.planning_year || r.period_year;
-    const m = r.planning_month || r.period_month;
-    return `Social trends – planning ${monthLabelNl(y, m)}`;
+    return `Algemeen trendrapport – ${monthLabelNl(r.period_year, r.period_month)}`;
   }
-  return `${clientName} – analyse ${monthLabelNl(r?.period_year, r?.period_month)}`;
+  return `${clientName} – Maandrapport ${monthLabelNl(r?.period_year, r?.period_month)}`;
 }
 
 function reportStatusDisplay(r) {
@@ -95,7 +94,7 @@ function resolveReportBadge(r, presentation = null) {
     r?.is_partial || presentation?.status?.partial || presentation?.status?.code === "partial_concept"
   );
   if (partial) {
-    return { code: "partial_concept", label: "Deels concept" };
+    return { code: "partial_concept", label: "Concept (aanvullende bron mist)" };
   }
   if (r?.review_status === "approved") {
     return { code: "approved", label: "Goedgekeurd" };
@@ -110,10 +109,7 @@ function resolveReportBadge(r, presentation = null) {
   ) {
     return {
       code: "awaiting_review",
-      label:
-        r?.review_status_label && r.review_status_label !== "No AI run"
-          ? r.review_status_label
-          : "Ter controle",
+      label: "Klaar voor controle",
     };
   }
   return { code: r?.status || "unknown", label: STATUS_LABEL[r?.status] || r?.status || "—" };
@@ -124,7 +120,7 @@ function formatReportDate(value) {
   const raw = String(value).replace("Z", "+00:00");
   const dt = new Date(raw);
   if (Number.isNaN(dt.getTime())) return String(value).slice(0, 16);
-  return dt.toLocaleString("en-GB", {
+  return dt.toLocaleString("nl-NL", {
     year: "numeric",
     month: "short",
     day: "2-digit",
@@ -135,7 +131,7 @@ function formatReportDate(value) {
 
 function periodLabel(r) {
   if (!r) return "—";
-  return `${r.period_year}-${String(r.period_month).padStart(2, "0")}`;
+  return monthLabelNl(r.period_year, r.period_month);
 }
 
 function groupSavedReports(reports) {
@@ -172,7 +168,7 @@ async function downloadReportPdf(clientId, reportId, { setBusy, setError, setNot
       credentials: "include",
     });
     if (!response.ok) {
-      let detailMsg = "PDF download failed.";
+      let detailMsg = "PDF downloaden is mislukt.";
       try {
         const payload = await response.json();
         if (payload?.detail) detailMsg = payload.detail;
@@ -184,7 +180,7 @@ async function downloadReportPdf(clientId, reportId, { setBusy, setError, setNot
     const blob = await response.blob();
     const disposition = response.headers.get("Content-Disposition") || "";
     const match = /filename="([^"]+)"/i.exec(disposition);
-    const filename = match?.[1] || `client-report-${reportId}.pdf`;
+    const filename = match?.[1] || `klantrapport-${reportId}.pdf`;
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -193,30 +189,37 @@ async function downloadReportPdf(clientId, reportId, { setBusy, setError, setNot
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(url);
-    setNotice(`PDF downloaded for report #${reportId} (no AI credits used).`);
+    setNotice(`PDF gedownload voor rapport #${reportId}.`);
   } catch (exc) {
-    setError(exc.message || "PDF download failed.");
+    setError(exc.message || "PDF downloaden is mislukt.");
   } finally {
     setBusy(false);
   }
 }
 
 const MOCK_SCENARIOS = [
-  { value: "success_with_sources", label: "Success with sources" },
-  { value: "sources_missing", label: "Insufficient/inaccessible sources" },
-  { value: "search_not_configured", label: "Search service not configured" },
-  { value: "insufficient_budget", label: "Insufficient budget" },
-  { value: "generation_failed", label: "Generation failed" },
+  { value: "success_with_sources", label: "Volledig testscenario" },
+  { value: "sources_missing", label: "Onvoldoende bronnen" },
+  { value: "search_not_configured", label: "Zoekdienst niet ingesteld" },
+  { value: "insufficient_budget", label: "Budgetlimiet bereikt" },
+  { value: "generation_failed", label: "Generatie mislukt" },
 ];
 
-export default function ReportsPage({ client }) {
+export default function ReportsPage({
+  client,
+  onOpenStrategy,
+  onOpenFigmaPlanning,
+  onOpenSocialPosts,
+  onOpenSettings,
+}) {
   const [data, setData] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
-  const [showCreate, setShowCreate] = useState(false);
+  const [showBuilder, setShowBuilder] = useState(true);
+  const [builderMode, setBuilderMode] = useState("client");
   const [expandedGroups, setExpandedGroups] = useState({});
   const [maxBudget, setMaxBudget] = useState("0.15");
   const [sourceTitle, setSourceTitle] = useState("");
@@ -226,18 +229,40 @@ export default function ReportsPage({ client }) {
   const [mockScenario, setMockScenario] = useState("success_with_sources");
   const [preview, setPreview] = useState(null);
 
+  const storageKey = `maaike-open-report-${client.id}`;
+
   async function reloadList() {
     const payload = await api(`/api/clients/${client.id}/reports`);
     setData(payload);
+    return payload;
   }
 
-  async function openReport(id) {
-    setNotice("");
-    setError("");
+  async function openReport(id, { silent = false } = {}) {
+    if (!silent) {
+      setNotice("");
+      setError("");
+    }
     const payload = await api(`/api/clients/${client.id}/reports/${id}`);
     setSelectedId(id);
     setDetail(payload);
     setPreview(null);
+    try {
+      window.sessionStorage.setItem(storageKey, String(id));
+    } catch {
+      /* ignore */
+    }
+    return payload;
+  }
+
+  function closeOpenReport() {
+    setDetail(null);
+    setSelectedId(null);
+    setPreview(null);
+    try {
+      window.sessionStorage.removeItem(storageKey);
+    } catch {
+      /* ignore */
+    }
   }
 
   useEffect(() => {
@@ -246,44 +271,50 @@ export default function ReportsPage({ client }) {
     setDetail(null);
     setSelectedId(null);
     setPreview(null);
-    setShowCreate(false);
-    reloadList().catch((exc) => setError(exc.message));
+    setShowBuilder(true);
+    reloadList()
+      .then(async (payload) => {
+        let savedId = null;
+        try {
+          savedId = Number(window.sessionStorage.getItem(storageKey) || 0) || null;
+        } catch {
+          savedId = null;
+        }
+        if (savedId && (payload?.reports || []).some((r) => r.id === savedId)) {
+          await openReport(savedId, { silent: true }).catch(() => {
+            closeOpenReport();
+          });
+        }
+      })
+      .catch((exc) => setError(exc.message));
   }, [client.id]);
 
+  const allReports = data?.reports || [];
+  const clientReports = useMemo(
+    () => allReports.filter((r) => r.report_type === "client"),
+    [allReports]
+  );
   const trendReports = useMemo(
-    () => (data?.reports || []).filter((r) => r.report_type === "trend"),
-    [data]
+    () => allReports.filter((r) => r.report_type === "trend"),
+    [allReports]
   );
-  const readyToReview = useMemo(() => {
-    const rows = (data?.reports || []).filter((r) => {
-      if (r.report_type !== "client") return false;
-      if (r.is_approved) return false;
-      if (r.status === "prepared" || !r.executed_at) return true;
-      if (r.status === "completed" || r.status === "mock_completed") return true;
-      return false;
-    });
-    rows.sort((a, b) => {
-      const pa = a.from_plan ? 0 : 1;
-      const pb = b.from_plan ? 0 : 1;
-      if (pa !== pb) return pa - pb;
-      const da = a.updated_at || a.prepared_at || "";
-      const db = b.updated_at || b.prepared_at || "";
-      return db.localeCompare(da);
-    });
-    return rows;
-  }, [data]);
-  const readyIds = useMemo(() => new Set(readyToReview.map((r) => r.id)), [readyToReview]);
-  const reportGroups = useMemo(
+
+  const awaitingReviewCount = useMemo(
     () =>
-      groupSavedReports((data?.reports || []).filter((r) => !readyIds.has(r.id) || r.report_type === "trend")),
-    [data, readyIds],
+      clientReports.filter(
+        (r) =>
+          !r.is_approved &&
+          (r.status === "completed" || r.status === "mock_completed" || r.can_review)
+      ).length,
+    [clientReports]
   );
+
+  const clientGroups = useMemo(() => groupSavedReports(clientReports), [clientReports]);
+  const trendGroups = useMemo(() => groupSavedReports(trendReports), [trendReports]);
 
   if (!data) {
-    return error ? <p className="banner error">{error}</p> : <p className="muted">Loading…</p>;
+    return error ? <p className="banner error">{error}</p> : <p className="muted">Rapporten laden…</p>;
   }
-
-  const search = data.internet_search || {};
 
   function renderReportRow(r, { nested = false } = {}) {
     const badge = resolveReportBadge(r);
@@ -300,37 +331,34 @@ export default function ReportsPage({ client }) {
             <span className="report-list-type">{reportTypeLabel(r.report_type)}</span>
             <span className="report-list-period">{periodLabel(r)}</span>
             <span className={`report-status-badge is-${badge.code}`}>{badge.label}</span>
-            {r.is_mock ? <span className="report-status-badge is-mock">MOCK</span> : null}
+            {r.is_mock ? (
+              <span className="report-status-badge is-mock">Simulatie</span>
+            ) : null}
           </div>
-          <details className="report-list-sub">
-            <summary className="linkish">Details</summary>
-            <div className="hint" style={{ marginTop: "0.35rem" }}>
-              #{r.id} · v{r.version} · {formatReportDate(r.executed_at || r.prepared_at || r.updated_at)}
-              {r.is_partial ? " · onderzoek/rapport deels" : ""}
-            </div>
-          </details>
+          <div className="hint" style={{ marginTop: "0.25rem" }}>
+            Opgeslagen op {formatReportDate(r.executed_at || r.prepared_at || r.updated_at)} · versie{" "}
+            {r.version}
+          </div>
         </div>
         <div className="report-list-actions">
           <button
-            className="secondary"
+            className="primary"
             type="button"
             disabled={busy}
             onClick={() => openReport(r.id).catch((exc) => setError(exc.message))}
           >
-            Openen
+            Rapport openen
           </button>
           {canPdf ? (
             <button
-              className="primary"
+              className="secondary"
               type="button"
               disabled={busy}
               onClick={() => downloadReportPdf(client.id, r.id, { setBusy, setError, setNotice })}
             >
               Download PDF
             </button>
-          ) : (
-            <span className="hint report-list-pdf-na">PDF alleen bij klantrapport</span>
-          )}
+          ) : null}
         </div>
       </div>
     );
@@ -341,30 +369,7 @@ export default function ReportsPage({ client }) {
       {error ? <p className="banner error">{error}</p> : null}
       {notice ? <p className="banner">{notice}</p> : null}
 
-      {showCreate ? (
-        <NewAnalysisWizard
-          key={`wizard-${client.id}`}
-          client={client}
-          trendReports={trendReports}
-          search={search}
-          busy={busy}
-          setBusy={setBusy}
-          setError={setError}
-          setNotice={setNotice}
-          onCancel={() => {
-            setShowCreate(false);
-          }}
-          onOpenedReport={async (payload) => {
-            setShowCreate(false);
-            setDetail(payload);
-            setSelectedId(payload?.report?.id || null);
-            setPreview(null);
-            await reloadList().catch(() => {});
-          }}
-        />
-      ) : null}
-
-      {!showCreate && detail?.report ? (
+      {detail?.report ? (
         <ReportDetail
           clientId={client.id}
           detail={detail}
@@ -387,116 +392,256 @@ export default function ReportsPage({ client }) {
           maxBudget={maxBudget}
           preview={preview}
           setPreview={setPreview}
-          onClose={() => {
-            setDetail(null);
-            setSelectedId(null);
-            setPreview(null);
-          }}
+          onOpenSettings={onOpenSettings}
+          onClose={closeOpenReport}
         />
       ) : null}
 
-      {!showCreate && selectedId && !detail?.report ? (
-        <p className="muted">Rapport laden…</p>
-      ) : null}
+      {selectedId && !detail?.report ? <p className="muted">Rapport openen…</p> : null}
 
-      {!showCreate && !detail && !selectedId ? (
+      {!detail && !selectedId ? (
         <>
-          <div className="search-form-header reports-page-header">
-            <div>
-              <h3 style={{ marginTop: 0 }}>Rapporten</h3>
-              <p className="hint" style={{ margin: 0 }}>
-                Voor <strong>{client.name}</strong>. Openen start geen AI.
-              </p>
+          {/* Overzicht bovenaan: welk rapport, welke gegevens, wat je zelf doet */}
+          <section className="card stack">
+            <div className="search-form-header">
+              <div>
+                <h3 style={{ margin: 0 }}>Rapporten voor {client.name}</h3>
+                <p className="hint" style={{ margin: "0.25rem 0 0" }}>
+                  Maak een nieuw maandrapport of open een eerder opgeslagen rapport. Een opgeslagen
+                  rapport openen kost nooit AI-tegoed.
+                </p>
+              </div>
+              <div className="row-actions wrap">
+                <button
+                  className="secondary"
+                  type="button"
+                  onClick={() => setShowBuilder((v) => !v)}
+                >
+                  {showBuilder ? "Verberg rapportmaker" : "Nieuw rapport maken"}
+                </button>
+                {onOpenSettings ? (
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() => onOpenSettings("planning")}
+                  >
+                    Beheerinstellingen
+                  </button>
+                ) : null}
+              </div>
             </div>
-            <button
-              className="primary"
-              type="button"
-              onClick={() => {
-                setShowCreate(true);
-                setDetail(null);
-                setSelectedId(null);
-                setError("");
-                setNotice("");
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+                gap: "0.85rem",
               }}
             >
-              Nieuwe analyse
-            </button>
-          </div>
+              <div
+                style={{
+                  background: "#1a2533",
+                  border: "1px solid rgba(242, 240, 236, 0.14)",
+                  borderRadius: "10px",
+                  padding: "0.85rem 0.95rem",
+                }}
+              >
+                <strong style={{ display: "block", marginBottom: "0.3rem" }}>
+                  1. Welk rapport kun je maken?
+                </strong>
+                <p style={{ margin: 0, fontSize: "0.93rem", lineHeight: 1.5 }}>
+                  Een <strong>Klantrapport</strong> voor {client.name} óf een zelfstandig{" "}
+                  <strong>Algemeen trendrapport</strong> met trends per socialmediakanaal. Op de 1e
+                  van iedere maand bewaart HAMSTER automatisch één algemeen trendrapport.
+                </p>
+              </div>
 
-          {readyToReview.length ? (
-            <section className="card stack">
-              <h3 style={{ marginTop: 0 }}>Klaar om te bekijken</h3>
+              <div
+                style={{
+                  background: "#1a2533",
+                  border: "1px solid rgba(242, 240, 236, 0.14)",
+                  borderRadius: "10px",
+                  padding: "0.85rem 0.95rem",
+                }}
+              >
+                <strong style={{ display: "block", marginBottom: "0.3rem" }}>
+                  2. Welke gegevens gebruikt HAMSTER?
+                </strong>
+                <p style={{ margin: 0, fontSize: "0.93rem", lineHeight: 1.5 }}>
+                  Klantstrategie, eigen berichten (vaste periode 21e t/m 20e vergeleken met de maand
+                  ervoor), alle kalenderjaarberichten t/m de einddatum voor formats en patronen,
+                  berichtencontrole, Figma-planning en het algemene trendrapport van dezelfde maand.
+                </p>
+              </div>
+
+              <div
+                style={{
+                  background: "#1a2533",
+                  border: "1px solid rgba(242, 240, 236, 0.14)",
+                  borderRadius: "10px",
+                  padding: "0.85rem 0.95rem",
+                }}
+              >
+                <strong style={{ display: "block", marginBottom: "0.3rem" }}>
+                  3. Wat moet je zelf nog doen?
+                </strong>
+                <p style={{ margin: 0, fontSize: "0.93rem", lineHeight: 1.5 }}>
+                  Controleer hieronder of de verplichte bronnen op <em>Klaar</em> staan, voeg zo
+                  nodig eigen afspraken toe en keur na afloop het conceptrapport goed.
+                  {awaitingReviewCount > 0 ? (
+                    <>
+                      {" "}
+                      Er {awaitingReviewCount === 1 ? "staat nu 1 conceptrapport" : `staan nu ${awaitingReviewCount} conceptrapporten`}{" "}
+                      klaar voor controle.
+                    </>
+                  ) : null}
+                </p>
+              </div>
+            </div>
+          </section>
+
+          {showBuilder ? (
+            <NewAnalysisWizard
+              key={`wizard-${client.id}`}
+              client={client}
+              initialMode={builderMode}
+              isCollapsible={clientGroups.length > 0 || trendGroups.length > 0}
+              onClose={() => setShowBuilder(false)}
+              onOpenStrategy={onOpenStrategy}
+              onOpenFigmaPlanning={onOpenFigmaPlanning}
+              onOpenSocialPosts={onOpenSocialPosts}
+              onOpenSettings={onOpenSettings}
+              onCreated={async (reportId, meta) => {
+                await reloadList();
+                if (reportId) {
+                  await openReport(reportId);
+                  setNotice(
+                    meta?.mode === "trend"
+                      ? "Algemeen trendrapport is opgeslagen in het dashboard en direct geopend."
+                      : "Klantrapport is opgeslagen in het dashboard en direct geopend."
+                  );
+                }
+              }}
+            />
+          ) : null}
+
+          {/* Opgeslagen klantrapporten */}
+          <section className="card stack">
+            <div className="search-form-header">
+              <div>
+                <h3 style={{ margin: 0 }}>Opgeslagen klantrapporten ({client.name})</h3>
+                <p className="hint" style={{ margin: "0.2rem 0 0" }}>
+                  Blijven bewaard in het dashboard, ook na verversen of opnieuw inloggen.
+                </p>
+              </div>
+              {!showBuilder ? (
+                <button
+                  className="primary"
+                  type="button"
+                  onClick={() => {
+                    setBuilderMode("client");
+                    setShowBuilder(true);
+                  }}
+                >
+                  Klantrapport maken
+                </button>
+              ) : null}
+            </div>
+
+            {!clientGroups.length ? (
               <p className="hint" style={{ margin: 0 }}>
-                Concepten met klantnaam en periode. Openen, aanpassen en zelf goedkeuren — start geen AI.
+                Nog geen opgeslagen klantrapporten voor {client.name}.
               </p>
+            ) : (
               <div className="report-list stack">
-                {readyToReview.map((r) => (
-                  <div
-                    className={`report-list-row${selectedId === r.id ? " is-selected" : ""}`}
-                    key={`ready-${r.id}`}
-                  >
-                    <div className="report-list-main">
-                      <span className="report-list-title">
-                        {client.name} · {periodLabel(r)}
-                      </span>
-                      <div className="report-list-meta">
-                        <span className="report-list-type">{displayReportTitle(r, client.name)}</span>
-                        <span className={`report-status-badge is-${resolveReportBadge(r).code}`}>
-                          {resolveReportBadge(r).label}
-                        </span>
-                        {r.from_plan ? (
-                          <span className="report-status-badge is-prepared">Planning</span>
-                        ) : null}
+                {clientGroups.map((group) => (
+                  <div className="report-list-group" key={group.key}>
+                    {renderReportRow(group.latest)}
+                    {group.older.length ? (
+                      <div className="report-list-older">
+                        <button
+                          className="linkish"
+                          type="button"
+                          onClick={() =>
+                            setExpandedGroups((prev) => ({
+                              ...prev,
+                              [group.key]: !prev[group.key],
+                            }))
+                          }
+                        >
+                          {expandedGroups[group.key]
+                            ? "Verberg eerdere versies"
+                            : `Eerdere versies (${group.older.length})`}
+                        </button>
+                        {expandedGroups[group.key]
+                          ? group.older.map((r) => renderReportRow(r, { nested: true }))
+                          : null}
                       </div>
-                    </div>
-                    <div className="report-list-actions">
-                      <button
-                        className="secondary"
-                        type="button"
-                        disabled={busy}
-                        onClick={() => openReport(r.id).catch((exc) => setError(exc.message))}
-                      >
-                        Openen
-                      </button>
-                    </div>
+                    ) : null}
                   </div>
                 ))}
               </div>
-            </section>
-          ) : null}
+            )}
+          </section>
 
+          {/* Opgeslagen algemene trendrapporten */}
           <section className="card stack">
-            {!reportGroups.length && !readyToReview.length ? (
-              <p className="hint">Nog geen rapporten voor deze klant. Start met Nieuwe analyse.</p>
-            ) : null}
-            <div className="report-list stack">
-              {reportGroups.map((group) => (
-                <div className="report-list-group" key={group.key}>
-                  {renderReportRow(group.latest)}
-                  {group.older.length ? (
-                    <div className="report-list-older">
-                      <button
-                        className="linkish"
-                        type="button"
-                        onClick={() =>
-                          setExpandedGroups((prev) => ({
-                            ...prev,
-                            [group.key]: !prev[group.key],
-                          }))
-                        }
-                      >
-                        {expandedGroups[group.key]
-                          ? "Verberg activiteitenlogboek"
-                          : `Activiteitenlogboek (${group.older.length})`}
-                      </button>
-                      {expandedGroups[group.key]
-                        ? group.older.map((r) => renderReportRow(r, { nested: true }))
-                        : null}
-                    </div>
-                  ) : null}
-                </div>
-              ))}
+            <div className="search-form-header">
+              <div>
+                <h3 style={{ margin: 0 }}>Opgeslagen algemene trendrapporten (alle klanten)</h3>
+                <p className="hint" style={{ margin: "0.2rem 0 0" }}>
+                  Zelfstandig maandelijks overzicht per socialmediakanaal. Wordt automatisch
+                  gekoppeld aan elk klantrapport van dezelfde maand.
+                </p>
+              </div>
+              {!showBuilder ? (
+                <button
+                  className="secondary"
+                  type="button"
+                  onClick={() => {
+                    setBuilderMode("trend");
+                    setShowBuilder(true);
+                  }}
+                >
+                  Trendrapport maken
+                </button>
+              ) : null}
             </div>
+
+            {!trendGroups.length ? (
+              <p className="hint" style={{ margin: 0 }}>
+                Nog geen algemene trendrapporten opgeslagen.
+              </p>
+            ) : (
+              <div className="report-list stack">
+                {trendGroups.map((group) => (
+                  <div className="report-list-group" key={group.key}>
+                    {renderReportRow(group.latest)}
+                    {group.older.length ? (
+                      <div className="report-list-older">
+                        <button
+                          className="linkish"
+                          type="button"
+                          onClick={() =>
+                            setExpandedGroups((prev) => ({
+                              ...prev,
+                              [group.key]: !prev[group.key],
+                            }))
+                          }
+                        >
+                          {expandedGroups[group.key]
+                            ? "Verberg eerdere versies"
+                            : `Eerdere versies (${group.older.length})`}
+                        </button>
+                        {expandedGroups[group.key]
+                          ? group.older.map((r) => renderReportRow(r, { nested: true }))
+                          : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
         </>
       ) : null}
@@ -959,22 +1104,7 @@ function ClientReportInspectView({ data }) {
 }
 
 function monthLabelEn(year, month) {
-  const names = [
-    "",
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-  ];
-  if (year && month && month >= 1 && month <= 12) return `${names[month]} ${year}`;
+  if (year && month && month >= 1 && month <= 12) return `${MONTHS_NL[month]} ${year}`;
   return null;
 }
 
@@ -989,9 +1119,9 @@ function statusLineEn(review, presentation, badge) {
     return "Mislukt — niet goedkeurbaar";
   }
   if (presentation?.status?.partial || badge?.code === "partial_concept") {
-    return "Concept — nog niet goedgekeurd";
+    return "Concept — klaar voor controle";
   }
-  return "Concept — nog niet goedgekeurd";
+  return "Concept — klaar voor controle";
 }
 
 function ReportSectionEditor({
@@ -1046,7 +1176,7 @@ function ReportSectionEditor({
 
   function closeEditor() {
     if (dirty) {
-      const ok = window.confirm("Discard unsaved changes for this section?");
+      const ok = window.confirm("Niet-opgeslagen wijzigingen voor dit onderdeel verwerpen?");
       if (!ok) return;
     }
     setOpen(false);
@@ -1139,28 +1269,28 @@ function ReportSectionEditor({
       )}
 
       {section.is_edited && section.edited_by ? (
-        <p className="report-edited-by">Edited by {section.edited_by}</p>
+        <p className="report-edited-by">Bewerkt door {section.edited_by}</p>
       ) : null}
 
       {open ? (
         <div className="report-inline-editor stack">
-          {dirty ? <p className="hint report-unsaved">Unsaved changes</p> : null}
+          {dirty ? <p className="hint report-unsaved">Niet-opgeslagen wijzigingen</p> : null}
           <label>
-            Your feedback
+            Interne opmerking (optioneel)
             <textarea
               rows={3}
               value={feedback}
               onChange={(e) => setFeedback(e.target.value)}
-              placeholder="Optional internal notes (not in the client PDF)"
+              placeholder="Interne notitie voor collega's (komt niet in de klant-PDF)"
             />
           </label>
           <label>
-            Report text
+            Rapporttekst
             <textarea
               rows={8}
               value={editText}
               onChange={(e) => setEditText(e.target.value)}
-              placeholder="Edit the report text, or leave as-is and only save feedback"
+              placeholder="Pas hier de rapporttekst aan"
             />
           </label>
           <div className="row-actions wrap">
@@ -1180,11 +1310,11 @@ function ReportSectionEditor({
 function ReportPanelFigures({ presentation, onClose }) {
   const rows = presentation?.key_metrics || [];
   return (
-    <aside className="report-side-panel stack" aria-label="All figures">
+    <aside className="report-side-panel stack" aria-label="Alle cijfers">
       <div className="report-side-panel-head">
-        <h3>All figures</h3>
+        <h3>Alle cijfers</h3>
         <button type="button" className="secondary" onClick={onClose}>
-          Back to report
+          Terug naar rapport
         </button>
       </div>
       {rows.length ? (
@@ -1199,7 +1329,7 @@ function ReportPanelFigures({ presentation, onClose }) {
           </tbody>
         </table>
       ) : (
-        <p className="hint">No additional figures available.</p>
+        <p className="hint">Geen aanvullende cijfers beschikbaar.</p>
       )}
     </aside>
   );
@@ -1260,10 +1390,10 @@ function ReportPanelNotes({
     const key = `${point.kind}|${point.location || ""}|${String(point.note || "").slice(0, 120)}`;
     let note = "";
     if (status === "accepted") {
-      note = window.prompt("Short note: why is this acceptable for approval?") || "";
+      note = window.prompt("Korte toelichting: waarom keur je dit aandachtspunt goed?") || "";
       note = note.trim();
       if (!note) {
-        setError("A note is required when accepting a review point.");
+        setError("Vul een korte toelichting in bij het accepteren van een aandachtspunt.");
         return;
       }
     }
@@ -1279,7 +1409,7 @@ function ReportPanelNotes({
     const next = [...(acks || []).filter((a) => a.key !== key), entry];
     saveAcks(
       next,
-      status === "accepted" ? "Review point accepted with note." : "Review point marked as addressed."
+      status === "accepted" ? "Aandachtspunt geaccepteerd met toelichting." : "Aandachtspunt gemarkeerd als verwerkt."
     );
   }
 
@@ -1290,21 +1420,21 @@ function ReportPanelNotes({
   );
 
   return (
-    <aside className="report-side-panel stack" aria-label="Review notes">
+    <aside className="report-side-panel stack" aria-label="Notities en aandachtspunten">
       <div className="report-side-panel-head">
-        <h3>Review notes</h3>
+        <h3>Notities &amp; aandachtspunten</h3>
         <button type="button" className="secondary" onClick={onClose}>
-          Back to report
+          Terug naar rapport
         </button>
       </div>
       <p className="hint">
-        Missing data and content warnings live here — not inside the readable report. Handle open
-        points before approval.
+        Ontbrekende optionele gegevens en inhoudelijke controlepunten staan hier verzameld, zodat de
+        rapporttekst zelf rustig leesbaar blijft.
       </p>
 
       {missing.length ? (
         <section className="stack">
-          <h4>Missing data</h4>
+          <h4>Ontbrekende of aanvullende gegevens</h4>
           <ul className="plain-list">
             {missing.map((m) => (
               <li key={m}>{m}</li>
@@ -1314,7 +1444,7 @@ function ReportPanelNotes({
       ) : null}
 
       <section className="stack">
-        <h4>Content warnings</h4>
+        <h4>Controlepunten op de inhoud</h4>
         {attention.length ? (
           attention.map((point) => {
             const key = `${point.kind}|${point.location || ""}|${String(point.note || "").slice(0, 120)}`;
@@ -1328,8 +1458,8 @@ function ReportPanelNotes({
                 </p>
                 {ack ? (
                   <p className="hint">
-                    {ack.status === "accepted" ? "Accepted" : "Addressed"}
-                    {ack.by ? ` by ${ack.by}` : ""}
+                    {ack.status === "accepted" ? "Geaccepteerd" : "Verwerkt"}
+                    {ack.by ? ` door ${ack.by}` : ""}
                     {ack.note ? `: ${ack.note}` : ""}
                   </p>
                 ) : canReview && !review.is_approved ? (
@@ -1340,7 +1470,7 @@ function ReportPanelNotes({
                       disabled={busy}
                       onClick={() => handlePoint(point, "addressed")}
                     >
-                      Mark addressed
+                      Markeer als verwerkt
                     </button>
                     <button
                       type="button"
@@ -1348,22 +1478,22 @@ function ReportPanelNotes({
                       disabled={busy}
                       onClick={() => handlePoint(point, "accepted")}
                     >
-                      Accept with note
+                      Accepteer met toelichting
                     </button>
                   </div>
                 ) : (
-                  <p className="hint">Open</p>
+                  <p className="hint">Openstaand</p>
                 )}
               </div>
             );
           })
         ) : (
-          <p className="hint">No content warnings on this draft.</p>
+          <p className="hint">Geen openstaande controlepunten op dit concept.</p>
         )}
       </section>
 
       <section className="stack">
-        <h4>Original AI text &amp; edits</h4>
+        <h4>Originele tekst &amp; wijzigingen</h4>
         {(review.item_feedback || [])
           .filter((item) => item.key !== "action_plan.human_approval")
           .map((item) => {
@@ -1375,18 +1505,18 @@ function ReportPanelNotes({
               <div className="report-note-item" key={item.key}>
                 <p className="report-note-section">{item.label}</p>
                 {String(item.feedback || "").trim() ? (
-                  <p className="hint">Feedback: {item.feedback}</p>
+                  <p className="hint">Notitie: {item.feedback}</p>
                 ) : null}
                 {changed ? (
                   <>
-                    <p className="hint">Current text</p>
+                    <p className="hint">Huidige tekst</p>
                     <p className="report-doc-body">{item.edited_text}</p>
-                    <p className="hint">AI original</p>
+                    <p className="hint">Origineel concept</p>
                     <p className="report-doc-body">{item.ai_text || "—"}</p>
                   </>
                 ) : item.ai_text ? (
                   <>
-                    <p className="hint">AI original (unchanged)</p>
+                    <p className="hint">Origineel concept (ongewijzigd)</p>
                     <p className="report-doc-body">{item.ai_text}</p>
                   </>
                 ) : null}
@@ -1394,18 +1524,18 @@ function ReportPanelNotes({
             );
           })}
         {!editedItems.length ? (
-          <p className="hint">No text edits saved yet. AI originals remain available above.</p>
+          <p className="hint">Nog geen tekstwijzigingen opgeslagen.</p>
         ) : null}
       </section>
 
       {(review.previous_approved || []).length ? (
         <section className="stack">
-          <h4>Previous approvals</h4>
+          <h4>Eerdere goedkeuringen</h4>
           <ul className="plain-list">
             {(review.previous_approved || []).map((prev, idx) => (
               <li key={`${prev.approved_at}-${idx}`}>
                 {prev.reviewer_name || "—"} · {prev.approved_at || "—"}
-                {prev.superseded_at ? ` · superseded ${prev.superseded_at}` : ""}
+                {prev.superseded_at ? ` · vervangen op ${prev.superseded_at}` : ""}
               </li>
             ))}
           </ul>
@@ -1709,6 +1839,7 @@ function ReportDetail({
   maxBudget,
   preview,
   setPreview,
+  onOpenSettings,
   onClose,
 }) {
   const report = detail.report;
@@ -1748,7 +1879,9 @@ function ReportDetail({
   const canReview = Boolean(review.can_review);
   const sections = presentation?.document_sections || [];
   const analysisSections = sections.filter((s) => s.group === "analysis");
-  const chapterSections = sections.filter((s) => s.group === "chapters");
+  const chapterSections = sections.filter(
+    (s) => s.group === "chapters" || s.group === "trend_chapters"
+  );
   const actionSections = sections.filter((s) => s.group === "action_plan");
   const additionSections = sections.filter((s) => s.group === "addition");
   const itemsByKey = Object.fromEntries(
@@ -1792,7 +1925,7 @@ function ReportDetail({
 
   function tryClose() {
     if (anyDirty) {
-      const ok = window.confirm("You have unsaved edits. Close anyway?");
+      const ok = window.confirm("Je hebt nog niet-opgeslagen wijzigingen. Toch sluiten?");
       if (!ok) return;
     }
     onClose();
@@ -1801,13 +1934,13 @@ function ReportDetail({
   function approveReport() {
     if (!canReview || review.is_approved) return;
     if (anyDirty) {
-      setError("Save or cancel open edits before approving.");
+      setError("Sla openstaande wijzigingen eerst op of annuleer ze voordat je goedkeurt.");
       return;
     }
     if (openWarningCount > 0) {
       setPanel("notes");
       setError(
-        `${openWarningCount} review point${openWarningCount === 1 ? "" : "s"} still open. Address or accept each in Review notes before approval.`
+        `Er ${openWarningCount === 1 ? "staat nog 1 controlepunt" : `staan nog ${openWarningCount} controlepunten`} open. Verwerk of accepteer ze eerst onder Notities & aandachtspunten.`
       );
       return;
     }
@@ -1822,7 +1955,7 @@ function ReportDetail({
       setEditorName(name);
     }
     const ok = window.confirm(
-      `Rapport #${report.id} goedkeuren?\n\nAlleen deze bevestiging zet de status op Goedgekeurd.`
+      `Rapport #${report.id} goedkeuren?\n\nHiermee zet je de status op Goedgekeurd.`
     );
     if (!ok) return;
     setBusy(true);
@@ -1840,8 +1973,7 @@ function ReportDetail({
       .then(async (payload) => {
         setDetail(payload);
         await reloadList();
-        setNotice(`Report #${report.id} approved by ${name}.`);
-        setAskName(false);
+        setNotice(`Rapport #${report.id} is goedgekeurd door ${name}.`);
       })
       .catch((exc) => setError(exc.message))
       .finally(() => setBusy(false));
@@ -1860,13 +1992,34 @@ function ReportDetail({
     onDirtyChange,
   };
 
+  const channelCards = presentation?.channel_cards || [];
+  const periodNl =
+    presentation?.period_label_nl ||
+    snap?.period?.label_nl ||
+    presentation?.period_label ||
+    "";
+  const compareNl =
+    presentation?.compare_label_nl ||
+    snap?.period?.compare_label_nl ||
+    presentation?.compare_label ||
+    "";
+  const formatPatternNl =
+    presentation?.format_pattern_period_nl ||
+    snap?.format_pattern_window?.label_nl ||
+    "";
+  const formatPatternNoteNl =
+    presentation?.format_pattern_note_nl ||
+    snap?.format_pattern_window?.used_period_note_nl ||
+    "";
+  const linkedTrend = presentation?.linked_trend || snap?.linked_trend || null;
+
   return (
     <section className="card stack report-readable report-detail report-document report-document-v2">
       <header className="report-hero report-hero-calm">
         <div className="report-hero-top">
           <div>
             <p className="hint" style={{ margin: "0 0 0.35rem" }}>
-              {reportTypeLabel(report.report_type)} · periode {periodLabel(report)}
+              {reportTypeLabel(report.report_type)} · rapportmaand {periodLabel(report)}
             </p>
             <div className="report-title-edit">
               <label>
@@ -1876,7 +2029,9 @@ function ReportDetail({
                   onChange={(e) => setEditTitle(e.target.value)}
                   disabled={busy}
                   placeholder={
-                    isClient ? "Bijv. Red Rock – analyse september 2026" : "Bijv. Social trends – planning november 2026"
+                    isClient
+                      ? "Bijv. Red Rock – Maandrapport november 2026"
+                      : "Bijv. Algemeen trendrapport – november 2026"
                   }
                 />
               </label>
@@ -1903,55 +2058,36 @@ function ReportDetail({
                 >
                   Naam opslaan
                 </button>
-                <span className="hint">#{report.id} staat in Details</span>
               </div>
             </div>
             <p className="report-hero-meta">
-              <strong>{presentation?.client_name || "Klant"}</strong>
+              <strong>
+                {isClient ? presentation?.client_name || "Klant" : "Alle klanten (algemeen)"}
+              </strong>
               <span aria-hidden="true"> · </span>
               {month}
               <span aria-hidden="true"> · </span>
-              Vergelijking {presentation?.compare_label || "—"}
-              <span aria-hidden="true"> · </span>
               <span className={`report-status-badge is-${badge.code}`}>{statusShort}</span>
-            </p>
-            <p className="report-status-line">
-              {statusShort}
-              {reviewPointCount > 0
-                ? ` · ${reviewPointCount} aandachtspunt${reviewPointCount === 1 ? "" : "en"}`
-                : ""}
               {review.is_approved && (review.reviewer_name || editorName)
-                ? ` · door ${review.reviewer_name || editorName}`
+                ? ` · goedgekeurd door ${review.reviewer_name || editorName}`
                 : ""}
             </p>
             <p className="hint report-hero-actions-hint">
               {badge.code === "generation_failed" || report.status === "failed" ? (
-                <>
-                  Deze run is mislukt — geen concept om goed te keuren. Bekijk{" "}
-                  <strong>Technische details</strong> of start een nieuwe analyse.
-                  {isClient ? (
-                    <>
-                      {" "}
-                      PDF kan metadata tonen via <strong>Download PDF</strong>.
-                    </>
-                  ) : null}
-                </>
+                <>Deze run is mislukt. Start een nieuw rapport vanaf het overzicht.</>
               ) : badge.code === "prepared" || !report.executed_at ? (
-                <>
-                  Dit rapport is alleen voorbereid. Start de analyse via{" "}
-                  <strong>Nieuwe analyse</strong>, of bekijk de invoer onder Technische details.
-                </>
+                <>Dit rapport is voorbereid maar nog niet opgebouwd.</>
               ) : (
                 <>
-                  Per sectie: <strong>Bewerken</strong> → <strong>Opslaan</strong>. Daarna{" "}
-                  <strong>Goedkeuren</strong>
+                  Je kunt elk onderdeel aanpassen via <strong>Bewerken</strong> →{" "}
+                  <strong>Opslaan</strong>. Tevreden? Klik op <strong>Goedkeuren</strong>
                   {isClient ? (
                     <>
                       {" "}
-                      en <strong>Download PDF</strong>
+                      en download daarna de <strong>PDF</strong>
                     </>
                   ) : null}
-                  . Goedkeuring blijft menselijk.
+                  .
                 </>
               )}
             </p>
@@ -1975,48 +2111,97 @@ function ReportDetail({
               </button>
             ) : null}
             <button className="secondary" type="button" onClick={tryClose}>
-              Terug naar lijst
+              Terug naar alle rapporten
             </button>
           </div>
         </div>
         <div className="report-hero-links row-actions wrap">
-          <button type="button" className="linkish" onClick={() => setPanel("figures")}>
-            Alle cijfers
-          </button>
+          {isClient ? (
+            <button type="button" className="linkish" onClick={() => setPanel("figures")}>
+              Alle cijfers
+            </button>
+          ) : null}
           <button type="button" className="linkish" onClick={() => setPanel("notes")}>
             Notities &amp; aandachtspunten
             {openWarningCount > 0 ? ` (${openWarningCount} open)` : ""}
           </button>
-          <button type="button" className="linkish" onClick={() => setPanel("admin")}>
-            Technische details
-          </button>
+          {onOpenSettings ? (
+            <button
+              type="button"
+              className="linkish"
+              onClick={() => onOpenSettings("ai")}
+            >
+              Technische uitleg (Beheerinstellingen)
+            </button>
+          ) : null}
         </div>
       </header>
 
+      {/* Gebruikte perioden & trendkoppeling voor klantrapport */}
+      {isClient ? (
+        <section
+          style={{
+            background: "#1a2533",
+            border: "1px solid rgba(242, 240, 236, 0.14)",
+            borderRadius: "10px",
+            padding: "0.85rem 1rem",
+          }}
+        >
+          <h4 style={{ margin: "0 0 0.5rem" }}>Gebruikte gegevens in dit klantrapport</h4>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
+              gap: "0.75rem",
+            }}
+          >
+            <div>
+              <span className="hint" style={{ display: "block" }}>
+                Analyseperiode
+              </span>
+              <strong>{periodNl || "—"}</strong>
+            </div>
+            <div>
+              <span className="hint" style={{ display: "block" }}>
+                Vergelijkingsperiode
+              </span>
+              <strong>{compareNl || "—"}</strong>
+            </div>
+            <div>
+              <span className="hint" style={{ display: "block" }}>
+                Formats &amp; terugkerende patronen
+              </span>
+              <strong>{formatPatternNl || "—"}</strong>
+              {formatPatternNoteNl ? (
+                <span className="hint" style={{ display: "block", marginTop: "0.15rem" }}>
+                  {formatPatternNoteNl}
+                </span>
+              ) : null}
+            </div>
+            <div>
+              <span className="hint" style={{ display: "block" }}>
+                Meegenomen algemeen trendrapport
+              </span>
+              <strong>{linkedTrend?.title || "—"}</strong>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
       {report.status === "failed" ? (
         <div className="banner error stack">
-          <strong>Generation failed</strong>
+          <strong>Rapport opbouwen is mislukt</strong>
           <p>
-            {(report.body?.generation_failure?.friendly_reason ||
-              (String(report.error_text || "").toLowerCase().includes("high demand")
-                ? "The Gemini model was temporarily unavailable due to high demand on Google's side. This is not an API-key, quota, or prompt error."
-                : report.error_text) ||
-              "No draft text was produced. Only metadata and sources are available for inspection.")}
-          </p>
-          <p className="hint">
-            Only metadata and sources are available for inspection — no draft text.
-            {report.body?.generation_failure?.http_status
-              ? ` HTTP ${report.body.generation_failure.http_status}`
-              : ""}
-            {report.body?.generation_failure?.error_status
-              ? ` · ${report.body.generation_failure.error_status}`
-              : ""}
-            {report.model ? ` · model ${report.model}` : ""}
+            {report.body?.generation_failure?.friendly_reason ||
+              report.error_text ||
+              "Er kon geen concepttekst worden gemaakt."}
           </p>
         </div>
       ) : null}
 
-      {anyDirty ? <p className="banner warn-soft">You have unsaved section edits.</p> : null}
+      {anyDirty ? (
+        <p className="banner warn-soft">Je hebt niet-opgeslagen wijzigingen in een onderdeel.</p>
+      ) : null}
 
       {panel === "figures" ? (
         <ReportPanelFigures presentation={presentation} onClose={() => setPanel(null)} />
@@ -2071,13 +2256,13 @@ function ReportDetail({
 
       {panel ? null : (
         <div className="report-doc">
-          {!presentation?.has_readable_content && !sections.length ? (
+          {!presentation?.has_readable_content && !sections.length && !channelCards.length ? (
             <p className="banner">
               {report.status === "prepared" || !report.executed_at
-                ? "Prepared only — no AI draft yet. This report cannot be approved."
+                ? "Dit rapport is alleen voorbereid — er staat nog geen concepttekst in."
                 : report.status === "failed"
-                  ? "Generation failed — no draft text. Open Admin or sources to inspect metadata only."
-                  : report.error_text || "No readable draft available."}
+                  ? "Het opbouwen van dit rapport is mislukt."
+                  : report.error_text || "Geen leesbare concepttekst beschikbaar."}
             </p>
           ) : null}
 
@@ -2099,9 +2284,59 @@ function ReportDetail({
             </section>
           ) : null}
 
+          {/* Zelfstandig Algemeen trendrapport: overzicht per socialmediakanaal */}
+          {!isClient && channelCards.length ? (
+            <section className="report-doc-block stack">
+              <h3>Trends per socialmediakanaal</h3>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+                  gap: "0.85rem",
+                }}
+              >
+                {channelCards.map((card) => (
+                  <div
+                    key={card.key}
+                    style={{
+                      border: "1px solid rgba(242, 240, 236, 0.14)",
+                      borderRadius: "10px",
+                      padding: "0.85rem 1rem",
+                      background: "#1a2533",
+                    }}
+                  >
+                    <h4 style={{ margin: "0 0 0.45rem" }}>{card.label}</h4>
+                    {card.text ? (
+                      <p style={{ margin: "0 0 0.45rem", lineHeight: 1.5, fontSize: "0.94rem" }}>
+                        {card.text}
+                      </p>
+                    ) : null}
+                    {card.trends?.length ? (
+                      <ul className="plain-list" style={{ marginBottom: "0.5rem" }}>
+                        {card.trends.map((t) => (
+                          <li key={t}>{t}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {card.formats?.length ? (
+                      <p className="hint" style={{ margin: "0.25rem 0" }}>
+                        <strong>Kansrijke formats:</strong> {card.formats.join(", ")}
+                      </p>
+                    ) : null}
+                    {card.algoritme_en_bereik ? (
+                      <p className="hint" style={{ margin: "0.25rem 0 0" }}>
+                        <strong>Bereik &amp; algoritme:</strong> {card.algoritme_en_bereik}
+                      </p>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
           {analysisSections.length ? (
             <section className="report-doc-block">
-              <h3>Analyse</h3>
+              <h3>{isClient ? "Analyse" : "Toelichting per kanaal"}</h3>
               {analysisSections.map((section) => (
                 <ReportSectionEditor
                   key={section.review_key}
@@ -2115,7 +2350,7 @@ function ReportDetail({
 
           {chapterSections.length ? (
             <section className="report-doc-block">
-              <h3>Aanvullende hoofdstukken</h3>
+              <h3>{isClient ? "Aanvullende hoofdstukken" : "Brede ontwikkelingen & formats"}</h3>
               {chapterSections.map((section) => (
                 <ReportSectionEditor
                   key={section.review_key}
@@ -2129,7 +2364,7 @@ function ReportDetail({
 
           {actionSections.length ? (
             <section className="report-doc-block">
-              <h3>Actieplan</h3>
+              <h3>{isClient ? "Actieplan" : "Conclusie"}</h3>
               {actionSections.map((section) => (
                 <ReportSectionEditor
                   key={section.review_key}
@@ -2154,7 +2389,7 @@ function ReportDetail({
             <ReportSectionEditor
               section={{
                 review_key: "addition.staff",
-                label_en: "Staff addition",
+                label_en: "Eigen aanvulling",
                 label_nl: "Eigen aanvulling",
                 text: "",
                 ai_text: "",
@@ -2171,19 +2406,19 @@ function ReportDetail({
               <>
                 {review.is_approved ? (
                   <p className="banner">
-                    Approved. Editing any section returns this report to draft and keeps the previous
-                    approval on file.
+                    Goedgekeurd. Als je hierna een onderdeel aanpast, gaat het rapport terug naar
+                    concept en blijft de eerdere goedkeuring bewaard in de historie.
                   </p>
                 ) : (
                   <>
                     {openWarningCount > 0 ? (
                       <p className="hint">
-                        {openWarningCount} review point{openWarningCount === 1 ? "" : "s"} still open —
-                        handle them in{" "}
+                        Er {openWarningCount === 1 ? "staat nog 1 aandachtspunt" : `staan nog ${openWarningCount} aandachtspunten`} open —
+                        bekijk ze onder{" "}
                         <button type="button" className="linkish" onClick={() => setPanel("notes")}>
-                          Review notes
+                          Notities &amp; aandachtspunten
                         </button>{" "}
-                        before approval.
+                        vóór het goedkeuren.
                       </p>
                     ) : null}
                     <button className="primary" type="button" disabled={busy} onClick={approveReport}>
@@ -2195,10 +2430,10 @@ function ReportDetail({
             ) : (
               <p className="banner warn-soft">
                 {report.status === "prepared" || !report.executed_at
-                  ? "Prepared or unused report — not approvable until a usable AI run exists."
+                  ? "Voorbereid rapport zonder concepttekst — kan nog niet worden goedgekeurd."
                   : report.status === "failed"
-                    ? "Generation failed — not approvable. Inspect metadata and sources only."
-                    : "This report cannot be approved."}
+                    ? "Opbouw mislukt — dit rapport kan niet worden goedgekeurd."
+                    : "Dit rapport kan niet worden goedgekeurd."}
               </p>
             )}
           </div>

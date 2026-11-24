@@ -3,15 +3,37 @@ import RatingBadge from "./RatingBadge.jsx";
 function metricLabel(name) {
   return (
     {
-      views: "Views",
-      reach: "Reach",
+      views: "Weergaven",
+      reach: "Bereik",
       likes: "Likes",
-      comments: "Comments",
-      shares: "Shares",
-      saves: "Saves",
-      clicks: "Clicks",
+      comments: "Reacties",
+      shares: "Gedeeld",
+      saves: "Opgeslagen",
+      clicks: "Klikken",
     }[name] || name
   );
+}
+
+function dutchMediaNote(note) {
+  if (!note) return "";
+  if (note === "No media available for this post.") {
+    return "Geen afbeelding of video beschikbaar bij dit bericht.";
+  }
+  return note;
+}
+
+function dutchKindLabel(label) {
+  if (!label) return "";
+  const map = {
+    Post: "Bericht",
+    Image: "Afbeelding",
+    Carousel: "Carrousel",
+    Video: "Video",
+    Reel: "Reel",
+    Story: "Story",
+    "not available": "Onbekend type",
+  };
+  return map[label] || label;
 }
 
 function StatRow({ metrics, platform, highlight }) {
@@ -40,7 +62,7 @@ function StatRow({ metrics, platform, highlight }) {
                     : "rro-stat-value-inline"
               }
             >
-              {missing ? "n/a" : metric.label}
+              {missing ? "n.v.t." : metric.label}
             </span>
           </span>
         );
@@ -50,7 +72,7 @@ function StatRow({ metrics, platform, highlight }) {
 }
 
 function highlightCaption(text, query) {
-  const value = text || "No caption available.";
+  const value = text || "Geen berichttekst beschikbaar.";
   const q = (query || "").trim();
   if (!q || q.length < 2) return value;
   try {
@@ -68,10 +90,10 @@ function matchBadges(caption, query) {
   if (!q) return null;
   const text = (caption || "").toLowerCase();
   const badges = [];
-  if (text.includes(q)) badges.push(["caption", "Caption"]);
+  if (text.includes(q)) badges.push(["caption", "Tekst"]);
   if (text.includes(`#${q}`) || (q.startsWith("#") && text.includes(q))) badges.push(["hashtag", "Hashtag"]);
   if (text.includes(`@${q}`) || (q.startsWith("@") && text.includes(q))) badges.push(["tag", "Tag"]);
-  if (!badges.length && text.includes(q)) badges.push(["caption", "Caption"]);
+  if (!badges.length && text.includes(q)) badges.push(["caption", "Tekst"]);
   return badges.map(([cls, label]) => (
     <span key={cls} className={`badge badge-${cls} badge-match`}>
       {label}
@@ -87,7 +109,7 @@ export default function ResultCard({
   focused = false,
   detailsOpen = false,
   detailsLabel = "Details",
-  detailsOpenLabel = "Hide details",
+  detailsOpenLabel = "Sluit details",
   onOpenDetails,
   onOpenLogs,
   onOpenFeed,
@@ -98,6 +120,7 @@ export default function ResultCard({
   const cover = post.cover_url;
   const video = (post.media || []).find((item) => item.kind === "video");
   const account = post.account || post.cells?.Account || "";
+  const mediaNote = dutchMediaNote(post.media_note);
 
   return (
     <article className={`rro-result-card${focused ? " is-focused" : ""}`} id={post.dom_id || undefined}>
@@ -117,7 +140,7 @@ export default function ResultCard({
                   if (wrap && !wrap.querySelector(".rro-thumb-placeholder")) {
                     const empty = document.createElement("div");
                     empty.className = "rro-thumb-placeholder";
-                    empty.textContent = "No thumbnail";
+                    empty.textContent = "Geen afbeelding";
                     wrap.replaceWith(empty);
                   }
                 }}
@@ -128,28 +151,41 @@ export default function ResultCard({
               <video src={video.url} muted preload="metadata" referrerPolicy="no-referrer" />
             </div>
           ) : (
-            <div className="rro-thumb-placeholder">No thumbnail</div>
+            <div className="rro-thumb-placeholder">Geen afbeelding</div>
           )}
         </div>
         <div className="rro-result-body">
           <div className="rro-card-badges">
             <span className={`badge badge-platform badge-${post.platform}`}>{post.platform_label}</span>
-            <span className="badge badge-content badge-type">{post.content_kind_label || post.content_type_label}</span>
+            <span className="badge badge-content badge-type">
+              {dutchKindLabel(post.content_kind_label || post.content_type_label)}
+            </span>
             {(post.match_badges || []).map((badge) => (
               <span key={badge} className={`badge badge-${badge} badge-match`}>
-                {badge === "caption" ? "Caption" : badge === "hashtag" ? "Hashtag" : badge === "tag" ? "Tag" : badge}
+                {badge === "caption"
+                  ? "Tekst"
+                  : badge === "comment"
+                    ? "Reactie"
+                    : badge === "hashtag"
+                      ? "Hashtag"
+                      : badge === "tag"
+                        ? "Tag"
+                        : badge}
               </span>
             ))}
             {!(post.match_badges || []).length ? matchBadges(post.caption, query) : null}
           </div>
           <div className="rro-card-date">
-            {post.published_label}
+            {post.published_label && post.published_label !== "not available"
+              ? post.published_label
+              : "Datum onbekend"}
             {account ? ` · ${account}` : ""}
           </div>
           {post.formula_rating ? <RatingBadge rating={post.formula_rating} /> : null}
           <div className="rro-card-text">{highlightCaption(post.caption, query)}</div>
-          {post.media_note ? <p className="hint">{post.media_note}</p> : null}
-          {post.formula_rating?.explanation || post.formula_rating?.reason ? (
+          {mediaNote ? <p className="hint">{mediaNote}</p> : null}
+          {post.formula_rating?.score_known &&
+          (post.formula_rating?.explanation || post.formula_rating?.reason) ? (
             <p className="hint rating-explanation">
               {post.formula_rating.explanation || post.formula_rating.reason}
             </p>
@@ -177,10 +213,10 @@ export default function ResultCard({
         <div className="rro-card-actions">
           {post.permalink ? (
             <a className="rro-btn-link" href={post.permalink} target="_blank" rel="noopener noreferrer">
-              View original
+              Origineel bericht
             </a>
           ) : (
-            <div className="rro-btn-disabled">No link</div>
+            <div className="rro-btn-disabled">Geen link</div>
           )}
           <div className="row-actions" style={{ marginTop: "0.45rem" }}>
             {onOpenDetails ? (
@@ -190,7 +226,7 @@ export default function ResultCard({
             ) : null}
             {openPost ? (
               <button className="secondary" type="button" onClick={() => openPost(post.id)}>
-                Open in All posts
+                Open in Alle berichten
               </button>
             ) : null}
           </div>

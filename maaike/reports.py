@@ -11,10 +11,11 @@ from maaike.ai_status import public_ai_status
 from maaike.ai_trial import OFFICIAL_RATES
 from maaike.gemini_native import estimate_search_cost_usd
 from maaike.report_metrics import (
+    SOCIAL_TREND_CHANNELS,
     build_analysis_data_coverage,
     build_period_metrics,
     summarize_attached_ai_analyses,
-    trend_lookback_bounds,
+    trend_month_meta,
 )
 from maaike.report_prompts import PROMPT_VERSION, internet_search_capability, load_report_instruction_bundle
 from maaike.repository import list_formats, list_hooks, list_pillars
@@ -62,12 +63,30 @@ def suggested_client_report_title(client_name: str, year: int, month: int) -> st
 
 
 def suggested_trend_report_title(year: int, month: int) -> str:
-    return f"Social trends – planning {month_label_nl(year, month)}"
+    return f"Algemeen trendrapport – {month_label_nl(year, month)}"
 
 
 def _client_name(conn, client_id: int) -> str:
     row = conn.execute("SELECT name FROM clients WHERE id = ?", (client_id,)).fetchone()
     return str(row["name"] if row else f"Klant {client_id}")
+
+
+def fetch_accessible_report(conn, client_id: int, report_id: int):
+    """Fetch a report row. Client reports remain strictly client-isolated;
+    general trend reports are shared across the dashboard.
+    """
+    ensure_report_tables(conn)
+    row = conn.execute(
+        "SELECT * FROM client_reports WHERE id = ?",
+        (report_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("Rapport niet gevonden voor deze klant.")
+    if str(row["report_type"]) == "trend":
+        return row
+    if int(row["client_id"]) != int(client_id):
+        raise ValueError("Rapport niet gevonden voor deze klant.")
+    return row
 
 
 def update_report_title(conn, client_id: int, report_id: int, title: str) -> dict[str, Any]:
@@ -78,18 +97,13 @@ def update_report_title(conn, client_id: int, report_id: int, title: str) -> dic
         raise ValueError("Titel mag niet leeg zijn.")
     if len(clean) > 180:
         raise ValueError("Titel is te lang (max. 180 tekens).")
-    row = conn.execute(
-        "SELECT id FROM client_reports WHERE id = ? AND client_id = ?",
-        (report_id, client_id),
-    ).fetchone()
-    if row is None:
-        raise ValueError("Rapport niet gevonden voor deze klant.")
+    row = fetch_accessible_report(conn, client_id, report_id)
     now = _now()
     conn.execute(
-        "UPDATE client_reports SET title = ?, updated_at = ? WHERE id = ? AND client_id = ?",
-        (clean, now, report_id, client_id),
+        "UPDATE client_reports SET title = ?, updated_at = ? WHERE id = ?",
+        (clean, now, int(row["id"])),
     )
-    return get_report(conn, client_id, report_id)
+    return get_report(conn, client_id, int(row["id"]))
 
 
 def _strategy_topics_summary(strategy: dict[str, Any]) -> dict[str, Any]:
@@ -200,21 +214,31 @@ def _require_client(conn, client_id: int) -> None:
         raise ValueError("Klant niet gevonden.")
 
 
-def list_reports(conn, client_id: int, *, report_type: str | None = None) -> dict[str, Any]:
+def list_reports(
+    conn,
+    client_id: int,
+    *,
+    report_type: str | None = None,
+    include_shared_trends: bool = False,
+) -> dict[str, Any]:
     ensure_report_tables(conn)
     _require_client(conn, client_id)
-    q = """
+    if include_shared_trends:
+        where_clause = "(client_id = ? OR report_type = 'trend')"
+    else:
+        where_clause = "client_id = ?"
+    q = f"""
         SELECT id, client_id, report_type, period_year, period_month, planning_year, planning_month,
                title, status, version, supersedes_id, prompt_version, provider, model,
                prepared_at, executed_at, linked_trend_report_id, error_text, is_mock,
                created_at, updated_at,
                CASE
-                 WHEN json_extract(body_json, '$.partial') IN (1, '1', 'true', 'True') THEN 1
-                 WHEN json_extract(body_json, '$.source_grounding.requires_human_review') IN (1, '1', 'true', 'True') THEN 1
+                 WHEN json_valid(body_json) AND json_extract(body_json, '$.partial') IN (1, '1', 'true', 'True') THEN 1
+                 WHEN json_valid(body_json) AND json_extract(body_json, '$.source_grounding.requires_human_review') IN (1, '1', 'true', 'True') THEN 1
                  ELSE 0
                END AS is_partial
         FROM client_reports
-        WHERE client_id = ?
+        WHERE {where_clause}
     """
     params: list[Any] = [client_id]
     if report_type:
@@ -225,12 +249,13 @@ def list_reports(conn, client_id: int, *, report_type: str | None = None) -> dic
     rows = [dict(r) for r in conn.execute(q, params).fetchall()]
     cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(client_reports)").fetchall()}
     has_origin = "origin" in cols
-    if has_origin:
+    if has_origin and rows:
+        ids_ph = ",".join("?" for _ in rows)
         origin_by_id = {
             int(r["id"]): (r["origin"] or "")
             for r in conn.execute(
-                "SELECT id, origin FROM client_reports WHERE client_id = ?",
-                (client_id,),
+                f"SELECT id, origin FROM client_reports WHERE id IN ({ids_ph})",
+                [int(r["id"]) for r in rows],
             ).fetchall()
         }
     else:
@@ -238,7 +263,8 @@ def list_reports(conn, client_id: int, *, report_type: str | None = None) -> dic
     from maaike.report_review import review_summary_for_list
 
     for row in rows:
-        summary = review_summary_for_list(conn, client_id, row)
+        owner_cid = int(row["client_id"])
+        summary = review_summary_for_list(conn, owner_cid, row)
         row["review_status"] = summary.get("review_status") or ""
         row["review_status_label"] = summary.get("review_status_label") or ""
         row["is_approved"] = bool(summary.get("is_approved"))
@@ -247,13 +273,14 @@ def list_reports(conn, client_id: int, *, report_type: str | None = None) -> dic
         row["review_execution_key"] = summary.get("execution_key") or ""
         row["is_partial"] = bool(row.get("is_partial"))
         row["origin"] = origin_by_id.get(int(row["id"]), "")
-        row["from_plan"] = row["origin"] == "report_plan"
+        row["from_plan"] = row["origin"] in {"report_plan", "monthly_auto_1st"}
+        row["shared_general_trend"] = row["report_type"] == "trend"
         # Voorbereiding zonder uitvoering mag nooit als goedgekeurd of AI-afgerond gelden.
         if not row.get("executed_at") or row.get("status") == "prepared":
             row["is_approved"] = False
             row["can_review"] = False
             if row.get("status") == "prepared":
-                row["review_status_label"] = "No AI run"
+                row["review_status_label"] = "Nog niet uitgevoerd"
     return {
         "client_id": client_id,
         "reports": rows,
@@ -263,15 +290,27 @@ def list_reports(conn, client_id: int, *, report_type: str | None = None) -> dic
     }
 
 
+def _safe_json(raw: Any, default: Any) -> Any:
+    if isinstance(raw, (dict, list)):
+        return raw
+    if not raw or not isinstance(raw, str):
+        return default
+    try:
+        val = json.loads(raw)
+        if isinstance(default, dict) and not isinstance(val, dict):
+            return default
+        if isinstance(default, list) and not isinstance(val, list):
+            return default
+        return val
+    except (TypeError, json.JSONDecodeError):
+        return default
+
+
 def get_report(conn, client_id: int, report_id: int) -> dict[str, Any]:
     ensure_report_tables(conn)
-    row = conn.execute(
-        "SELECT * FROM client_reports WHERE id = ? AND client_id = ?",
-        (report_id, client_id),
-    ).fetchone()
-    if row is None:
-        raise ValueError("Rapport niet gevonden voor deze klant.")
-    snapshot = json.loads(row["input_snapshot_json"] or "{}")
+    row = fetch_accessible_report(conn, client_id, report_id)
+    owner_client_id = int(row["client_id"])
+    snapshot = _safe_json(row["input_snapshot_json"], {})
     snap_sources = {
         str(s.get("url") or "").strip(): s
         for s in (snapshot.get("sources") or [])
@@ -283,11 +322,7 @@ def get_report(conn, client_id: int, report_id: int) -> dict[str, Any]:
         (report_id,),
     ).fetchall():
         item = dict(r)
-        meta = {}
-        try:
-            meta = json.loads(item.get("meta_json") or "{}")
-        except (TypeError, json.JSONDecodeError):
-            meta = {}
+        meta = _safe_json(item.get("meta_json"), {})
         snap_src = snap_sources.get(str(item.get("url") or "").strip()) or {}
         # Prefer snapshot/meta flags so URL-only vs gelezen bron zichtbaar blijft.
         for key in (
@@ -316,31 +351,42 @@ def get_report(conn, client_id: int, report_id: int) -> dict[str, Any]:
         "report": {
             **dict(row),
             "input_snapshot": snapshot,
-            "sources": sources or json.loads(row["sources_json"] or "[]"),
-            "body": json.loads(row["body_json"] or "{}"),
-            "estimate": json.loads(row["estimate_json"] or "{}"),
-            "usage": json.loads(row["usage_json"] or "{}"),
-            "notes": json.loads(row["notes_json"] or "[]"),
+            "sources": sources or _safe_json(row["sources_json"], []),
+            "body": _safe_json(row["body_json"], {}),
+            "estimate": _safe_json(row["estimate_json"], {}),
+            "usage": _safe_json(row["usage_json"], {}),
+            "notes": _safe_json(row["notes_json"], []),
             "is_mock": bool(row["is_mock"]),
+            "shared_general_trend": row["report_type"] == "trend",
         },
         "internet_search": internet_search_capability(),
     }
     from maaike.client_report_view import attach_presentation_to_payload
     from maaike.report_review import attach_review_to_report_payload
 
-    payload = attach_review_to_report_payload(conn, client_id, payload)
-    return attach_presentation_to_payload(conn, client_id, payload)
+    payload = attach_review_to_report_payload(conn, owner_client_id, payload)
+    return attach_presentation_to_payload(conn, owner_client_id, payload)
 
 
 def _next_version(conn, client_id: int, report_type: str, year: int, month: int) -> tuple[int, int | None]:
-    row = conn.execute(
-        """
-        SELECT id, version FROM client_reports
-        WHERE client_id = ? AND report_type = ? AND period_year = ? AND period_month = ?
-        ORDER BY version DESC LIMIT 1
-        """,
-        (client_id, report_type, year, month),
-    ).fetchone()
+    if report_type == "trend":
+        row = conn.execute(
+            """
+            SELECT id, version FROM client_reports
+            WHERE report_type = 'trend' AND period_year = ? AND period_month = ?
+            ORDER BY version DESC, id DESC LIMIT 1
+            """,
+            (year, month),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT id, version FROM client_reports
+            WHERE client_id = ? AND report_type = ? AND period_year = ? AND period_month = ?
+            ORDER BY version DESC, id DESC LIMIT 1
+            """,
+            (client_id, report_type, year, month),
+        ).fetchone()
     if row is None:
         return 1, None
     return int(row["version"]) + 1, int(row["id"])
@@ -408,24 +454,22 @@ def prepare_trend_report(
     ensure_report_tables(conn)
     _require_client(conn, client_id)
     if not (1 <= run_month <= 12) or run_year < 2000:
-        raise ValueError("Ongeldige runmaand.")
+        raise ValueError("Ongeldige rapportmaand.")
     mode = (research_mode or "manual").strip().lower()
     if mode not in {"manual", "internet"}:
         raise ValueError("research_mode moet 'manual' of 'internet' zijn.")
     bundle = load_report_instruction_bundle("trend")
-    period = trend_lookback_bounds(run_year, run_month)
+    period = trend_month_meta(run_year, run_month)
     search = internet_search_capability()
-    strategy = get_strategy(conn, client_id)
-    strategy_topics = _strategy_topics_summary(strategy)
     clean_sources = []
     for item in sources or []:
-        title = str(item.get("title") or "").strip()
+        src_title = str(item.get("title") or "").strip()
         url = str(item.get("url") or "").strip()
-        if not title and not url:
+        if not src_title and not url:
             continue
         clean_sources.append(
             {
-                "title": title or (urlparse(url).netloc if url else "Bron"),
+                "title": src_title or (urlparse(url).netloc if url else "Bron"),
                 "url": url,
                 "published_at": str(item.get("published_at") or "").strip() or None,
                 "consulted_at": str(item.get("consulted_at") or _now()[:10]),
@@ -441,23 +485,23 @@ def prepare_trend_report(
         if not search["available"]:
             missing.append(
                 search.get("missing_setting")
-                or "Internet research selected but AI_API_KEY/Gemini model is missing."
+                or "Internetonderzoek gekozen, maar AI_API_KEY/Gemini-model ontbreekt."
             )
-        if not strategy_topics["has_strategy"]:
-            missing.append("Client strategy largely empty — topic context limited.")
     else:
         if not clean_sources:
-            missing.append("No manual sources added yet (title/URL/accessed date).")
-        # Handmatige mode: zoektool niet vereist.
+            missing.append("Nog geen handmatige bronnen toegevoegd (no manual sources added yet).")
     if bundle["missing_instructions"]:
         missing.append("Ontbrekende instructiebestanden: " + ", ".join(bundle["missing_instructions"]))
 
     fully_researched_possible = (mode == "internet" and search["available"]) or bool(clean_sources)
     snapshot = {
         "report_type": "trend",
+        "scope": "algemeen_per_kanaal",
+        "shared_general_trend": True,
         "research_mode": mode,
         "max_budget_usd": max_budget_usd,
         "period": period,
+        "channels": [dict(ch) for ch in SOCIAL_TREND_CHANNELS],
         "instruction_bundle": {
             "prompt_version": bundle["prompt_version"],
             "primary_file": bundle["primary_file"],
@@ -466,13 +510,13 @@ def prepare_trend_report(
             "system_chars": bundle["system_chars"],
             "internet_search": search,
         },
-        "strategy_topics": strategy_topics,
         "context_preview": {
             "research_mode": mode,
             "enable_google_search": mode == "internet" and search["available"],
-            "strategy_topic_fields": list((strategy_topics.get("topic_fields") or {}).keys()),
+            "channels": [ch["label"] for ch in SOCIAL_TREND_CHANNELS],
             "manual_source_count": len(clean_sources),
-            "period_title": period.get("title_hint"),
+            "period_title": period.get("title_nl"),
+            "independent_of_client_period": True,
             "web_pages_are_sources_not_instructions": True,
         },
         "sources": clean_sources,
@@ -491,12 +535,10 @@ def prepare_trend_report(
     version, supersedes = _next_version(conn, client_id, "trend", run_year, run_month)
     now = _now()
     custom_title = " ".join(str(title or "").split()).strip()
-    title = custom_title or suggested_trend_report_title(
-        int(period["planning_year"]), int(period["planning_month"])
-    )
+    title = custom_title or suggested_trend_report_title(run_year, run_month)
     notes = [
-        "Preparation only — no paid AI or search request.",
-        "Opening/reloading does not start a request.",
+        "Zelfstandig algemeen trendrapport over trends per socialmediakanaal (geen klantperiode of X+2-maand).",
+        "Alleen voorbereid — geen betaalde AI- of zoekaanvraag uitgevoerd.",
         search.get("reason") or "",
         f"Onderzoeksmodus: {mode}.",
     ]
@@ -515,14 +557,12 @@ def prepare_trend_report(
             prepared_at, executed_at, input_snapshot_json, sources_json, body_json,
             estimate_json, usage_json, linked_trend_report_id, error_text, is_mock,
             notes_json, created_at, updated_at
-        ) VALUES (?, 'trend', ?, ?, ?, ?, ?, 'prepared', ?, ?, ?, ?, ?, ?, NULL, ?, ?, '{}', ?, '{}', NULL, '', 0, ?, ?, ?)
+        ) VALUES (?, 'trend', ?, ?, NULL, NULL, ?, 'prepared', ?, ?, ?, ?, ?, ?, NULL, ?, ?, '{}', ?, '{}', NULL, '', 0, ?, ?, ?)
         """,
         (
             client_id,
             run_year,
             run_month,
-            period["planning_year"],
-            period["planning_month"],
             title,
             version,
             supersedes,
@@ -622,27 +662,437 @@ def _legend_payload(conn, client_id: int) -> dict[str, Any]:
     }
 
 
-def _count_figma_planning_items(conn, client_id: int, *, year: int, month: int) -> int:
-    """Count Figma planning items for the planning month (posts, stories, reels, …)."""
+def _figma_planning_summary(
+    conn,
+    client_id: int,
+    *,
+    report_year: int,
+    report_month: int,
+    planning_year: int,
+    planning_month: int,
+) -> dict[str, Any]:
+    """Summarize Figma connection + planning items for the 5-source readiness overview."""
+    connected = False
+    file_name = ""
+    source_url = ""
+    total_items = 0
+    month_items = 0
     try:
         from maaike.figma_planning import ensure_figma_tables
 
         ensure_figma_tables(conn)
-        row = conn.execute(
+        frow = conn.execute(
+            "SELECT file_key, file_name, source_url, last_synced_at FROM client_figma_files WHERE client_id = ?",
+            (client_id,),
+        ).fetchone()
+        if frow is not None and (str(frow["file_key"] or "").strip() or str(frow["source_url"] or "").strip()):
+            connected = True
+            file_name = str(frow["file_name"] or frow["file_key"] or "").strip()
+            source_url = str(frow["source_url"] or "").strip()
+        total_row = conn.execute(
+            "SELECT COUNT(*) AS n FROM figma_planning_items WHERE client_id = ?",
+            (client_id,),
+        ).fetchone()
+        total_items = int((total_row["n"] if total_row else 0) or 0)
+        month_row = conn.execute(
             """
             SELECT COUNT(*) AS n
             FROM figma_planning_items
             WHERE client_id = ?
               AND (
                     (period_year = ? AND period_month = ?)
+                    OR (period_year = ? AND period_month = ?)
                     OR period_year IS NULL
                   )
             """,
-            (client_id, year, month),
+            (client_id, report_year, report_month, planning_year, planning_month),
         ).fetchone()
-        return int(row["n"] or 0)
+        month_items = int((month_row["n"] if month_row else 0) or 0)
     except Exception:
-        return 0
+        pass
+    return {
+        "connected": connected,
+        "file_name": file_name,
+        "source_url": source_url,
+        "total_items": total_items,
+        "month_items": month_items,
+    }
+
+
+def find_month_trend_status(conn, *, year: int, month: int) -> dict[str, Any]:
+    """Find the general trend report for the exact same report month (dashboard-wide)."""
+    ensure_report_tables(conn)
+    usable = conn.execute(
+        """
+        SELECT *
+        FROM client_reports
+        WHERE report_type = 'trend'
+          AND period_year = ? AND period_month = ?
+          AND status IN ('completed', 'mock_completed')
+        ORDER BY CASE WHEN status = 'completed' THEN 0 ELSE 1 END,
+                 version DESC, id DESC
+        LIMIT 1
+        """,
+        (int(year), int(month)),
+    ).fetchone()
+    if usable is not None:
+        try:
+            usable_body = json.loads(usable["body_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            usable_body = {}
+        return {
+            "state": "available",
+            "month_label_nl": month_label_nl(year, month),
+            "usable_report": {
+                "id": int(usable["id"]),
+                "title": usable["title"],
+                "status": usable["status"],
+                "version": usable["version"],
+                "period_year": usable["period_year"],
+                "period_month": usable["period_month"],
+                "planning_year": usable["planning_year"],
+                "planning_month": usable["planning_month"],
+                "is_mock": bool(usable["is_mock"]),
+                "body_present": bool(str(usable["body_json"] or "").strip() not in ("", "{}")),
+                "shared_across_clients": True,
+                "owner_client_id": int(usable["client_id"]),
+                "channels": usable_body.get("channels") or {},
+                "chapters_summary": {
+                    k: str(v or "")[:1200]
+                    for k, v in (usable_body.get("chapters") or {}).items()
+                    if v
+                },
+            },
+            "prepared_report": None,
+        }
+
+    prepared = conn.execute(
+        """
+        SELECT id, title, status, version, period_year, period_month, client_id
+        FROM client_reports
+        WHERE report_type = 'trend'
+          AND period_year = ? AND period_month = ?
+          AND status IN ('prepared', 'running')
+        ORDER BY version DESC, id DESC
+        LIMIT 1
+        """,
+        (int(year), int(month)),
+    ).fetchone()
+    if prepared is not None:
+        return {
+            "state": "prepared_not_executed",
+            "month_label_nl": month_label_nl(year, month),
+            "usable_report": None,
+            "prepared_report": {
+                "id": int(prepared["id"]),
+                "title": prepared["title"],
+                "status": prepared["status"],
+                "version": prepared["version"],
+                "period_year": prepared["period_year"],
+                "period_month": prepared["period_month"],
+                "owner_client_id": int(prepared["client_id"]),
+            },
+        }
+
+    return {
+        "state": "missing",
+        "month_label_nl": month_label_nl(year, month),
+        "usable_report": None,
+        "prepared_report": None,
+    }
+
+
+def _strategy_has_meaningful_content(strategy: dict[str, Any]) -> tuple[bool, int, int]:
+    answers = strategy.get("start_answers") or {}
+    fields = strategy.get("strategy_fields") or {}
+    non_empty_answers = sum(
+        1
+        for k, v in answers.items()
+        if str(v or "").strip() and str(k) not in {"excel_month_contexts"}
+    )
+    non_empty_fields = sum(
+        1
+        for k, v in fields.items()
+        if str(v or "").strip() and str(k) not in {"excel_month_contexts"}
+    )
+    targets_n = len(strategy.get("targets") or [])
+    has_content = (non_empty_answers + non_empty_fields + targets_n) > 0
+    return has_content, (non_empty_answers + non_empty_fields), targets_n
+
+
+def build_client_sources_overview(
+    *,
+    period_bundle: dict[str, Any],
+    strategy: dict[str, Any],
+    trend: dict[str, Any] | None,
+    month_trend_info: dict[str, Any],
+    figma_info: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the 5-source readiness overview in simple Dutch (Points 31, 32, 33)."""
+    window = period_bundle["period"]
+    metrics = period_bundle["metrics"]
+    prev_metrics = period_bundle.get("previous_metrics") or {}
+    ytd = period_bundle.get("format_pattern_window") or {}
+    posts = period_bundle.get("posts") or []
+
+    period_nl = window.get("label_nl") or window.get("label") or ""
+    compare_nl = window.get("compare_label_nl") or window.get("compare_label") or ""
+    ytd_nl = ytd.get("label_nl") or ""
+    month_nl = month_trend_info.get("month_label_nl") or window.get("month_label_nl") or ""
+
+    # 1. Klantstrategie (Verplicht)
+    strat_ok, strat_fields_n, targets_n = _strategy_has_meaningful_content(strategy)
+    if strat_ok:
+        strat_avail = (
+            f"Strategie ingevuld ({strat_fields_n} onderdeel/onderdelen"
+            + (f" en {targets_n} doel(en)" if targets_n else "")
+            + ")."
+        )
+        strat_missing = (
+            "Geen verplichte onderdelen ontbreken."
+            if targets_n > 0
+            else "Geen concrete cijferdoelen ingevuld (niet blokkerend)."
+        )
+        strat_action = "Geen actie nodig om te starten."
+    else:
+        strat_avail = "Nog geen klantstrategie of doelen ingevuld voor deze klant."
+        strat_missing = "Doelgroep, doelen en afspraken van de klant."
+        strat_action = "Vul eerst de klantstrategie in bij Doelen & Strategie voordat je het rapport start."
+
+    src_strategy = {
+        "id": "strategy",
+        "label": "Klantstrategie",
+        "required": True,
+        "requirement_label": "Verplicht",
+        "ready": strat_ok,
+        "status": "ready" if strat_ok else "missing_required",
+        "status_label": "Klaar" if strat_ok else "Actie nodig",
+        "available_text": strat_avail,
+        "missing_text": strat_missing,
+        "user_action_needed": not strat_ok,
+        "action_text": strat_action,
+        "cta_label": "Open Doelen & Strategie",
+        "cta_target": "strategy",
+    }
+
+    # 2. Eigen berichten (Verplicht)
+    post_count = int(metrics.get("post_count") or 0)
+    prev_count = int(prev_metrics.get("post_count") or 0)
+    ytd_count = int(ytd.get("post_count") or 0)
+    uncl = metrics.get("unclassified") or {}
+    uncl_fmt = int((uncl.get("format") or {}).get("count") or 0)
+    uncl_pil = int((uncl.get("pillar") or {}).get("count") or 0)
+    uncl_hook = int((uncl.get("hook") or {}).get("count") or 0)
+    posts_ok = post_count > 0
+    if posts_ok:
+        posts_avail = (
+            f"{post_count} berichten in {period_nl}, {prev_count} in de vergelijkingsperiode "
+            f"({compare_nl}) en {ytd_count} in het kalenderjaar ({ytd_nl})."
+        )
+        uncl_parts = []
+        if uncl_fmt:
+            uncl_parts.append(f"{uncl_fmt} zonder format")
+        if uncl_pil:
+            uncl_parts.append(f"{uncl_pil} zonder pijler")
+        if uncl_hook:
+            uncl_parts.append(f"{uncl_hook} zonder hook")
+        posts_missing = (
+            "Bij enkele berichten ontbreekt nog indeling (" + ", ".join(uncl_parts) + ")."
+            if uncl_parts
+            else "Geen ontbrekende berichten in deze periode."
+        )
+        posts_action = (
+            "Je kunt gewoon starten. Wil je nog formats of hooks aanvullen? Doe dat bij Socialmediaberichten."
+            if uncl_parts
+            else "Geen actie nodig om te starten."
+        )
+    else:
+        posts_avail = f"0 eigen berichten gevonden tussen {period_nl}."
+        posts_missing = f"Eigen berichten in de rapportperiode ({period_nl})."
+        posts_action = (
+            "Haal eerst berichten op via Meta of voeg berichten toe bij Socialmediaberichten voordat je start."
+        )
+
+    src_posts = {
+        "id": "posts",
+        "label": "Eigen berichten",
+        "required": True,
+        "requirement_label": "Verplicht",
+        "ready": posts_ok,
+        "status": "ready" if posts_ok else "missing_required",
+        "status_label": "Klaar" if posts_ok else "Actie nodig",
+        "available_text": posts_avail,
+        "missing_text": posts_missing,
+        "user_action_needed": not posts_ok,
+        "action_text": posts_action,
+        "cta_label": "Open Socialmediaberichten",
+        "cta_target": "social_posts",
+    }
+
+    # 3. Inzichten uit de berichtencontrole (Later aan te vullen / optioneel)
+    posts_with_insight = sum(
+        1
+        for p in posts
+        if str((p.get("excel_assessment") or {}).get("insight_text") or "").strip()
+        or str((p.get("ai_analysis") or {}).get("insight_text") or "").strip()
+        or str((p.get("human_feedback") or {}).get("notes") or "").strip()
+        or str((p.get("human_feedback") or {}).get("final_verdict") or "").strip()
+    )
+    insights_ready = post_count > 0 and posts_with_insight > 0
+    if post_count == 0:
+        ins_avail = "Nog geen berichten in de rapportperiode om te controleren."
+        ins_missing = "Berichtencontrole volgt zodra er berichten staan."
+        ins_action = "Niet verplicht om te starten; voeg eerst eigen berichten toe."
+    elif insights_ready:
+        missing_ins_n = max(0, post_count - posts_with_insight)
+        ins_avail = f"Voor {posts_with_insight} van de {post_count} berichten staat een inzicht of beoordeling klaar."
+        ins_missing = (
+            f"Voor {missing_ins_n} bericht(en) nog geen inzicht ingevuld."
+            if missing_ins_n > 0
+            else "Alle berichten in deze periode hebben een beoordeling of inzicht."
+        )
+        ins_action = "Geen verplichte actie. Je kunt inzichten altijd later aanvullen bij Socialmediaberichten."
+    else:
+        ins_avail = f"0 van de {post_count} berichten hebben een ingevuld inzicht uit de berichtencontrole."
+        ins_missing = "Beoordelingen of notities per bericht uit de berichtencontrole."
+        ins_action = (
+            "Niet verplicht: je kunt het rapport nu starten en berichtinzichten later aanvullen bij Socialmediaberichten."
+        )
+
+    src_insights = {
+        "id": "post_insights",
+        "label": "Inzichten uit de berichtencontrole",
+        "required": False,
+        "requirement_label": "Later aan te vullen",
+        "ready": insights_ready,
+        "status": "ready" if insights_ready else "missing_optional",
+        "status_label": "Beschikbaar" if insights_ready else "Optioneel",
+        "available_text": ins_avail,
+        "missing_text": ins_missing,
+        "user_action_needed": False,
+        "action_text": ins_action,
+        "cta_label": "Berichten controleren",
+        "cta_target": "social_posts",
+    }
+
+    # 4. Figma-planning (Later aan te vullen / optioneel)
+    fig_connected = bool(figma_info.get("connected"))
+    fig_month_n = int(figma_info.get("month_items") or 0)
+    fig_total_n = int(figma_info.get("total_items") or 0)
+    fig_ready = fig_connected or fig_month_n > 0 or fig_total_n > 0
+    if fig_month_n > 0:
+        fig_avail = f"Figma-planning gekoppeld ({fig_month_n} planningsitems gevonden)."
+        fig_missing = "Niets ontbreekt."
+        fig_action = "Geen actie nodig."
+    elif fig_connected:
+        fig_avail = f"Figma-bestand gekoppeld ({figma_info.get('file_name') or 'bestand actief'})."
+        fig_missing = "Nog geen planningsitems ingelezen voor deze maand."
+        fig_action = "Niet verplicht: je kunt nu starten of eerst synchroniseren bij Doelen & Strategie."
+    else:
+        fig_avail = "Geen Figma-planning gekoppeld voor deze klant."
+        fig_missing = "Koppeling met het Figma-planningsbestand en stories."
+        fig_action = (
+            "Niet verplicht: je kunt het rapport nu starten en de Figma-planning later koppelen bij Doelen & Strategie."
+        )
+
+    src_figma = {
+        "id": "figma",
+        "label": "Figma-planning",
+        "required": False,
+        "requirement_label": "Later aan te vullen",
+        "ready": fig_ready,
+        "status": "ready" if fig_ready else "missing_optional",
+        "status_label": "Beschikbaar" if fig_ready else "Optioneel",
+        "available_text": fig_avail,
+        "missing_text": fig_missing,
+        "user_action_needed": False,
+        "action_text": fig_action,
+        "cta_label": "Figma-planning koppelen",
+        "cta_target": "figma_planning",
+    }
+
+    # 5. Algemeen trendrapport (Verplicht — zelfde rapportmaand)
+    trend_ok = trend is not None
+    prep_trend = month_trend_info.get("prepared_report")
+    if trend_ok:
+        trend_avail = f"{trend.get('title') or f'Algemeen trendrapport – {month_nl}'} wordt automatisch meegenomen."
+        trend_missing = "Niets ontbreekt."
+        trend_action = "Wordt automatisch gekoppeld aan dit klantrapport; je hoeft niets te kiezen."
+        trend_cta = "Trendrapport bekijken"
+    elif prep_trend is not None:
+        trend_avail = (
+            f"Concept ‘{prep_trend.get('title')}’ staat klaar, maar is nog niet uitgevoerd."
+        )
+        trend_missing = f"Afgerond algemeen trendrapport voor {month_nl}."
+        trend_action = (
+            f"Verplicht vóór starten: open het concept voor {month_nl} en voer het trendrapport eerst uit."
+        )
+        trend_cta = f"Trendrapport {month_nl} afronden"
+    else:
+        trend_avail = f"Nog geen algemeen trendrapport beschikbaar voor {month_nl}."
+        trend_missing = f"Algemeen trendrapport voor {month_nl} (trends per socialmediakanaal)."
+        trend_action = (
+            f"Verplicht vóór starten: maak eerst het algemeen trendrapport voor {month_nl}. "
+            "Zodra dat klaarstaat, kun je dit klantrapport direct starten."
+        )
+        trend_cta = f"Trendrapport {month_nl} maken"
+
+    src_trend = {
+        "id": "trend",
+        "label": "Algemeen trendrapport",
+        "required": True,
+        "requirement_label": "Verplicht",
+        "ready": trend_ok,
+        "status": "ready" if trend_ok else "missing_required",
+        "status_label": "Klaar" if trend_ok else "Actie nodig",
+        "available_text": trend_avail,
+        "missing_text": trend_missing,
+        "user_action_needed": not trend_ok,
+        "action_text": trend_action,
+        "cta_label": trend_cta,
+        "cta_target": "trend_report",
+        "report_year": window.get("year"),
+        "report_month": window.get("month"),
+        "linked_trend_id": trend.get("id") if trend else None,
+        "prepared_trend_id": prep_trend.get("id") if prep_trend else None,
+    }
+
+    sources_list = [src_strategy, src_posts, src_insights, src_figma, src_trend]
+    blocking = [s for s in sources_list if s["required"] and not s["ready"]]
+    optional_missing = [s for s in sources_list if not s["required"] and not s["ready"]]
+    can_start = len(blocking) == 0
+    if can_start:
+        summary_nl = "Alle verplichte bronnen staan klaar. Je kunt het klantrapport direct starten."
+    else:
+        names = ", ".join(s["label"].lower() for s in blocking)
+        summary_nl = f"Nog niet klaar om te starten: vul eerst de verplichte bron(nen) aan ({names})."
+
+    return {
+        "sources": sources_list,
+        "can_start_analysis": can_start,
+        "blocking_sources": [
+            {
+                "id": s["id"],
+                "label": s["label"],
+                "action_text": s["action_text"],
+                "cta_label": s["cta_label"],
+                "cta_target": s["cta_target"],
+                "prepared_trend_id": s.get("prepared_trend_id"),
+            }
+            for s in blocking
+        ],
+        "optional_missing_sources": [
+            {
+                "id": s["id"],
+                "label": s["label"],
+                "action_text": s["action_text"],
+                "cta_label": s["cta_label"],
+                "cta_target": s["cta_target"],
+            }
+            for s in optional_missing
+        ],
+        "summary_nl": summary_nl,
+    }
 
 
 def _available_stories(conn, client_id: int, *, year: int, month: int) -> dict[str, Any]:
@@ -748,6 +1198,10 @@ def _trend_summary(conn, client_id: int, linked_trend_report_id: int | None) -> 
         raise ValueError(
             "Gekozen trendrapport bestaat niet of is niet bruikbaar als gedeeld maandtrend."
         )
+    try:
+        t_body = json.loads(row["body_json"] or "{}")
+    except (TypeError, json.JSONDecodeError):
+        t_body = {}
     return {
         "id": row["id"],
         "title": row["title"],
@@ -761,6 +1215,12 @@ def _trend_summary(conn, client_id: int, linked_trend_report_id: int | None) -> 
         "body_present": bool(str(row["body_json"] or "").strip() not in ("", "{}")),
         "shared_across_clients": shared,
         "owner_client_id": int(row["client_id"]),
+        "channels": t_body.get("channels") or {},
+        "chapters_summary": {
+            k: str(v or "")[:1200]
+            for k, v in (t_body.get("chapters") or {}).items()
+            if v
+        },
     }
 
 
@@ -780,6 +1240,7 @@ def _client_report_prompt_input(
 
     metrics = period_bundle["metrics"]
     posts = period_bundle["posts"]
+    format_pattern_window = period_bundle.get("format_pattern_window") or {}
     ai_summary = summarize_attached_ai_analyses(posts)
     comparison_block = comparison_prompt_block(period_bundle)
     window = period_bundle["period"]
@@ -789,6 +1250,8 @@ def _client_report_prompt_input(
         "start": window.get("start"),
         "end": window.get("end"),
         "label": window.get("label"),
+        "label_nl": window.get("label_nl"),
+        "compare_label_nl": window.get("compare_label_nl"),
         "role": "analyseperiode",
     }
     planning = None
@@ -816,7 +1279,15 @@ def _client_report_prompt_input(
             **window,
             "analysis_period": analysis_period,
             "planning_period": planning,
+            "format_pattern_period": {
+                "start": format_pattern_window.get("start"),
+                "end": format_pattern_window.get("end"),
+                "label_nl": format_pattern_window.get("label_nl"),
+                "used_period_note_nl": format_pattern_window.get("used_period_note_nl"),
+                "post_count": format_pattern_window.get("post_count"),
+            },
         },
+        "format_pattern_window": format_pattern_window,
         "analysis_context": analysis_context,
         "available_stories": stories,
         "historical_performance": historical_performance,
@@ -828,6 +1299,7 @@ def _client_report_prompt_input(
             "previous_metrics": period_bundle["previous_metrics"],
             "comparison": period_bundle["comparison"],
             "comparison_for_prompt": comparison_block,
+            "calendar_year_format_patterns": format_pattern_window,
             "attached_ai_analyses": {
                 "count": ai_summary["completed_post_ai_analyses"],
                 "analysis_ids": ai_summary["completed_analysis_ids"],
@@ -971,11 +1443,18 @@ def inspect_client_report_data(
     )
     strategy = get_strategy(conn, client_id)
     legend = _legend_payload(conn, client_id)
-    trend = _trend_summary(conn, client_id, linked_trend_report_id)
     metrics = period_bundle["metrics"]
     posts = period_bundle["posts"]
-    # X+2 planning frame (september-analyse → novemberplanning) before enrich
+    format_pattern_window = period_bundle.get("format_pattern_window") or {}
     py, pm = int(period_bundle["period"]["year"]), int(period_bundle["period"]["month"])
+
+    # Point 31: automatically attach the usable general trend report of the SAME report month.
+    month_trend_info = find_month_trend_status(conn, year=py, month=pm)
+    if linked_trend_report_id is not None:
+        trend = _trend_summary(conn, client_id, linked_trend_report_id)
+    else:
+        trend = month_trend_info.get("usable_report")
+
     plan_m = pm + 2
     plan_y = py
     while plan_m > 12:
@@ -988,25 +1467,42 @@ def inspect_client_report_data(
         planning_year=plan_y,
         planning_month=plan_m,
     )
+    figma_info = _figma_planning_summary(
+        conn,
+        client_id,
+        report_year=py,
+        report_month=pm,
+        planning_year=plan_y,
+        planning_month=plan_m,
+    )
+    sources_overview = build_client_sources_overview(
+        period_bundle=period_bundle,
+        strategy=strategy,
+        trend=trend,
+        month_trend_info=month_trend_info,
+        figma_info=figma_info,
+    )
 
     missing: list[str] = []
     if trend is None:
-        missing.append("No matching trend report selected.")
+        missing.append(
+            f"Het algemeen trendrapport voor {month_label_nl(py, pm)} ontbreekt nog."
+        )
     if metrics["post_count"] == 0:
-        missing.append("No posts with a publication date in this period.")
+        missing.append("Geen eigen berichten met een publicatiedatum in deze rapportperiode.")
     if not (strategy.get("start_answers") or {}):
-        missing.append("Strategy/start answers largely empty.")
+        missing.append("Klantstrategie nog grotendeels leeg.")
     if not strategy.get("targets"):
-        missing.append("No targets recorded.")
+        missing.append("Geen cijferdoelen vastgelegd.")
     unclassified = metrics.get("unclassified") or {}
-    for kind, label in (("format", "format"), ("pillar", "content pillar"), ("hook", "hook")):
+    for kind, label in (("format", "format"), ("pillar", "pijler"), ("hook", "hook")):
         count = (unclassified.get(kind) or {}).get("count") or 0
         if count:
-            missing.append(f"{count} post(s) zonder {label}.")
+            missing.append(f"{count} bericht(en) zonder {label}.")
     if not (analysis_context.get("feedback_tov") or {}).get("present"):
-        missing.append("Feedback TOV ontbreekt.")
+        missing.append("Feedback op tone-of-voice ontbreekt.")
     if not (analysis_context.get("month_context") or {}).get("present"):
-        missing.append("Maandteksten (Analyse vorige planning / Bijzonderheden) niet gekoppeld.")
+        missing.append("Maandnotities (vorige planning / bijzonderheden) niet gekoppeld.")
 
     ai_summary = summarize_attached_ai_analyses(posts)
     available = {
@@ -1034,52 +1530,17 @@ def inspect_client_report_data(
         "seo_sources_supplied": False,
         "competitor_sources_supplied": False,
         "ahrefs_sources_supplied": False,
-        "figma_items": _count_figma_planning_items(conn, client_id, year=plan_y, month=plan_m),
+        "figma_items": figma_info["month_items"],
+        "figma_connected": figma_info["connected"],
         "log_insights": sum(
             1
             for p in posts
             if (p.get("excel_assessment") or {}).get("insight_text")
             or (p.get("ai_analysis") or {}).get("insight_text")
+            or (p.get("human_feedback") or {}).get("notes")
         ),
     }
-    input_checklist = [
-        {
-            "id": "strategy",
-            "label": "Klantstrategie",
-            "ready": bool(strategy.get("start_answers")),
-            "detail": "Targets & Strategy / Canva-import",
-        },
-        {
-            "id": "period",
-            "label": "Gekozen periode",
-            "ready": metrics["post_count"] > 0,
-            "detail": f"{py}-{pm:02d} → planning {plan_y}-{plan_m:02d} (X+2)",
-        },
-        {
-            "id": "posts",
-            "label": "Echte postresultaten",
-            "ready": metrics["post_count"] > 0,
-            "detail": f"{metrics['post_count']} posts in periode",
-        },
-        {
-            "id": "logs",
-            "label": "Inzichten uit Logs",
-            "ready": available["log_insights"] > 0,
-            "detail": f"{available['log_insights']} posts met insight",
-        },
-        {
-            "id": "figma",
-            "label": "Gekoppelde Figma-planning",
-            "ready": available["figma_items"] > 0,
-            "detail": f"{available['figma_items']} planningitems",
-        },
-        {
-            "id": "trend",
-            "label": "Algemeen trendrapport",
-            "ready": trend is not None,
-            "detail": (trend or {}).get("title") if trend else "Nog niet gekoppeld",
-        },
-    ]
+    input_checklist = sources_overview["sources"]
     prompt_input = _client_report_prompt_input(
         strategy=strategy,
         legend=legend,
@@ -1107,10 +1568,9 @@ def inspect_client_report_data(
             SELECT id, title, status, version, period_year, period_month,
                    planning_year, planning_month, is_mock
             FROM client_reports
-            WHERE client_id = ? AND report_type = 'trend'
+            WHERE report_type = 'trend'
             ORDER BY period_year DESC, period_month DESC, version DESC, id DESC
-            """,
-            (client_id,),
+            """
         ).fetchall()
     ]
 
@@ -1130,6 +1590,7 @@ def inspect_client_report_data(
         "ai_analysis_banner": ai_summary["ai_analysis_banner"],
         "attached_ai_analysis_ids": ai_summary["completed_analysis_ids"],
         "period": period_bundle["period"],
+        "format_pattern_window": format_pattern_window,
         "planning_x2": {"year": plan_y, "month": plan_m},
         "metrics": metrics,
         "previous_metrics": period_bundle["previous_metrics"],
@@ -1137,6 +1598,9 @@ def inspect_client_report_data(
         "posts": posts,
         "available": available,
         "input_checklist": input_checklist,
+        "sources_overview": sources_overview,
+        "can_start_analysis": sources_overview["can_start_analysis"],
+        "month_trend_status": month_trend_info,
         "missing": missing,
         "partial": bool(missing),
         "data_coverage": coverage,
@@ -1169,7 +1633,7 @@ def prepare_client_report(
     ensure_report_tables(conn)
     _require_client(conn, client_id)
     if not (1 <= period_month <= 12):
-        raise ValueError("Ongeldige plannings-/rapportmaand.")
+        raise ValueError("Ongeldige rapportmaand.")
     bundle = load_report_instruction_bundle("client")
     period_bundle = build_period_metrics(
         conn,
@@ -1182,21 +1646,27 @@ def prepare_client_report(
         compare_end=compare_end,
         attach_enrichment=True,
     )
-    # Keep calendar month on the report row even when custom dates override the window
     window = period_bundle["period"]
     if start and end:
-        # Align stored year/month with resolved window when custom
         period_year = int(window["year"])
         period_month = int(window["month"])
 
     posts = period_bundle["posts"]
     metrics = period_bundle["metrics"]
     comparison = period_bundle["comparison"]
+    format_pattern_window = period_bundle.get("format_pattern_window") or {}
     strategy = get_strategy(conn, client_id)
     legend = _legend_payload(conn, client_id)
-    trend = _trend_summary(conn, client_id, linked_trend_report_id)
-    # period_year/month = analyseperiode; planning standaard X+2
-    # (september-analyse → novemberplanning)
+
+    # Point 31: automatically attach the usable general trend report of the SAME report month.
+    month_trend_info = find_month_trend_status(conn, year=period_year, month=period_month)
+    if linked_trend_report_id is not None:
+        trend = _trend_summary(conn, client_id, linked_trend_report_id)
+    else:
+        trend = month_trend_info.get("usable_report")
+        if trend is not None:
+            linked_trend_report_id = int(trend["id"])
+
     plan_m = period_month + 2
     plan_y = period_year
     while plan_m > 12:
@@ -1213,30 +1683,51 @@ def prepare_client_report(
     plan_period = analysis_context["planning_period"]
     planning_year = int(plan_period["year"])
     planning_month = int(plan_period["month"])
+    figma_info = _figma_planning_summary(
+        conn,
+        client_id,
+        report_year=period_year,
+        report_month=period_month,
+        planning_year=planning_year,
+        planning_month=planning_month,
+    )
+    sources_overview = build_client_sources_overview(
+        period_bundle=period_bundle,
+        strategy=strategy,
+        trend=trend,
+        month_trend_info=month_trend_info,
+        figma_info=figma_info,
+    )
 
     missing = []
     if trend is None:
-        missing.append("No matching trend report selected.")
+        m_nl = month_label_nl(period_year, period_month)
+        missing.append(f"Het algemeen trendrapport voor {m_nl} ontbreekt nog.")
         if not allow_partial_without_trend:
+            if month_trend_info.get("state") == "prepared_not_executed":
+                raise ValueError(
+                    f"Het algemeen trendrapport voor {m_nl} staat nog op ‘voorbereid’ en is nog niet uitgevoerd. "
+                    f"Voer eerst het algemeen trendrapport voor {m_nl} uit voordat je dit klantrapport start."
+                )
             raise ValueError(
-                "Select a trend report, or set allow_partial_without_trend to prepare a "
-                "clearly marked partial client report."
+                f"Het algemeen trendrapport voor {m_nl} ontbreekt nog. "
+                f"Maak eerst het algemeen trendrapport voor {m_nl} voordat je dit klantrapport start."
             )
     if metrics["post_count"] == 0:
-        missing.append("No posts with a publication date in this period.")
+        missing.append("Geen eigen berichten met een publicatiedatum in deze rapportperiode.")
     if not (strategy.get("start_answers") or {}):
-        missing.append("Strategy/start answers largely empty.")
+        missing.append("Klantstrategie nog grotendeels leeg.")
     if not strategy.get("targets"):
-        missing.append("No targets recorded.")
+        missing.append("Geen cijferdoelen vastgelegd.")
     unclassified = metrics.get("unclassified") or {}
-    for kind, label in (("format", "format"), ("pillar", "content pillar"), ("hook", "hook")):
+    for kind, label in (("format", "format"), ("pillar", "pijler"), ("hook", "hook")):
         count = (unclassified.get(kind) or {}).get("count") or 0
         if count:
-            missing.append(f"{count} post(s) zonder {label}.")
+            missing.append(f"{count} bericht(en) zonder {label}.")
     if not (analysis_context.get("feedback_tov") or {}).get("present"):
-        missing.append("Feedback TOV ontbreekt.")
+        missing.append("Feedback op tone-of-voice ontbreekt.")
     if not (analysis_context.get("month_context") or {}).get("present"):
-        missing.append("Maandteksten (Analyse vorige planning / Bijzonderheden) niet gekoppeld.")
+        missing.append("Maandnotities (vorige planning / bijzonderheden) niet gekoppeld.")
 
     ai_summary = summarize_attached_ai_analyses(posts)
     available = {
@@ -1264,9 +1755,8 @@ def prepare_client_report(
         "seo_sources_supplied": False,
         "competitor_sources_supplied": False,
         "ahrefs_sources_supplied": False,
-        "figma_items": _count_figma_planning_items(
-            conn, client_id, year=planning_year, month=planning_month
-        ),
+        "figma_items": figma_info["month_items"],
+        "figma_connected": figma_info["connected"],
     }
     prompt_input = _client_report_prompt_input(
         strategy=strategy,
@@ -1298,6 +1788,10 @@ def prepare_client_report(
             "analysis_period": {
                 "year": period_year,
                 "month": period_month,
+                "start": window.get("start"),
+                "end": window.get("end"),
+                "label_nl": window.get("label_nl"),
+                "compare_label_nl": window.get("compare_label_nl"),
                 "role": "analyseperiode",
             },
             "planning_period": {
@@ -1305,7 +1799,16 @@ def prepare_client_report(
                 "month": planning_month,
                 "role": "planningsmaand_x2",
             },
+            "format_pattern_period": {
+                "start": format_pattern_window.get("start"),
+                "end": format_pattern_window.get("end"),
+                "label_nl": format_pattern_window.get("label_nl"),
+                "used_period_note_nl": format_pattern_window.get("used_period_note_nl"),
+                "post_count": format_pattern_window.get("post_count"),
+            },
         },
+        "format_pattern_window": format_pattern_window,
+        "sources_overview": sources_overview,
         "instruction_bundle": prompt_input["instruction_bundle"],
         "available": available,
         "missing": missing,
@@ -1350,7 +1853,10 @@ def prepare_client_report(
             "preserve_ai_vs_human_disagreement": True,
             "ai_analysis_executed": ai_summary["ai_analysis_executed"],
             "period_label": window.get("label"),
+            "period_label_nl": window.get("label_nl"),
             "compare_label": window.get("compare_label"),
+            "compare_label_nl": window.get("compare_label_nl"),
+            "format_pattern_period_nl": format_pattern_window.get("label_nl"),
             "analysis_period": f"{period_year}-{period_month:02d}",
             "planning_period": f"{planning_year}-{planning_month:02d}",
             "client_isolation": True,
@@ -1373,13 +1879,13 @@ def prepare_client_report(
         _client_name(conn, client_id), period_year, period_month
     )
     notes = [
-        "Preparation only — no paid AI request.",
-        "Figures calculated in Python; AI must not invent totals.",
-        "Opening/reloading does not start a request.",
-        f"Analyseperiode {period_year}-{period_month:02d}; planningsmaand {planning_year}-{planning_month:02d}.",
+        "Alleen voorbereid — nog geen betaalde AI-aanvraag uitgevoerd.",
+        "Cijfers berekend in Python; AI mag geen totalen verzinnen.",
+        f"Analyseperiode: {window.get('label_nl')}; vergelijkingsperiode: {window.get('compare_label_nl')}.",
+        f"Periode voor formats en terugkerende patronen: {format_pattern_window.get('label_nl')}.",
     ]
     if trend is None:
-        notes.append("Partial report: explicitly marked as without a matching trend report.")
+        notes.append("Gedeeltelijk rapport: opgeslagen zonder gekoppeld algemeen trendrapport.")
 
     cur = conn.execute(
         """
@@ -1441,12 +1947,7 @@ def prepare_client_report(
 
 def begin_report_execution_guard(conn, client_id: int, report_id: int) -> dict[str, Any]:
     ensure_report_tables(conn)
-    row = conn.execute(
-        "SELECT * FROM client_reports WHERE id = ? AND client_id = ?",
-        (report_id, client_id),
-    ).fetchone()
-    if row is None:
-        raise ValueError("Rapport niet gevonden voor deze klant.")
+    row = fetch_accessible_report(conn, client_id, report_id)
     if row["status"] == "running":
         raise ValueError("Uitvoering loopt al. Voorkom dubbelklikken; herlaad voor status.")
     if row["status"] in {"completed", "mock_completed"} and row["executed_at"]:
@@ -1464,12 +1965,8 @@ def begin_report_execution_guard(conn, client_id: int, report_id: int) -> dict[s
 def apply_mock_report(conn, client_id: int, report_id: int) -> dict[str, Any]:
     """Store a clearly labeled mock report body. Never calls a paid API."""
     ensure_report_tables(conn)
-    row = conn.execute(
-        "SELECT * FROM client_reports WHERE id = ? AND client_id = ?",
-        (report_id, client_id),
-    ).fetchone()
-    if row is None:
-        raise ValueError("Rapport niet gevonden voor deze klant.")
+    row = fetch_accessible_report(conn, client_id, report_id)
+    owner_client_id = int(row["client_id"])
     if row["status"] == "running":
         pass
     elif row["status"] in {"completed", "mock_completed"} and row["executed_at"]:
@@ -1477,25 +1974,50 @@ def apply_mock_report(conn, client_id: int, report_id: int) -> dict[str, Any]:
 
     from maaike.ai_response_validate import failed_body_envelope, validate_report_body
 
-    snapshot = json.loads(row["input_snapshot_json"] or "{}")
+    snapshot = _safe_json(row["input_snapshot_json"], {})
     now = _now()
     test_label = "LOCAL_TEST / MOCK — no real Claude or search output"
     if row["report_type"] == "trend":
+        m_nl = month_label_nl(row["period_year"], row["period_month"])
+        channels_mock = {
+            "instagram": f"Mock Instagram ({m_nl}): korte Reels met duidelijke hook en swipebare carrousels leveren de meeste saves op.",
+            "facebook": f"Mock Facebook ({m_nl}): herkenbare foto-updates en korte native video zorgen voor meer reacties.",
+            "linkedin": f"Mock LinkedIn ({m_nl}): documentposts en praktijkvoorbeelden vanuit medewerkers werken het sterkst.",
+            "tiktok": f"Mock TikTok ({m_nl}): zoekgerichte korte video’s (‘3 tips’, ‘hoe werkt…’) trekken nieuw publiek.",
+            "overig": f"Mock YouTube & overig ({m_nl}): verticale Shorts met ondertiteling versterken de vindbaarheid.",
+        }
         candidate = {
             "label": "MOCK — no real AI or search output",
+            "channels": channels_mock,
             "chapters": {
-                "positionering": "Mock: ontbrekende internetbronnen voorkomen een echt trendrapport.",
-                "managementsamenvatting": "Dit is testdata, niet opnemen als klantadvies.",
-                "belangrijkste_trends": "Mock-trendlijst alleen voor UI/validatietest.",
-                "platform_verschuivingen": "Mock: platformshifts niet geverifieerd.",
-                "contentkansen": "Mock: contentkansen placeholder voor test.",
-                "zoekclusters": "Mock: zoekclusters niet opgehaald.",
-                "conclusie": "Mockconclusie — handmatige bronnen en echte uitvoering nog nodig.",
+                "positionering": (
+                    f"Mock algemeen trendrapport voor {m_nl} — zelfstandig overzicht van trends per socialmediakanaal "
+                    "(testdata, niet als echt marktonderzoek gebruiken)."
+                ),
+                "managementsamenvatting": (
+                    f"Dit is testdata voor {m_nl}: overzicht van opvallende bewegingen per socialmediakanaal zonder betaalde AI-run."
+                ),
+                "belangrijkste_trends": (
+                    "Mock-trends: bewaarbare carrousels, korte verticale video en social search groeien op alle grote kanalen."
+                ),
+                "platform_verschuivingen": (
+                    f"• Instagram: {channels_mock['instagram']}\n"
+                    f"• Facebook: {channels_mock['facebook']}\n"
+                    f"• LinkedIn: {channels_mock['linkedin']}\n"
+                    f"• TikTok: {channels_mock['tiktok']}\n"
+                    f"• Overige kanalen: {channels_mock['overig']}"
+                ),
+                "contentkansen": "Mock-contentkansen: zet per kanaal een passend format in (testdata).",
+                "zoekclusters": "Mock-zoekgedrag: praktische keuzehulp en korte stappenplannen.",
+                "conclusie": "Mockconclusie — gebruik dit overzicht per kanaal bij de klantrapporten van deze maand.",
             },
             "distinctions": {
                 "facts": [],
-                "trends": [],
-                "suggestions": ["Mock-suggestie alleen voor UI-test."],
+                "trends": [
+                    "Instagram: saves en kijktijd bepalen zichtbaarheid.",
+                    "LinkedIn: documentposts en persoonlijke afzenders scoren hoog.",
+                ],
+                "suggestions": ["Mock-suggestie per kanaal alleen voor UI-test."],
             },
             "fully_researched": False,
             "not_web_research": True,
@@ -1503,42 +2025,56 @@ def apply_mock_report(conn, client_id: int, report_id: int) -> dict[str, Any]:
         }
     else:
         metrics = snapshot.get("metrics") or {}
+        ytd = snapshot.get("format_pattern_window") or {}
+        ytd_label = ytd.get("label_nl") or "het kalenderjaar t/m einddatum rapport"
+        period_info = snapshot.get("period") or {}
+        p_nl = period_info.get("label_nl") or period_info.get("label") or ""
+        cmp_nl = period_info.get("compare_label_nl") or period_info.get("compare_label") or ""
         candidate = {
             "label": "MOCK — no real AI output",
             "six_answers": {
-                "beter": "Mock: see Python aggregation by_format/by_pillar; no AI claim.",
-                "slechter": "Mock: ontbrekende metingen niet als 0 gelezen.",
-                "verklaring": "Mock: no proven cause without visual/source evidence.",
-                "herhalen": "Mock: formats met herhaald sterke Excel-rating + bereik (indien bekend).",
-                "stoppen": "Mock: volg instructie — 3× slecht ⇒ stoppen als standaardconclusie (nog te bevestigen).",
-                "testen": "Mock: gecontroleerde tests alleen met hypothese en meetplan.",
+                "beter": (
+                    f"Mock ({p_nl} vergeleken met {cmp_nl}): zie Python-cijfers per format en pijler; geen echte AI-claim."
+                ),
+                "slechter": "Mock: ontbrekende metingen zijn niet als 0 meegeteld.",
+                "verklaring": (
+                    f"Mock: mogelijke verklaringen op basis van de berichten en het kalenderjaaroverzicht ({ytd_label})."
+                ),
+                "herhalen": (
+                    f"Mock: beoordeeld over {ytd_label} — herhaal formats die meerdere keren sterk presteerden."
+                ),
+                "stoppen": (
+                    f"Mock: beoordeeld over {ytd_label} — formats die 3× zwak presteerden komen in aanmerking om te stoppen."
+                ),
+                "testen": "Mock: voer gecontroleerde tests uit met een duidelijke hypothese.",
             },
             "chapters": {
                 "input_brainstorm": "LOCAL_TEST mock: brainstorm-input alleen voor structuurtest.",
-                "per_kanaal": "LOCAL_TEST mock: kanaalvertaling placeholder, geen klantadvies.",
+                "per_kanaal": "LOCAL_TEST mock: vertaling per socialmediakanaal (testdata, geen klantadvies).",
                 "seo_serp": "Niet onderzocht / onvoldoende gegevens — LOCAL_TEST mock zonder SEO/SERP-bronnen.",
                 "concurrenten": "Niet onderzocht / onvoldoende gegevens — LOCAL_TEST mock zonder concurrentbronnen.",
-                "hooks_formats_testen": "LOCAL_TEST mock: hooks/formats om te testen (testdata).",
-                "laten_liggen_aanscherpen": "LOCAL_TEST mock: wat laten liggen — alleen UI/validatie.",
+                "hooks_formats_testen": f"LOCAL_TEST mock: hooks en formats om te testen (kalenderjaarperiode: {ytd_label}).",
+                "laten_liggen_aanscherpen": "LOCAL_TEST mock: wat laten liggen of aanscherpen — alleen UI/validatie.",
             },
             "action_plan": {
                 "planning_note": "LOCAL_TEST mock: planningsnoot — menselijke goedkeuring vereist.",
-                "hoofdfocus": "LOCAL_TEST mock: hoofdfocus uit Python-metrics, geen Claude.",
-                "waarom_nu": "LOCAL_TEST mock: waarom-nu alleen ter validatie van actieplanblok.",
+                "hoofdfocus": "LOCAL_TEST mock: hoofdfocus uit Python-cijfers en kalenderjaarpatronen.",
+                "waarom_nu": "LOCAL_TEST mock: waarom-nu alleen ter validatie van het actieplan.",
                 "actions": [
-                    "LOCAL_TEST: herhaal sterk format na menselijke check.",
-                    "LOCAL_TEST: plan één gecontroleerde test met meetplan.",
-                    "LOCAL_TEST: markeer zwakke format voor stop/test-besluit.",
+                    "LOCAL_TEST: herhaal sterk format na controle.",
+                    "LOCAL_TEST: plan één gerichte test met meetplan.",
+                    "LOCAL_TEST: bespreek zwakke formats voor stoppen of aanscherpen.",
                 ],
                 "stop_or_test_decisions": [
                     "LOCAL_TEST: stoppen of één optimalisatietest — nog te bevestigen."
                 ],
-                "watch_outs": ["LOCAL_TEST: ontbrekende metrics niet als 0 lezen."],
+                "watch_outs": ["LOCAL_TEST: ontbrekende cijfers tellen niet als 0."],
             },
             "python_metrics_echo": {
                 "post_count": metrics.get("post_count"),
                 "by_format_top": (metrics.get("by_format") or [])[:5],
                 "comparison": snapshot.get("comparison"),
+                "format_pattern_period_nl": ytd_label,
             },
             "partial": snapshot.get("partial"),
             "partial_without_trend": snapshot.get("partial_without_trend"),
@@ -1568,7 +2104,7 @@ def apply_mock_report(conn, client_id: int, report_id: int) -> dict[str, Any]:
             },
         }
         # Keep echo fields from candidate
-        for key in ("python_metrics_echo", "partial", "partial_without_trend", "missing", "not_web_research"):
+        for key in ("channels", "python_metrics_echo", "partial", "partial_without_trend", "missing", "not_web_research"):
             if key in candidate:
                 body[key] = candidate[key]
         status = "mock_completed"
@@ -1595,7 +2131,7 @@ def apply_mock_report(conn, client_id: int, report_id: int) -> dict[str, Any]:
         "search_tool_cost_known": False,
         "notes": "Mock/LOCAL_TEST; tokens and costs unknown (not as 0). No Claude evidence.",
     }
-    notes = json.loads(row["notes_json"] or "[]")
+    notes = _safe_json(row["notes_json"], [])
     notes.append("Mock gegenereerd — niet tussen echte klantadviezen plaatsen. LOCAL_TEST.")
     conn.execute(
         """
@@ -1636,7 +2172,7 @@ def apply_mock_report(conn, client_id: int, report_id: int) -> dict[str, Any]:
             now,
             status,
             f"Mock/LOCAL_TEST report id={report_id}; no paid call; usable={bool(validation.usable)}.",
-            client_id,
+            owner_client_id,
             PROMPT_VERSION,
             f"%id={report_id}%",
         ),
@@ -1656,16 +2192,13 @@ def add_trend_sources(
     from maaike.report_source_fetch import enrich_source_record
 
     ensure_report_tables(conn)
-    row = conn.execute(
-        "SELECT * FROM client_reports WHERE id = ? AND client_id = ? AND report_type = 'trend'",
-        (report_id, client_id),
-    ).fetchone()
-    if row is None:
-        raise ValueError("Trend report not found for this client.")
+    row = fetch_accessible_report(conn, client_id, report_id)
+    if str(row["report_type"]) != "trend":
+        raise ValueError("Trendrapport niet gevonden.")
     if row["status"] in {"completed", "mock_completed", "running"}:
         raise ValueError("Bronnen niet meer wijzigen op een uitgevoerde/lopende versie; maak een nieuwe versie.")
     now = _now()
-    snapshot = json.loads(row["input_snapshot_json"] or "{}")
+    snapshot = _safe_json(row["input_snapshot_json"], {})
     existing = list(snapshot.get("sources") or [])
     for item in sources or []:
         title = str(item.get("title") or "").strip()
@@ -1801,14 +2334,14 @@ def annotate_client_report_source_grounding(
     if row is None:
         raise ValueError("Client report not found for this client.")
 
-    body = json.loads(row["body_json"] or "{}")
+    body = _safe_json(row["body_json"], {})
     if not isinstance(body, dict):
         raise ValueError("Report body is not a JSON object.")
-    snapshot = json.loads(row["input_snapshot_json"] or "{}")
+    snapshot = _safe_json(row["input_snapshot_json"], {})
     sources = available_sources_from_snapshot(snapshot)
     findings = audit_unfounded_source_claims(body, available_sources=sources)
     now = _now()
-    notes = json.loads(row["notes_json"] or "[]")
+    notes = _safe_json(row["notes_json"], [])
     if not isinstance(notes, list):
         notes = []
 
@@ -1908,7 +2441,7 @@ def recover_client_report_json_syntax(
     if row is None:
         raise ValueError("Bronrapport niet gevonden voor deze klant.")
 
-    source_body = json.loads(row["body_json"] or "{}")
+    source_body = _safe_json(row["body_json"], {})
     if not isinstance(source_body, dict):
         raise ValueError("Bronrapport-body is geen JSON-object.")
     raw = str(source_body.get("raw_response") or "")
@@ -1940,7 +2473,7 @@ def recover_client_report_json_syntax(
         )
         repaired_text = raw
 
-    snapshot = json.loads(row["input_snapshot_json"] or "{}")
+    snapshot = _safe_json(row["input_snapshot_json"], {})
     sources = available_sources_from_snapshot(snapshot)
     candidate = {
         **parsed,
@@ -2033,7 +2566,7 @@ def recover_client_report_json_syntax(
     for edit in repair_edits:
         notes.append(f"Syntax-edit: {edit.get('description')}")
 
-    usage = json.loads(row["usage_json"] or "{}")
+    usage = _safe_json(row["usage_json"], {})
     usage = {
         **usage,
         "status": f"json_syntax_recovery_from_{source_report_id}",

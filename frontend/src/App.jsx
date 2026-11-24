@@ -12,19 +12,19 @@ import StrategyPage from "./pages/StrategyPage.jsx";
 const APP_NAME = "Bruine Beer";
 
 const NAV_PAGES = [
-  ["strategy", "Targets & Strategy"],
+  ["strategy", "Doelen & Strategie"],
   ["reports_analysis", "Rapporten"],
-  ["comparison", "Competitors"],
-  ["social_posts", "Social posts"],
-  ["settings", "Settings"],
+  ["comparison", "Concurrenten"],
+  ["social_posts", "Socialmediaberichten"],
+  ["settings", "Instellingen"],
 ];
 
 const TITLES = {
-  strategy: "Targets & Strategy",
+  strategy: "Doelen & Strategie",
   reports_analysis: "Rapporten",
-  comparison: "Competitors",
-  social_posts: "Social posts",
-  settings: "Settings",
+  comparison: "Concurrenten",
+  social_posts: "Socialmediaberichten",
+  settings: "Instellingen",
   client_settings: "Alle klanten",
   client_setup: "Klant inrichten",
 };
@@ -178,10 +178,15 @@ function resolveRoute(requestedPage) {
 }
 
 export default function App() {
-  const [page, setPage] = useState("social_posts");
+  const [page, setPage] = useState(() => {
+    const saved =
+      typeof window !== "undefined" ? window.sessionStorage.getItem("maaike-active-page") : "";
+    return resolveRoute(BOOT_PARAMS.get("page") || saved || "").page;
+  });
   const [reportsTab, setReportsTab] = useState("reports");
   const [settingsTab, setSettingsTab] = useState("ai");
   const [socialTab, setSocialTab] = useState("all_posts");
+  const [strategyTab, setStrategyTab] = useState("specialist");
   const [socialPeriod, setSocialPeriod] = useState("");
   const [clients, setClients] = useState([]);
   const [clientId, setClientId] = useState(null);
@@ -250,7 +255,9 @@ export default function App() {
     const params = BOOT_PARAMS;
     const requestedClient = Number(params.get("client"));
     const requestedPost = Number(params.get("post"));
-    const route = resolveRoute(params.get("page"));
+    const savedPage =
+      typeof window !== "undefined" ? window.sessionStorage.getItem("maaike-active-page") : "";
+    const route = resolveRoute(params.get("page") || savedPage || "");
     setPage(route.page);
     setReportsTab(REPORTS_TABS.has(route.reportsTab) ? route.reportsTab : "reports");
     setSettingsTab(SETTINGS_TABS.has(route.settingsTab) ? route.settingsTab : "ai");
@@ -297,14 +304,39 @@ export default function App() {
   }, [popupReturn, handleMetaOauthReturn]);
 
   useEffect(() => {
+    try {
+      if (page && page !== "client_setup") {
+        window.sessionStorage.setItem("maaike-active-page", page);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [page]);
+
+  useEffect(() => {
     if (!selected) {
       setTotals(null);
-      return;
+      return undefined;
     }
+    let cancelled = false;
+    const activeClientId = selected.id;
     setTotals(null);
     setLastSyncMessage("");
-    loadTotals(selected.id).catch((exc) => setError(exc.message));
-  }, [selected?.id, loadTotals]);
+    api(`/api/clients/${activeClientId}/sync-totals`)
+      .then((payload) => {
+        if (cancelled) return;
+        if (payload?.client_id != null && Number(payload.client_id) !== Number(activeClientId)) {
+          return;
+        }
+        setTotals(payload);
+      })
+      .catch((exc) => {
+        if (!cancelled) setError(exc.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected?.id]);
 
   function chooseClient(id) {
     if (id == null) {
@@ -377,18 +409,20 @@ export default function App() {
 
   async function syncMeta() {
     if (!selected || syncing) return;
+    const targetId = selected.id;
     setSyncing(true);
     setError("");
     setNotice("");
     try {
-      const payload = await api(`/api/clients/${selected.id}/posts/fetch`, { method: "POST", body: {} });
-      setLastSyncMessage(payload.fetch_message || "Synchronisation finished.");
-      setNotice(payload.fetch_message || "Synchronisation finished.");
+      const payload = await api(`/api/clients/${targetId}/posts/fetch`, { method: "POST", body: {} });
+      const msg = "Berichten zijn opgehaald en bijgewerkt.";
+      setLastSyncMessage(msg);
+      setNotice(msg);
       await loadClients();
-      await loadTotals(selected.id);
+      await loadTotals(targetId);
     } catch (exc) {
-      setError(exc.message);
-      setLastSyncMessage(exc.message);
+      setError("Het ophalen van berichten is nog niet gelukt. Controleer de koppeling van deze klant.");
+      setLastSyncMessage("Ophalen mislukt.");
     } finally {
       setSyncing(false);
     }
@@ -436,7 +470,7 @@ export default function App() {
           <div className="client-picker-row">
             {clients.length ? (
               <label className="client-select-label">
-                Client
+                Klant
                 <select
                   value={selected ? String(selected.id) : ""}
                   onChange={(event) => chooseClient(Number(event.target.value))}
@@ -449,7 +483,7 @@ export default function App() {
                 </select>
               </label>
             ) : (
-              <p className="muted">No clients yet.</p>
+              <p className="muted">Nog geen klanten aangemaakt.</p>
             )}
             <button
               className="icon-btn add-client-icon"
@@ -481,24 +515,24 @@ export default function App() {
         </div>
 
         <div className="sidebar-block sync-block">
-          <div className="sidebar-title">Synchronisation</div>
-          {!selected ? <p className="muted">Select a client to sync.</p> : null}
-          {selected && totals ? (
+          <div className="sidebar-title">Synchronisatie</div>
+          {!selected ? <p className="muted">Kies eerst een klant.</p> : null}
+          {selected && totals && Number(totals.client_id) === Number(selected.id) ? (
             <div className="sync-stats">
               <div>
-                <span>Instagram posts</span> <strong>{totals.instagram_posts}</strong>
+                <span>Instagram-berichten</span> <strong>{totals.instagram_posts}</strong>
               </div>
               <div>
-                <span>Instagram comments</span> <strong>{totals.instagram_comments_label}</strong>
+                <span>Instagram-reacties</span> <strong>{totals.instagram_comments_label}</strong>
               </div>
               <div>
-                <span>Facebook posts</span> <strong>{totals.facebook_posts}</strong>
+                <span>Facebook-berichten</span> <strong>{totals.facebook_posts}</strong>
               </div>
               <div>
-                <span>Facebook comments</span> <strong>{totals.facebook_comments_label}</strong>
+                <span>Facebook-reacties</span> <strong>{totals.facebook_comments_label}</strong>
               </div>
               <div>
-                <span>Last sync</span> <strong>{totals.synced_at}</strong>
+                <span>Laatst opgehaald</span> <strong>{totals.synced_at}</strong>
               </div>
             </div>
           ) : null}
@@ -510,10 +544,10 @@ export default function App() {
             disabled={!selected || !fetchAvailable || syncing}
             onClick={syncMeta}
           >
-            {syncing ? "Bezig met synchroniseren…" : "Synchroniseer Meta"}
+            {syncing ? "Berichten ophalen…" : "Berichten ophalen"}
           </button>
           {selected && !fetchAvailable ? (
-            <p className="hint">Koppel eerst Meta via Bewerken in Alle klanten.</p>
+            <p className="hint">Koppel eerst Facebook en Instagram voor deze klant.</p>
           ) : null}
         </div>
 
@@ -539,8 +573,8 @@ export default function App() {
             {selected ? `${selected.name} · ${pageTitle}` : pageTitle}
           </h1>
           <div className="rro-mobile-sync-hint">
-            Use the sidebar for client switching and synchronisation — tap <strong>Menu</strong> on
-            small screens.
+            Gebruik het menu links om van klant te wisselen of berichten op te halen — tik op{" "}
+            <strong>Menu</strong> op kleinere schermen.
           </div>
           {notice ? <p className="banner">{notice}</p> : null}
           {error ? <p className="banner error">{error}</p> : null}
@@ -610,10 +644,33 @@ export default function App() {
           ) : null}
 
           {page === "strategy" && selected ? (
-            <StrategyPage key={`strategy-${selected.id}`} client={selected} />
+            <StrategyPage
+              key={`strategy-${selected.id}`}
+              client={selected}
+              initialTab={strategyTab}
+            />
           ) : null}
           {page === "reports_analysis" && selected ? (
-            <ReportsAnalysisPage key={`hub-${selected.id}`} client={selected} />
+            <ReportsAnalysisPage
+              key={`hub-${selected.id}`}
+              client={selected}
+              onOpenStrategy={() => {
+                setStrategyTab("specialist");
+                openPage("strategy");
+              }}
+              onOpenFigmaPlanning={() => {
+                setStrategyTab("figma");
+                openPage("strategy");
+              }}
+              onOpenSocialPosts={() => {
+                setSocialTab("all_posts");
+                openPage("social_posts");
+              }}
+              onOpenSettings={(tab = "planning") => {
+                setSettingsTab(tab);
+                openPage("settings");
+              }}
+            />
           ) : null}
           {page === "social_posts" && selected ? (
             <SocialPostsPage
@@ -624,13 +681,22 @@ export default function App() {
               onClearFocus={() => setFocusPostId(null)}
               onTabChange={setSocialTab}
               onOpenPost={openSocialPost}
-              onSynced={() => loadTotals(selected.id)}
+              onOpenConnect={() => openClientSetup(selected)}
+              onOpenCompetitors={() => openPage("comparison")}
+              onSynced={async () => {
+                await loadClients();
+                await loadTotals(selected.id);
+              }}
               periodSelection={socialPeriod}
               onPeriodChange={setSocialPeriod}
             />
           ) : null}
           {page === "comparison" && selected ? (
-            <ComparisonPage key={`cmp-${selected.id}`} client={selected} />
+            <ComparisonPage
+              key={`cmp-${selected.id}`}
+              client={selected}
+              onOpenConnect={() => openClientSetup(selected)}
+            />
           ) : null}
           {page === "settings" ? (
             <SettingsHubPage

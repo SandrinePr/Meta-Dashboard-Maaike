@@ -33,6 +33,7 @@ def ensure_crawl_tables(conn) -> None:
             followers_count INTEGER,
             linked_at TEXT NOT NULL,
             last_crawled_at TEXT,
+            last_success_at TEXT,
             last_crawl_status TEXT,
             last_crawl_detail TEXT,
             last_crawl_json TEXT NOT NULL DEFAULT '{}',
@@ -41,6 +42,9 @@ def ensure_crawl_tables(conn) -> None:
         );
         """
     )
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(client_crawl_accounts)").fetchall()}
+    if "last_success_at" not in cols:
+        conn.execute("ALTER TABLE client_crawl_accounts ADD COLUMN last_success_at TEXT")
 
 
 def normalize_username(raw: str) -> str:
@@ -68,7 +72,7 @@ def link_crawl_account(conn, client_id: int, username: str) -> dict[str, Any]:
     ensure_crawl_tables(conn)
     clean = normalize_username(username)
     if not clean or len(clean) < 2:
-        raise ValueError("Enter a valid Instagram username.")
+        raise ValueError("Vul een geldige Instagram-gebruikersnaam in, bijvoorbeeld @gebruikersnaam.")
     now = _now()
     existing = conn.execute(
         "SELECT id FROM client_crawl_accounts WHERE client_id = ? AND username = ? COLLATE NOCASE",
@@ -128,17 +132,20 @@ def crawl_account(
     ensure_crawl_tables(conn)
     client = get_client(conn, client_id)
     if client is None:
-        raise ValueError("Client not found.")
+        raise ValueError("Deze klant staat niet in de lijst.")
     from maaike.repository import is_verified_link
 
+    meta_missing_msg = (
+        "Koppel eerst het Facebook- en Instagram-account van deze klant om berichten van concurrenten op te halen."
+    )
     if not is_verified_link(client):
-        raise ValueError("Connect Meta for this client first (host IG required for Business Discovery).")
+        raise ValueError(meta_missing_msg)
     secret = load_page_secret(conn, client_id)
     if secret is None:
-        raise ValueError("No page token stored. Connect Meta again.")
+        raise ValueError(meta_missing_msg)
     _page_id, host_ig_id, page_token = secret
-    if not host_ig_id:
-        raise ValueError("No Instagram business account ID for this client.")
+    if not host_ig_id or not page_token:
+        raise ValueError(meta_missing_msg)
 
     clean = normalize_username(username)
     link_crawl_account(conn, client_id, clean)
@@ -315,7 +322,9 @@ def crawl_account(
         """
         UPDATE client_crawl_accounts SET
             ig_account_id = ?, display_name = ?, followers_count = ?,
-            last_crawled_at = ?, last_crawl_status = ?, last_crawl_detail = ?,
+            last_crawled_at = ?,
+            last_success_at = CASE WHEN ? IN ('completed', 'completed_with_warnings') THEN ? ELSE last_success_at END,
+            last_crawl_status = ?, last_crawl_detail = ?,
             last_crawl_json = ?
         WHERE client_id = ? AND username = ? COLLATE NOCASE
         """,
@@ -323,6 +332,8 @@ def crawl_account(
             str(account_info.get("id") or "") or None,
             account_info.get("name"),
             account_info.get("followers_count"),
+            fetched_at,
+            status,
             fetched_at,
             status,
             detail,

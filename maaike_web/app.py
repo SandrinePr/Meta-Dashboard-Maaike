@@ -235,6 +235,12 @@ def create_app() -> FastAPI:
             start_report_planning_scheduler()
         except Exception:
             pass
+        try:
+            from maaike.monthly_trend_scheduler import start_monthly_trend_scheduler
+
+            start_monthly_trend_scheduler()
+        except Exception:
+            pass
         yield
 
     app = FastAPI(title="Maaike", lifespan=lifespan)
@@ -243,7 +249,7 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=list(settings.cors_origins),
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "PATCH", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization"],
     )
     basic_user = os.getenv("MAAIKE_BASIC_AUTH_USER", "maaike").strip() or "maaike"
@@ -282,6 +288,7 @@ def create_app() -> FastAPI:
         payload["oauth_redirect_uri"] = settings.oauth_redirect_uri
         payload["backend_url"] = settings.backend_url
         payload["frontend_url"] = settings.frontend_url
+        payload["render_git_commit"] = os.getenv("RENDER_GIT_COMMIT", "")[:12]
         return payload
 
     @app.get("/api/persist-status")
@@ -371,8 +378,46 @@ def create_app() -> FastAPI:
         try:
             with transaction() as conn:
                 update_plan(conn, body or {})
-                return planning_overview(conn)
+                result = planning_overview(conn)
+                result["persist"] = _safe_persist_push(conn)
+                return result
         except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/report-planning/monthly-trend")
+    def read_monthly_trend_schedule() -> dict:
+        from maaike.monthly_trend_scheduler import monthly_trend_schedule_status
+
+        with transaction() as conn:
+            return monthly_trend_schedule_status(conn)
+
+    @app.post("/api/report-planning/monthly-trend/simulate")
+    def simulate_monthly_trend_schedule(body: dict | None = None) -> dict:
+        """Simulate the 1st-of-the-month automatic general trend report without paid AI."""
+        from maaike.monthly_trend_scheduler import (
+            ensure_monthly_trend_report,
+            monthly_trend_schedule_status,
+        )
+
+        payload = body or {}
+        try:
+            sim_dt = payload.get("simulated_datetime") or payload.get("now_amsterdam")
+            year_raw = payload.get("year")
+            month_raw = payload.get("month")
+            only_first = bool(payload.get("only_on_first_of_month", False))
+            with transaction() as conn:
+                result = ensure_monthly_trend_report(
+                    conn,
+                    now_amsterdam=sim_dt,
+                    year=int(year_raw) if year_raw not in (None, "") else None,
+                    month=int(month_raw) if month_raw not in (None, "") else None,
+                    simulate_without_paid_ai=True,
+                    only_on_first_of_month=only_first,
+                )
+                result["schedule"] = monthly_trend_schedule_status(conn)
+                result["persist"] = _safe_persist_push(conn)
+                return result
+        except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/report-planning/ready-concepts")
@@ -400,12 +445,14 @@ def create_app() -> FastAPI:
         payload = body or {}
         try:
             with transaction() as conn:
-                return start_or_resume_run(
+                result = start_or_resume_run(
                     conn,
                     planned_date=payload.get("planned_date"),
                     prepare_concepts=bool(payload.get("prepare_concepts", True)),
                     allow_meta_refresh=False,
                 )
+                result["persist"] = _safe_persist_push(conn)
+                return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -641,7 +688,12 @@ def create_app() -> FastAPI:
 
         with transaction() as conn:
             _require_client(conn, client_id)
-            return list_reports(conn, client_id, report_type=report_type or None)
+            return list_reports(
+                conn,
+                client_id,
+                report_type=report_type or None,
+                include_shared_trends=True,
+            )
 
     @app.get("/api/clients/{client_id}/reports/{report_id}")
     def read_client_report(client_id: int, report_id: int) -> dict:
@@ -692,7 +744,7 @@ def create_app() -> FastAPI:
             budget = float(budget_raw) if budget_raw not in (None, "") else None
             with transaction() as conn:
                 _require_client(conn, client_id)
-                return prepare_trend_report(
+                result = prepare_trend_report(
                     conn,
                     client_id,
                     run_year=int(payload.get("run_year")),
@@ -702,6 +754,8 @@ def create_app() -> FastAPI:
                     max_budget_usd=budget,
                     title=payload.get("title"),
                 )
+                result["persist"] = _safe_persist_push(conn)
+                return result
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -716,13 +770,15 @@ def create_app() -> FastAPI:
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
-                return add_trend_sources(
+                result = add_trend_sources(
                     conn,
                     client_id,
                     report_id,
                     payload.get("sources") or [],
                     fetch_content=bool(fetch_raw),
                 )
+                result["persist"] = _safe_persist_push(conn)
+                return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -768,7 +824,7 @@ def create_app() -> FastAPI:
             with transaction() as conn:
                 _require_client(conn, client_id)
                 trend_id = payload.get("linked_trend_report_id")
-                return prepare_client_report(
+                result = prepare_client_report(
                     conn,
                     client_id,
                     period_year=int(payload.get("period_year")),
@@ -783,6 +839,8 @@ def create_app() -> FastAPI:
                     title=payload.get("title"),
                     maaike_planning_notes=payload.get("maaike_planning_notes") or None,
                 )
+                result["persist"] = _safe_persist_push(conn)
+                return result
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -794,9 +852,11 @@ def create_app() -> FastAPI:
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
-                return update_report_title(
+                result = update_report_title(
                     conn, client_id, report_id, str(payload.get("title") or "")
                 )
+                result["persist"] = _safe_persist_push(conn)
+                return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -812,10 +872,13 @@ def create_app() -> FastAPI:
             with transaction() as conn:
                 _require_client(conn, client_id)
                 if scenario:
-                    return apply_execution_mock(
+                    result = apply_execution_mock(
                         conn, client_id, report_id, scenario=scenario
                     )
-                return apply_mock_report(conn, client_id, report_id)
+                else:
+                    result = apply_mock_report(conn, client_id, report_id)
+                result["persist"] = _safe_persist_push(conn)
+                return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -879,13 +942,15 @@ def create_app() -> FastAPI:
             budget = float(budget_raw) if budget_raw not in (None, "") else None
             with transaction() as conn:
                 _require_client(conn, client_id)
-                return execute_report(
+                result = execute_report(
                     conn,
                     client_id,
                     report_id,
                     max_budget_usd=budget,
                     dry_run_paid=bool(dry_run),
                 )
+                result["persist"] = _safe_persist_push(conn)
+                return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -908,7 +973,9 @@ def create_app() -> FastAPI:
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
-                return save_report_review(conn, client_id, report_id, body or {})
+                result = save_report_review(conn, client_id, report_id, body or {})
+                result["persist"] = _safe_persist_push(conn)
+                return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1246,13 +1313,16 @@ def create_app() -> FastAPI:
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
-                return crawl_account(
+                result = crawl_account(
                     conn,
                     client_id,
                     username,
                     max_pages=int(payload.get("max_pages") or 2),
                     page_limit=int(payload.get("page_limit") or 25),
                 )
+                if isinstance(result, dict):
+                    result["persist"] = _safe_persist_push(conn)
+                return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1326,15 +1396,22 @@ def create_app() -> FastAPI:
 
         payload = body or {}
         try:
-            max_accounts = int(payload.get("max_accounts") or 3)
+            max_accounts = int(payload.get("max_accounts") or 10)
         except (TypeError, ValueError):
-            max_accounts = 3
+            max_accounts = 10
+        target_username = str(payload.get("username") or "").strip() or None
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
-                return refresh_client_competitors(
-                    conn, client_id, max_accounts=max(1, min(max_accounts, 10))
+                result = refresh_client_competitors(
+                    conn,
+                    client_id,
+                    max_accounts=max(1, min(max_accounts, 10)),
+                    username=target_username,
                 )
+                if isinstance(result, dict):
+                    result["persist"] = _safe_persist_push(conn)
+                return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1364,16 +1441,21 @@ def create_app() -> FastAPI:
     def put_comparison_weekly_plan(client_id: int, body: dict) -> dict:
         from maaike.comparison_service import comparison_state, save_weekly_plan
 
+        payload = body or {}
+        responsible_kw = {}
+        if "responsible_name" in payload:
+            responsible_kw["responsible_name"] = str(payload.get("responsible_name") or "")
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
                 save_weekly_plan(
                     conn,
                     client_id,
-                    enabled=bool((body or {}).get("enabled")),
-                    weekday=int((body or {}).get("weekday") or 0),
-                    time=str((body or {}).get("time") or "09:00"),
-                    note=str((body or {}).get("note") or ""),
+                    enabled=bool(payload.get("enabled")),
+                    weekday=int(payload.get("weekday") or 0),
+                    time=str(payload.get("time") or "09:00"),
+                    note=str(payload.get("note") or ""),
+                    **responsible_kw,
                 )
                 state = comparison_state(conn, client_id)
                 state["persist"] = _safe_persist_push(conn)
@@ -1394,16 +1476,40 @@ def create_app() -> FastAPI:
     def put_logs_weekly_plan(client_id: int, body: dict) -> dict:
         from maaike.logs_weekly import save_logs_weekly_plan
 
+        payload = body or {}
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
                 plan = save_logs_weekly_plan(
                     conn,
                     client_id,
-                    enabled=bool((body or {}).get("enabled")),
-                    weekday=int((body or {}).get("weekday") or 0),
-                    time=str((body or {}).get("time") or "09:00"),
-                    note=str((body or {}).get("note") or ""),
+                    enabled=bool(payload.get("enabled")),
+                    weekday=int(payload.get("weekday") or 0),
+                    time=str(payload.get("time") or "09:00"),
+                    note=str(payload.get("note") or ""),
+                    responsible_name=(
+                        str(payload.get("responsible_name") or "")
+                        if "responsible_name" in payload
+                        else None
+                    ),
+                )
+                return {"weekly_plan": plan, "persist": _safe_persist_push(conn)}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/clients/{client_id}/logs/weekly-plan/complete")
+    def post_complete_logs_weekly_plan(client_id: int, body: dict | None = None) -> dict:
+        from maaike.logs_weekly import complete_logs_weekly_check
+
+        payload = body or {}
+        try:
+            with transaction() as conn:
+                _require_client(conn, client_id)
+                plan = complete_logs_weekly_check(
+                    conn,
+                    client_id,
+                    completed_by=str(payload.get("completed_by") or ""),
+                    note=str(payload["note"]) if "note" in payload and payload["note"] is not None else None,
                 )
                 return {"weekly_plan": plan, "persist": _safe_persist_push(conn)}
         except ValueError as exc:
@@ -1736,9 +1842,9 @@ def create_app() -> FastAPI:
 
     @app.post("/api/clients/{client_id}/strategy/import/pdf-preview")
     async def strategy_pdf_preview(client_id: int, request: Request) -> dict:
+        from maaike.strategy_files import save_strategy_pdf
         from maaike.strategy_import import preview_strategy_pdf
 
-        _ = client_id
         form = await request.form()
         upload = form.get("file")
         if upload is None:
@@ -1746,9 +1852,90 @@ def create_app() -> FastAPI:
         raw = await upload.read()
         filename = getattr(upload, "filename", "") or "strategie.pdf"
         try:
-            return preview_strategy_pdf(raw, filename=filename)
+            preview = preview_strategy_pdf(raw, filename=filename)
+            with transaction() as conn:
+                _require_client(conn, client_id)
+                stored = save_strategy_pdf(conn, client_id, raw, filename=filename, status="staged")
+            preview["file_ref"] = stored["file_ref"]
+            preview["filename"] = stored["filename"]
+            preview["byte_size"] = stored["byte_size"]
+            return preview
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/clients/{client_id}/strategy/pdf")
+    async def upload_client_strategy_pdf(client_id: int, request: Request) -> dict:
+        """Store or replace the private strategy PDF without altering saved strategy answers."""
+        from maaike.strategy import get_strategy, save_strategy
+        from maaike.strategy_files import save_strategy_pdf
+        from maaike.strategy_import import strategy_overview
+
+        form = await request.form()
+        upload = form.get("file")
+        if upload is None:
+            raise HTTPException(status_code=400, detail="Upload een PDF-bestand.")
+        raw = await upload.read()
+        filename = getattr(upload, "filename", "") or "strategie.pdf"
+        try:
+            with transaction() as conn:
+                _require_client(conn, client_id)
+                stored = save_strategy_pdf(conn, client_id, raw, filename=filename, status="active")
+                current = get_strategy(conn, client_id)
+                fields = dict(current.get("strategy_fields") or {})
+                fields["strategy_pdf_ref"] = stored["file_ref"]
+                fields["last_pdf_meta"] = {
+                    "filename": stored["filename"],
+                    "source_kind": "strategy_pdf",
+                    "file_ref": stored["file_ref"],
+                    "byte_size": stored["byte_size"],
+                }
+                save_strategy(
+                    conn,
+                    client_id,
+                    account_info=current.get("account_info"),
+                    start_answers=current.get("start_answers"),
+                    strategy_fields=fields,
+                    source_notes=current.get("source_notes"),
+                    mark_complete=False,
+                )
+                overview = strategy_overview(conn, client_id)
+                if isinstance(overview, dict):
+                    overview["persist"] = _safe_persist_push(conn)
+                return overview
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/clients/{client_id}/strategy/pdf")
+    def read_client_strategy_pdf(
+        client_id: int,
+        disposition: str = "inline",
+        ref: str = "",
+    ) -> Response:
+        """Stream private strategy PDF strictly scoped to ``client_id``."""
+        from maaike.strategy_files import get_strategy_pdf
+
+        disp = "attachment" if str(disposition or "").strip().lower() == "attachment" else "inline"
+        with transaction() as conn:
+            _require_client(conn, client_id)
+            pdf = get_strategy_pdf(conn, client_id, file_ref=ref)
+        if pdf is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Geen opgeslagen PDF voor deze klant. Voeg de PDF opnieuw toe.",
+            )
+        safe_ascii = re.sub(r'[^A-Za-z0-9._ -]+', "_", pdf["filename"]).strip() or "strategie.pdf"
+        headers = {
+            "Content-Disposition": (
+                f"{disp}; filename=\"{safe_ascii}\"; filename*=UTF-8''{quote(pdf['filename'])}"
+            ),
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        }
+        return Response(
+            content=pdf["content"],
+            media_type="application/pdf",
+            headers=headers,
+        )
 
     @app.post("/api/clients/{client_id}/strategy/import/apply")
     def strategy_import_apply(client_id: int, body: dict) -> dict:
@@ -1757,12 +1944,51 @@ def create_app() -> FastAPI:
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
+                proposed = (body or {}).get("proposed") or {}
                 apply_strategy_import(
                     conn,
                     client_id,
-                    proposed=(body or {}).get("proposed") or {},
+                    proposed=proposed,
                     preserve_manual=bool((body or {}).get("preserve_manual", True)),
+                    stage_only=bool((body or {}).get("stage_only", True)),
+                    source_kind=str((body or {}).get("source_kind") or ""),
+                    filename=str((body or {}).get("filename") or ""),
+                    file_ref=str((body or {}).get("file_ref") or ""),
                 )
+                overview = strategy_overview(conn, client_id)
+                if isinstance(overview, dict):
+                    overview["persist"] = _safe_persist_push(conn)
+                return overview
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/clients/{client_id}/strategy/proposal/approve")
+    def strategy_proposal_approve(client_id: int, body: dict | None = None) -> dict:
+        from maaike.strategy_import import approve_strategy_proposal, strategy_overview
+
+        try:
+            with transaction() as conn:
+                _require_client(conn, client_id)
+                approve_strategy_proposal(
+                    conn,
+                    client_id,
+                    edited_proposal=(body or {}).get("proposal"),
+                )
+                overview = strategy_overview(conn, client_id)
+                if isinstance(overview, dict):
+                    overview["persist"] = _safe_persist_push(conn)
+                return overview
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/clients/{client_id}/strategy/proposal/discard")
+    def strategy_proposal_discard(client_id: int) -> dict:
+        from maaike.strategy_import import discard_strategy_proposal, strategy_overview
+
+        try:
+            with transaction() as conn:
+                _require_client(conn, client_id)
+                discard_strategy_proposal(conn, client_id)
                 overview = strategy_overview(conn, client_id)
                 if isinstance(overview, dict):
                     overview["persist"] = _safe_persist_push(conn)
@@ -1914,11 +2140,12 @@ def create_app() -> FastAPI:
     @app.put("/api/clients/{client_id}/strategy")
     def put_strategy(client_id: int, body: dict) -> dict:
         from maaike.strategy import save_strategy
+        from maaike.strategy_import import strategy_overview
 
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
-                result = save_strategy(
+                save_strategy(
                     conn,
                     client_id,
                     account_info=(body or {}).get("account_info"),
@@ -1926,7 +2153,10 @@ def create_app() -> FastAPI:
                     strategy_fields=(body or {}).get("strategy_fields"),
                     source_notes=(body or {}).get("source_notes"),
                     mark_complete=bool((body or {}).get("mark_complete")),
+                    clear_complete=bool((body or {}).get("clear_complete")),
+                    provenance_updates=(body or {}).get("provenance_updates"),
                 )
+                result = strategy_overview(conn, client_id)
                 if isinstance(result, dict):
                     result["persist"] = _safe_persist_push(conn)
                 return result
@@ -1936,11 +2166,16 @@ def create_app() -> FastAPI:
     @app.post("/api/clients/{client_id}/strategy/prefill-redrock")
     def prefill_strategy(client_id: int) -> dict:
         from maaike.strategy import prefill_red_rock_from_sources
+        from maaike.strategy_import import strategy_overview
 
         imports_dir = Path(__file__).resolve().parents[1] / "data" / "imports" / "redrock"
         with transaction() as conn:
             _require_client(conn, client_id)
-            return prefill_red_rock_from_sources(conn, client_id, imports_dir)
+            prefill_red_rock_from_sources(conn, client_id, imports_dir)
+            overview = strategy_overview(conn, client_id)
+            if isinstance(overview, dict):
+                overview["persist"] = _safe_persist_push(conn)
+            return overview
 
     @app.get("/api/clients/{client_id}/targets")
     def read_targets(client_id: int) -> dict:
@@ -2172,6 +2407,7 @@ async def _resolve_excel_upload(client_id: int, file: UploadFile | None) -> Path
 
 def _posts_payload(client_id: int) -> dict:
     from maaike.feed import feed_card
+    from maaike.filter_posts import build_channel_status
     from maaike.rating import get_rating_settings, rate_post
     from maaike.thumbnails import cover_api_path
 
@@ -2179,6 +2415,7 @@ def _posts_payload(client_id: int) -> dict:
         client = _require_client(conn, client_id)
         posts = list_posts(conn, client_id)
         moment = latest_sync_at(conn, client_id)
+        channel_status = build_channel_status(conn, client, posts=posts)
         legend = _legend_out(conn, client_id)
         rating_settings = get_rating_settings(conn, client_id)
         latest_feedback: dict[int, dict] = {}
@@ -2257,7 +2494,10 @@ def _posts_payload(client_id: int) -> dict:
             }
         )
     return {
+        "client_id": client_id,
+        "client_name": client.name,
         "synced_at": format_sync_moment(moment),
+        "channel_status": channel_status,
         "columns": list(OVERVIEW_COLUMNS),
         "column_labels": dict(COLUMN_LABELS),
         "unset_label": UNSET_LABEL,

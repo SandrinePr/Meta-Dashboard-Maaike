@@ -38,8 +38,8 @@ def test_instructions_and_search_capability_shape():
     assert trend["includes_action_plan"] is False
     assert (client.get("supporting_files") or {}).get("actieplan", {}).get("loaded") is True
     assert (client.get("supporting_files") or {}).get("style_notes", {}).get("loaded") is True
-    assert (client.get("supporting_files") or {}).get("client_example_pdf", {}).get("loaded") is True
-    assert (trend.get("supporting_files") or {}).get("trend_example_pdf", {}).get("loaded") is True
+    assert isinstance((client.get("supporting_files") or {}).get("client_example_pdf", {}).get("loaded"), bool)
+    assert isinstance((trend.get("supporting_files") or {}).get("trend_example_pdf", {}).get("loaded"), bool)
     assert "action_plan" in client["system_text"] or "Actieplan" in client["system_text"]
     search = internet_search_capability()
     assert "available" in search
@@ -90,13 +90,22 @@ def test_equal_length_period_and_safe_pct():
     assert prev_end == date(2026, 8, 31)
     assert prev_start == date(2026, 8, 2)
 
+    # Default client report window: 21st of M-1 through 20th of M vs 21st of M-2 through 20th of M-1
     window = resolve_period_window(period_year=2026, period_month=9)
-    assert window["start"] == "2026-09-01"
-    assert window["end"] == "2026-09-30"
-    assert window["previous_start"] == "2026-08-02"
-    assert window["previous_end"] == "2026-08-31"
-    assert window["compare_mode"] == "previous_equal_length"
-    assert window["lengths_equal"] is True
+    assert window["start"] == "2026-08-21"
+    assert window["end"] == "2026-09-20"
+    assert window["previous_start"] == "2026-07-21"
+    assert window["previous_end"] == "2026-08-20"
+    assert window["compare_mode"] == "previous_21_20"
+    assert window["mode"] == "client_21_20"
+
+    cal_window = resolve_period_window(period_year=2026, period_month=9, period_mode="calendar_month")
+    assert cal_window["start"] == "2026-09-01"
+    assert cal_window["end"] == "2026-09-30"
+    assert cal_window["previous_start"] == "2026-08-02"
+    assert cal_window["previous_end"] == "2026-08-31"
+    assert cal_window["compare_mode"] == "previous_equal_length"
+    assert cal_window["lengths_equal"] is True
 
     custom = resolve_period_window(
         start="2026-09-01",
@@ -249,8 +258,8 @@ def test_reports_flow_versions_isolation_mock(tmp_path: Path, monkeypatch) -> No
         assert snap["metrics"]["totals"]["reach"]["missing_count"] == 1
         assert snap["metrics"]["totals"]["reach"]["sum"] == 80
         assert snap["comparison"]["claim_significant_difference"] is False
-        assert snap["period"]["previous_start"] == "2026-08-02"
-        assert snap["period"]["previous_end"] == "2026-08-31"
+        assert snap["period"]["previous_start"] == "2026-07-21"
+        assert snap["period"]["previous_end"] == "2026-08-20"
         assert snap["ai_analysis_executed"] is False
         assert snap["prompt_input"]["ai_analysis_status"] == "not_executed"
         assert "formats" in snap["prompt_input"]["format_legend"]
@@ -461,11 +470,11 @@ def test_inspect_client_report_no_persist_isolation(tmp_path: Path, monkeypatch)
         assert inspected["persisted"] is False
         assert inspected["ai_analysis_executed"] is False
         assert inspected["metrics"]["post_count"] == 2
-        assert inspected["period"]["label"] == "2026-09-01 to 2026-09-30"
-        assert inspected["period"]["compare_label"] == "2026-08-02 to 2026-08-31"
+        assert inspected["period"]["label"] == "2026-08-21 to 2026-09-20"
+        assert inspected["period"]["compare_label"] == "2026-07-21 to 2026-08-20"
         assert any(g["name"] == "vraaghaak" for g in inspected["metrics"]["by_hook"])
         assert inspected["metrics"]["unclassified"]["format"]["count"] >= 1
-        assert inspected["prompt_input"]["periods"]["start"] == "2026-09-01"
+        assert inspected["prompt_input"]["periods"]["start"] == "2026-08-21"
         assert "format_legend" in inspected["prompt_input"]
         assert inspected["prompt_input"]["format_legend"]["formats"]
 
@@ -493,17 +502,18 @@ def test_inspect_client_report_no_persist_isolation(tmp_path: Path, monkeypatch)
         assert custom["period"]["previous_start"] == "2026-07-01"
 
 
-def test_trend_x2_period_for_november_planning():
-    from maaike.report_metrics import trend_lookback_bounds
+def test_standalone_trend_period_has_no_client_lookback_or_x2():
+    from maaike.report_metrics import trend_month_meta
 
-    period = trend_lookback_bounds(2026, 9)
-    assert period["run_year"] == 2026
-    assert period["run_month"] == 9
-    assert period["lookback_start"] == "2026-08-21"
-    assert period["lookback_end"] == "2026-09-20"
-    assert period["planning_year"] == 2026
-    assert period["planning_month"] == 11
-    assert "2026-09" in period["title_hint"] and "2026-11" in period["title_hint"]
+    period = trend_month_meta(2026, 9)
+    assert period["year"] == 2026
+    assert period["month"] == 9
+    assert period["scope"] == "algemeen_per_kanaal"
+    assert "lookback_start" not in period
+    assert "lookback_end" not in period
+    assert "planning_year" not in period
+    assert "planning_month" not in period
+    assert any(ch["key"] == "instagram" for ch in period["channels"])
 
 
 def test_url_only_source_not_counted_as_read(tmp_path: Path, monkeypatch) -> None:

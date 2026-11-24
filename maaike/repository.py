@@ -377,6 +377,7 @@ def delete_client(conn: sqlite3.Connection, client_id: int) -> dict[str, object]
         "client_figma_files",
         "client_reports",
         "client_targets",
+        "client_strategy_files",
         "client_strategy",
         "client_meta_secrets",
         "client_rating_settings",
@@ -768,14 +769,75 @@ def update_pillar(
     update_item(conn, client_id, "pillar", item_id, name, explanation, example_url=example_url)
 
 
+def _competitor_handles_for_client(conn: sqlite3.Connection, client_id: int) -> set[str]:
+    """Lowercase competitor handles configured for ``client_id`` (excluding own IG handle)."""
+    handles: set[str] = set()
+    own_row = conn.execute(
+        "SELECT meta_ig_username FROM clients WHERE id = ?",
+        (client_id,),
+    ).fetchone()
+    own_ig = str(own_row["meta_ig_username"] or "").strip().lstrip("@").lower() if own_row else ""
+
+    has_prefs = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'client_comparison_preferences'"
+    ).fetchone()
+    if has_prefs is not None:
+        row = conn.execute(
+            "SELECT competitors_json FROM client_comparison_preferences WHERE client_id = ?",
+            (client_id,),
+        ).fetchone()
+        if row is not None and row["competitors_json"]:
+            try:
+                parsed = json.loads(row["competitors_json"])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                parsed = []
+            for item in parsed or []:
+                clean = str(item or "").strip().lstrip("@").lower()
+                if clean and clean != own_ig:
+                    handles.add(clean)
+
+    has_crawl = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'client_crawl_accounts'"
+    ).fetchone()
+    if has_crawl is not None:
+        for crow in conn.execute(
+            "SELECT username FROM client_crawl_accounts WHERE client_id = ?",
+            (client_id,),
+        ).fetchall():
+            clean = str(crow["username"] or "").strip().lstrip("@").lower()
+            if clean and clean != own_ig:
+                handles.add(clean)
+    return handles
+
+
+def _is_competitor_post_row(row: sqlite3.Row, competitor_handles: set[str]) -> bool:
+    keys = row.keys()
+    origin = str(row["source_origin"] or "").strip().lower() if "source_origin" in keys else ""
+    if origin.startswith("business_discovery:") or origin.startswith("competitor:"):
+        return True
+    if competitor_handles and "account_name" in keys:
+        acc = str(row["account_name"] or "").strip().lstrip("@").lower()
+        if acc and acc in competitor_handles:
+            return True
+    return False
+
+
 def latest_sync_at(conn: sqlite3.Connection, client_id: int) -> str | None:
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(posts)").fetchall()}
+    origin_clause = (
+        "AND lower(COALESCE(source_origin, '')) NOT LIKE 'business_discovery:%' "
+        "AND lower(COALESCE(source_origin, '')) NOT LIKE 'competitor:%'"
+        if "source_origin" in cols
+        else ""
+    )
     row = conn.execute(
-        """
+        f"""
         SELECT MAX(last_synced_at) AS moment
         FROM posts
         WHERE client_id = ?
           AND last_synced_at IS NOT NULL
           AND TRIM(last_synced_at) != ''
+          {origin_clause}
         """,
         (client_id,),
     ).fetchone()
@@ -786,6 +848,7 @@ def latest_sync_at(conn: sqlite3.Connection, client_id: int) -> str | None:
 
 
 def list_posts(conn: sqlite3.Connection, client_id: int) -> list[StoredPost]:
+    competitor_handles = _competitor_handles_for_client(conn, client_id)
     rows = conn.execute(
         """
         SELECT
@@ -848,11 +911,17 @@ def list_posts(conn: sqlite3.Connection, client_id: int) -> list[StoredPost]:
         LEFT JOIN content_pillars g
             ON g.id = e.pillar_id AND g.client_id = p.client_id
         WHERE p.client_id = ?
+          AND lower(COALESCE(p.source_origin, '')) NOT LIKE 'business_discovery:%'
+          AND lower(COALESCE(p.source_origin, '')) NOT LIKE 'competitor:%'
         ORDER BY p.published_at DESC, p.id DESC
         """,
         (client_id,),
     ).fetchall()
-    return [_stored_post(row) for row in rows]
+    return [
+        _stored_post(row)
+        for row in rows
+        if not _is_competitor_post_row(row, competitor_handles)
+    ]
 
 
 def save_editorial(

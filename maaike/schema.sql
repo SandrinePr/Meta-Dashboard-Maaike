@@ -89,6 +89,8 @@ CREATE TABLE IF NOT EXISTS posts (
     account_name TEXT,
     caption TEXT,
     media_urls TEXT,
+    platform_label TEXT,
+    source_origin TEXT,
     last_synced_at TEXT,
     UNIQUE(client_id, platform, external_id),
     FOREIGN KEY(client_id) REFERENCES clients(id)
@@ -245,6 +247,26 @@ CREATE TABLE IF NOT EXISTS client_strategy (
     updated_at TEXT NOT NULL,
     FOREIGN KEY(client_id) REFERENCES clients(id)
 );
+
+-- Private per-client strategy PDF binaries (exported with remote persist; never public).
+CREATE TABLE IF NOT EXISTS client_strategy_files (
+    id INTEGER PRIMARY KEY,
+    client_id INTEGER NOT NULL,
+    file_ref TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    mime_type TEXT NOT NULL DEFAULT 'application/pdf',
+    byte_size INTEGER NOT NULL DEFAULT 0,
+    sha256 TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'staged',
+    content BLOB NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(client_id, file_ref),
+    FOREIGN KEY(client_id) REFERENCES clients(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_client_strategy_files_client
+    ON client_strategy_files(client_id, status, updated_at);
 
 CREATE TABLE IF NOT EXISTS client_targets (
     id INTEGER PRIMARY KEY,
@@ -506,3 +528,25 @@ CREATE TABLE IF NOT EXISTS client_report_reviews (
 
 CREATE INDEX IF NOT EXISTS idx_report_reviews_report
     ON client_report_reviews(client_id, report_id, execution_key);
+
+-- Maandelijkse automatische trendrapport-runs op de 1e van iedere maand (Europe/Amsterdam, idempotent).
+CREATE TABLE IF NOT EXISTS monthly_trend_schedule_runs (
+    id INTEGER PRIMARY KEY,
+    period_year INTEGER NOT NULL,
+    period_month INTEGER NOT NULL,
+    timezone TEXT NOT NULL DEFAULT 'Europe/Amsterdam',
+    scheduled_for TEXT NOT NULL,
+    report_id INTEGER,
+    mode TEXT NOT NULL DEFAULT 'simulation_no_paid_ai',
+    paid_ai_called INTEGER NOT NULL DEFAULT 0,
+    attempt_count INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'completed',
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(period_year, period_month),
+    FOREIGN KEY(report_id) REFERENCES client_reports(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_monthly_trend_runs_period
+    ON monthly_trend_schedule_runs(period_year, period_month);

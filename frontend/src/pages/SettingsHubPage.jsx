@@ -7,11 +7,11 @@ import PromptsPage from "./PromptsPage.jsx";
 import ReportPlanningPage from "./ReportPlanningPage.jsx";
 
 const TABS = [
-  ["ai", "AI Connections"],
+  ["ai", "AI-koppelingen & techniek"],
   ["prompts", "Prompts"],
   ["planning", "Rapportplanning"],
-  ["legend", "Legend"],
-  ["backup", "Backup & restore"],
+  ["legend", "Legenda (formats & pijlers)"],
+  ["backup", "Back-up & herstel"],
 ];
 
 export default function SettingsHubPage({ client, initialTab = "ai", onNotice, onError, onTabChange }) {
@@ -31,28 +31,29 @@ export default function SettingsHubPage({ client, initialTab = "ai", onNotice, o
       <p className="hint">
         {tab === "planning" ? (
           <>
-            <strong>Rapportplanning is globaal</strong> — voor alle klanten hetzelfde schema. De
-            klant links (nu {client ? client.name : "geen"}) verandert dit niet.
+            <strong>Rapportplanning geldt voor alle klanten</strong> — inclusief het automatische
+            algemeen trendrapport op de 1e van iedere maand (Europe/Amsterdam).
           </>
         ) : tab === "prompts" ? (
           <>
             <strong>Prompts gelden voor alle klanten</strong>. De geselecteerde klant links (
-            {client ? client.name : "geen"}) verandert de prompttekst niet; klantcontext blijft apart.
+            {client ? client.name : "geen"}) verandert de prompttekst niet; klantgegevens blijven apart.
           </>
         ) : (
           <>
-            Settings for client: <strong>{client ? client.name : "none selected"}</strong>
-            {tab === "legend" ? " — legend items are stored per client." : null}
+            Beheerinstellingen voor klant: <strong>{client ? client.name : "geen geselecteerd"}</strong>
+            {tab === "legend" ? " — formats, pijlers en hooks worden per klant bewaard." : null}
             {tab === "backup"
-              ? " — full dashboard JSON backup/restore (separate from post Excel import)."
+              ? " — volledige JSON-back-up en herstel van het dashboard."
               : null}
             {tab === "ai"
-              ? " — API status plus internal AI Trial (post analysis probe; not the monthly client report)."
+              ? " — API-status, technische werking van rapporten en interne AI-proefrun."
               : null}
           </>
         )}
       </p>
-      <div className="subnav-tabs" role="tablist" aria-label="Settings">
+
+      <div className="subnav-tabs" role="tablist" aria-label="Beheerinstellingen">
         {TABS.map(([id, label]) => (
           <button
             key={id}
@@ -69,30 +70,60 @@ export default function SettingsHubPage({ client, initialTab = "ai", onNotice, o
 
       {tab === "ai" ? (
         <div className="stack">
-          <AiSettingsPage onOpenPrompts={() => selectTab("prompts")} />
           <section className="card stack">
-            <h3>AI Trial (internal)</h3>
+            <h3 style={{ marginTop: 0 }}>Technische werking van Rapporten</h3>
+            <ul className="plain-list" style={{ lineHeight: 1.6 }}>
+              <li>
+                <strong>Opgeslagen gegevens i.p.v. live Meta-sync:</strong> het maken van een rapport
+                rekent in Python met de berichten, strategie en inzichten die al in HAMSTER staan. Een
+                rapport starten haalt niet tussentijds nieuwe berichten op bij Meta.
+              </li>
+              <li>
+                <strong>Vaste perioden klantrapport:</strong> bij een klantrapport voor maand{" "}
+                <em>M</em> rekent HAMSTER automatisch met de <strong>21e van maand M−1 t/m de 20e van maand M</strong>{" "}
+                en vergelijkt dit met de <strong>21e van maand M−2 t/m de 20e van maand M−1</strong>{" "}
+                (inclusief jaarwisseling). Voor formats en terugkerende patronen leest HAMSTER alle
+                beschikbare eigen berichten vanaf 1 januari t/m de einddatum van het rapport.
+              </li>
+              <li>
+                <strong>Zelfstandig algemeen trendrapport:</strong> beslaat trends per
+                socialmediakanaal voor één kalendermaand (zonder klantperiode, terugblik of X+2-maand)
+                en wordt op de 1e van iedere maand automatisch aangemaakt in tijdzone{" "}
+                <code>Europe/Amsterdam</code>.
+              </li>
+              <li>
+                <strong>Beeldanalyse per bericht &amp; kostenraming:</strong> losse berichtcontroles
+                staan bij <em>Socialmediaberichten</em>. Kostenbedragen vóór het starten zijn schattingen
+                en geen harde afbreeklimiet tijdens een AI-aanroep; openen of verversen van een rapport
+                start nooit opnieuw een betaalde AI-run.
+              </li>
+            </ul>
+          </section>
+
+          <AiSettingsPage onOpenPrompts={() => selectTab("prompts")} />
+
+          <section className="card stack">
+            <h3 style={{ marginTop: 0 }}>Interne AI-proefrun (losse posttest)</h3>
             <p className="hint">
-              Small Gemini post-analysis probe (image / carousel / reel). Not the client monthly
-              report. Opening this section does not start a paid call.
+              Kleine technische proef op losse berichten (afbeelding / carrousel / reel). Dit staat los
+              van het maandelijkse klantrapport. Openen start geen betaalde aanroep.
             </p>
             {client ? (
               <AiTrialPage key={`ai-trial-settings-${client.id}`} client={client} />
             ) : (
-              <p className="banner">Select a client in the sidebar to run AI Trial.</p>
+              <p className="banner">Kies eerst links een klant om de AI-proefrun te bekijken.</p>
             )}
           </section>
         </div>
       ) : null}
-      {tab === "prompts" ? (
-        <PromptsPage onNotice={onNotice} onError={onError} />
-      ) : null}
+
+      {tab === "prompts" ? <PromptsPage onNotice={onNotice} onError={onError} /> : null}
       {tab === "planning" ? <ReportPlanningPage /> : null}
       {tab === "legend" && client ? (
         <LegendPage key={`legend-${client.id}`} client={client} onNotice={onNotice} onError={onError} />
       ) : null}
       {tab === "legend" && !client ? (
-        <p className="banner">Select a client in the sidebar to edit the legend.</p>
+        <p className="banner">Kies links een klant om de legenda te bewerken.</p>
       ) : null}
       {tab === "backup" ? <DataTransferPage /> : null}
     </div>

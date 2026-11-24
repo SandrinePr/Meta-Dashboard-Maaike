@@ -48,12 +48,19 @@ def test_local_preview_includes_analysis_2_for_post_3():
         assert row["status"] == "completed"
         assert "v2" in (row["prompt_version"] or "")
         client_id = int(row["client_id"])
+        post_row = conn.execute("SELECT published_at FROM posts WHERE id = 3").fetchone()
+        pub_str = str(post_row["published_at"])[:10]
+        pub_y, pub_m, pub_d = (int(x) for x in pub_str.split("-"))
+        if pub_d >= 21:
+            rep_y, rep_m = (pub_y + 1, 1) if pub_m == 12 else (pub_y, pub_m + 1)
+        else:
+            rep_y, rep_m = pub_y, pub_m
 
         preview = inspect_client_report_data(
             conn,
             client_id,
-            period_year=2026,
-            period_month=9,
+            period_year=rep_y,
+            period_month=rep_m,
         )
         assert preview["persisted"] is False
         assert preview["ai_analysis_executed"] is True

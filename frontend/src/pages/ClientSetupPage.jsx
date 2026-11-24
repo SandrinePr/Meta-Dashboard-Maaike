@@ -873,6 +873,28 @@ export default function ClientSetupPage({
       ...(strategy?.strategy_fields || {}),
       ...(importPreview.proposed.strategy_fields || {}),
     };
+    if (importPreview.file_ref) {
+      fields.strategy_pdf_ref = importPreview.file_ref;
+      fields.last_pdf_meta = {
+        filename: importPreview.filename || "strategie.pdf",
+        source_kind: importPreview.source_kind || "strategy_pdf",
+        file_ref: importPreview.file_ref,
+        byte_size: importPreview.byte_size || 0,
+      };
+      if (activeId) {
+        api(`/api/clients/${activeId}/strategy/import/apply`, {
+          method: "POST",
+          body: {
+            proposed: {},
+            preserve_manual: true,
+            stage_only: true,
+            source_kind: importPreview.source_kind || "strategy_pdf",
+            filename: importPreview.filename || "strategie.pdf",
+            file_ref: importPreview.file_ref,
+          },
+        }).catch(() => {});
+      }
+    }
     if (fields.canva_strategy_url) {
       canvaDraftRef.current = String(fields.canva_strategy_url).trim();
       setCanvaUrl(canvaDraftRef.current);

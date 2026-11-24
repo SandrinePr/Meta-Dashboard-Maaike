@@ -274,23 +274,45 @@ def run_hourly_competitor_tick(*, force: bool = False) -> dict[str, Any]:
         _job_lock.release()
 
 
-def refresh_client_competitors(conn, client_id: int, *, max_accounts: int = 3) -> dict[str, Any]:
-    """Manual refresh: crawl up to N stale competitors for one client now."""
-    from maaike.account_crawl import crawl_account
-    from maaike.repository import get_client, is_verified_link
+def refresh_client_competitors(
+    conn,
+    client_id: int,
+    *,
+    max_accounts: int = 10,
+    username: str | None = None,
+) -> dict[str, Any]:
+    """Manual refresh: crawl up to N competitors (or one targeted username) for one client now."""
+    from maaike.account_crawl import crawl_account, normalize_username
+    from maaike.repository import get_client, is_verified_link, load_page_secret
 
     client = get_client(conn, client_id)
     if client is None:
-        raise ValueError("Client not found.")
-    if not is_verified_link(client):
-        raise ValueError("Connect Meta first — Business Discovery needs the client's IG host.")
+        raise ValueError("Deze klant staat niet in de lijst.")
+    meta_missing_msg = (
+        "Koppel eerst het Facebook- en Instagram-account van deze klant om berichten van concurrenten op te halen."
+    )
+    secret = load_page_secret(conn, client_id)
+    if not is_verified_link(client) or secret is None or not secret[1] or not secret[2]:
+        raise ValueError(meta_missing_msg)
 
     linked = ensure_competitors_linked(conn, client_id)
-    if not linked:
+    target = normalize_username(username) if username else ""
+    if target:
+        from maaike.account_crawl import link_crawl_account
+
+        link_crawl_account(conn, client_id, target)
+        target_names = [target]
+    else:
+        target_names = list(linked)
+
+    if not target_names:
         return {
             "client_id": client_id,
             "crawled": [],
-            "note": "No competitors on the list yet.",
+            "errors": [],
+            "linked": linked,
+            "note": "Er staan nog geen concurrenten op de lijst.",
+            "schedule": schedule_status(),
         }
 
     rows = conn.execute(
@@ -302,25 +324,36 @@ def refresh_client_competitors(conn, client_id: int, *, max_accounts: int = 3) -
         ORDER BY
             CASE WHEN last_crawled_at IS NULL OR last_crawled_at = '' THEN 0 ELSE 1 END,
             last_crawled_at ASC
-        """.format(placeholders=",".join("?" * len(linked))),
-        (client_id, *[n.lower() for n in linked]),
+        """.format(placeholders=",".join("?" * len(target_names))),
+        (client_id, *[n.lower() for n in target_names]),
     ).fetchall()
 
     crawled = []
     errors = []
     for row in rows[: max(1, max_accounts)]:
-        username = str(row["username"])
+        uname = str(row["username"])
         try:
-            result = crawl_account(conn, client_id, username, max_pages=1, page_limit=25)
-            crawled.append(
-                {
-                    "username": username,
-                    "status": result.get("status"),
-                    "posts_saved": result.get("posts_saved"),
-                }
-            )
+            result = crawl_account(conn, client_id, uname, max_pages=1, page_limit=25)
+            status = result.get("status")
+            run_errors = list(result.get("errors") or [])
+            item = {
+                "username": uname,
+                "status": status,
+                "posts_saved": int(result.get("posts_saved") or 0),
+                "fetched_at": result.get("fetched_at"),
+                "errors": run_errors,
+            }
+            if status == "failed":
+                errors.append(
+                    {
+                        "username": uname,
+                        "error": "; ".join(run_errors[:2]) or "Ophalen niet gelukt.",
+                    }
+                )
+            else:
+                crawled.append(item)
         except ValueError as exc:
-            errors.append({"username": username, "error": str(exc)})
+            errors.append({"username": uname, "error": str(exc)})
 
     return {
         "client_id": client_id,
@@ -328,8 +361,8 @@ def refresh_client_competitors(conn, client_id: int, *, max_accounts: int = 3) -
         "errors": errors,
         "linked": linked,
         "note": (
-            "Handmatige refresh (max. {n} accounts). "
-            "Automatisch: elk uur buiten werktijd één concurrent."
+            "Handmatig opgehaald (max. {n} accounts). "
+            "Automatisch op de achtergrond: elk uur buiten werktijd één concurrent."
         ).format(n=max_accounts),
         "schedule": schedule_status(),
     }

@@ -1,12 +1,34 @@
-import { useEffect, useMemo, useState } from "react";
-import { api } from "../api.js";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api, apiUrl } from "../api.js";
 
-export default function StrategyPage({ client }) {
+const AUTOSAVE_DELAY_MS = 900;
+
+function dutchSaveError(exc) {
+  const raw = String(exc?.message || exc || "").trim();
+  if (!raw) return "Opslaan lukte niet";
+  if (/failed to fetch|networkerror|load failed/i.test(raw)) return "Opslaan lukte niet";
+  return raw.length < 160 ? raw : "Opslaan lukte niet";
+}
+
+function statusClass(status) {
+  if (status === "definitief") return "strategy-status is-final";
+  if (status === "te_controleren") return "strategy-status is-review";
+  return "strategy-status is-draft";
+}
+
+export default function StrategyPage({ client, initialTab = "specialist" }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [innerTab, setInnerTab] = useState("specialist");
+  const [saveStatus, setSaveStatus] = useState("idle");
+  const [innerTab, setInnerTab] = useState(initialTab || "specialist");
+
+  useEffect(() => {
+    if (initialTab) setInnerTab(initialTab);
+  }, [initialTab, client?.id]);
+  const [pdfBlob, setPdfBlob] = useState(null);
+  const [pdfName, setPdfName] = useState("");
+  const [proposalDraft, setProposalDraft] = useState(null);
   const [targetDraft, setTargetDraft] = useState({
     account_key: "",
     platform: "",
@@ -20,71 +42,146 @@ export default function StrategyPage({ client }) {
     notes: "",
   });
 
+  const dataRef = useRef(null);
+  const autosaveTimerRef = useRef(null);
+  const saveChainRef = useRef(Promise.resolve());
+  const dirtyRef = useRef(false);
+
   async function reload() {
     const payload = await api(`/api/clients/${client.id}/strategy`);
+    dataRef.current = payload;
     setData(payload);
+    setProposalDraft(payload.pending_proposal || null);
+    return payload;
   }
 
   useEffect(() => {
     setError("");
     setNotice("");
+    setSaveStatus("idle");
+    setPdfBlob(null);
+    setPdfName("");
+    dirtyRef.current = false;
     reload().catch((exc) => setError(exc.message));
+    return () => {
+      if (autosaveTimerRef.current) window.clearTimeout(autosaveTimerRef.current);
+    };
   }, [client.id]);
 
   const answers = data?.start_answers || {};
   const fields = data?.strategy_fields || {};
   const account = data?.account_info || {};
   const questions = data?.questions || [];
+  const publicFields = data?.public_strategy_fields || {};
+  const canvaUrl = String(data?.canva_url || fields.canva_strategy_url || "").trim();
+  const reviewStatus = data?.review_status || "concept";
+  const pendingProposal = proposalDraft || data?.pending_proposal || null;
 
-  const filledKeys = useMemo(
-    () => questions.filter((q) => String(answers[q.key] || "").trim()).map((q) => q.key),
-    [questions, answers],
+  const openRequired = useMemo(
+    () => (data?.pending_questions || []).filter((item) => item.required),
+    [data],
   );
-  const pending = data?.pending_questions || [];
-  const openRequired = useMemo(() => pending.filter((item) => item.required), [pending]);
-  const openOptional = useMemo(() => pending.filter((item) => !item.required), [pending]);
+  const openOptional = useMemo(
+    () => (data?.pending_questions || []).filter((item) => !item.required),
+    [data],
+  );
 
-  const findingsText = fields.specialist_findings || "";
-  const conclusionsText = fields.specialist_conclusions || "";
-
-  if (!data) {
-    return error ? <p className="banner error">{error}</p> : <p className="muted">Loading…</p>;
+  function scheduleAutosave() {
+    dirtyRef.current = true;
+    if (autosaveTimerRef.current) window.clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = window.setTimeout(() => {
+      flushAutosave().catch(() => {});
+    }, AUTOSAVE_DELAY_MS);
   }
 
-  async function save({ markComplete = false } = {}) {
-    setSaving(true);
-    setError("");
-    try {
-      const payload = await api(`/api/clients/${client.id}/strategy`, {
-        method: "PUT",
-        body: {
-          account_info: account,
-          start_answers: answers,
-          strategy_fields: fields,
-          source_notes: data.source_notes,
-          mark_complete: markComplete,
-        },
-      });
-      setData(payload);
-      setNotice(markComplete ? "Strategy marked complete." : "Draft saved. You can continue later.");
-    } catch (exc) {
-      setError(exc.message);
-    } finally {
-      setSaving(false);
+  async function flushAutosave({ markComplete = false, clearComplete = false } = {}) {
+    if (autosaveTimerRef.current) {
+      window.clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
     }
+    const run = async () => {
+      const current = dataRef.current;
+      if (!current) return null;
+      setSaveStatus("saving");
+      setError("");
+      try {
+        const payload = await api(`/api/clients/${client.id}/strategy`, {
+          method: "PUT",
+          body: {
+            account_info: current.account_info || {},
+            start_answers: current.start_answers || {},
+            strategy_fields: current.strategy_fields || {},
+            source_notes: current.source_notes || [],
+            mark_complete: markComplete,
+            clear_complete: clearComplete,
+          },
+        });
+        if (payload?.persist && payload.persist.durable !== true) {
+          throw new Error(
+            payload.persist.error || "Externe opslag bevestigde de wijziging niet.",
+          );
+        }
+        dataRef.current = payload;
+        setData(payload);
+        setProposalDraft(payload.pending_proposal || null);
+        dirtyRef.current = false;
+        setSaveStatus("saved");
+        if (markComplete) setNotice("Strategie is definitief.");
+        else if (clearComplete) setNotice("Strategie staat weer op concept.");
+        return payload;
+      } catch (exc) {
+        dirtyRef.current = true;
+        setSaveStatus("error");
+        setError(dutchSaveError(exc));
+        throw exc;
+      }
+    };
+    const queued = saveChainRef.current.then(run, run);
+    saveChainRef.current = queued.catch(() => {});
+    return queued;
+  }
+
+  function patchLocal(updater) {
+    setData((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      dataRef.current = next;
+      return next;
+    });
+    scheduleAutosave();
   }
 
   function setAnswer(key, value) {
-    setData({ ...data, start_answers: { ...answers, [key]: value } });
+    patchLocal((prev) => ({
+      ...prev,
+      start_answers: { ...(prev?.start_answers || {}), [key]: value },
+    }));
   }
 
   function setField(key, value) {
-    setData({ ...data, strategy_fields: { ...fields, [key]: value } });
+    patchLocal((prev) => ({
+      ...prev,
+      strategy_fields: { ...(prev?.strategy_fields || {}), [key]: value },
+    }));
   }
+
+  function setProposalAnswer(key, value) {
+    setProposalDraft((prev) => ({
+      ...(prev || {}),
+      start_answers: { ...((prev && prev.start_answers) || {}), [key]: value },
+    }));
+  }
+
+  if (!data) {
+    return error ? <p className="banner error">{error}</p> : <p className="muted">Laden…</p>;
+  }
+
+  const findingsText = fields.specialist_findings || "";
+  const conclusionsText = fields.specialist_conclusions || "";
+  const isRedRock = /red\s*rock/i.test(String(client?.name || ""));
 
   return (
     <div className="stack">
-      <div className="subnav-tabs" role="tablist" aria-label="Targets and strategy">
+      <div className="subnav-tabs" role="tablist" aria-label="Doelen en strategie">
         <button
           type="button"
           role="tab"
@@ -92,7 +189,7 @@ export default function StrategyPage({ client }) {
           aria-selected={innerTab === "specialist"}
           onClick={() => setInnerTab("specialist")}
         >
-          Specialist
+          Doelen & strategie
         </button>
         <button
           type="button"
@@ -101,7 +198,7 @@ export default function StrategyPage({ client }) {
           aria-selected={innerTab === "figma"}
           onClick={() => setInnerTab("figma")}
         >
-          Figma planning
+          Figma-planning
         </button>
       </div>
 
@@ -111,29 +208,203 @@ export default function StrategyPage({ client }) {
 
       {innerTab === "specialist" ? (
         <>
-          <div className={`banner ${data.completed_at ? "" : "warn-soft"}`}>
-            <strong>Status:</strong>{" "}
-            {data.completed_at ? `Complete (${data.completed_at})` : "Draft — not marked complete"}
-            <br />
-            An incomplete strategy does not block Social posts, import or reports. Meta is not required.
+          <div className="strategy-header-row">
+            <div className={statusClass(reviewStatus)} role="status">
+              <strong>{data.review_status_label || "Concept"}</strong>
+              <span>{data.next_step}</span>
+            </div>
+            <div className="setup-save-status" aria-live="polite">
+              {saveStatus === "saving" ? <span className="setup-save-saving">Bezig met opslaan…</span> : null}
+              {saveStatus === "saved" ? <span className="setup-save-ok">Opgeslagen</span> : null}
+              {saveStatus === "error" ? (
+                <span className="setup-save-error">
+                  Opslaan mislukt.{" "}
+                  <button type="button" className="linkish" onClick={() => flushAutosave().catch(() => {})}>
+                    Opnieuw proberen
+                  </button>
+                </span>
+              ) : null}
+            </div>
           </div>
 
-          <StrategyImportPanel
+          <section className="card stack">
+            <h3>Stand van zaken</h3>
+            <p className="hint">
+              Gebaseerd op de opgeslagen gegevens van {client.name} — dezelfde bron als in Klant
+              inrichten.
+            </p>
+            <div className="strategy-status-grid">
+              <div>
+                <h4>Zelf ingevuld</h4>
+                {(data.editor_filled || []).length ? (
+                  <ul className="plain-list">
+                    {(data.editor_filled || []).map((item) => (
+                      <li key={`ed-${item.key}`}>
+                        <strong>{item.label}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="muted">Nog geen eigen antwoorden.</p>
+                )}
+              </div>
+              <div>
+                <h4>Voorstel van HAMSTER</h4>
+                {(data.hamster_proposals || []).length ? (
+                  <ul className="plain-list">
+                    {(data.hamster_proposals || []).map((item) => (
+                      <li key={`hs-${item.key}`}>
+                        <strong>{item.label}</strong>
+                        {item.state === "te_controleren" ? (
+                          <span className="hint"> — klaar ter controle</span>
+                        ) : null}
+                        {item.state === "opgenomen" || item.state === "voorstel_opgenomen" ? (
+                          <span className="hint"> — opgenomen</span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="muted">Geen voorstel klaar. Lees een PDF in of vul handmatig in.</p>
+                )}
+              </div>
+              <div>
+                <h4>Nog verplicht</h4>
+                {(data.missing_required_items || []).length ? (
+                  <ul className="plain-list">
+                    {(data.missing_required_items || []).map((item) => (
+                      <li key={`miss-${item.key}`}>
+                        <strong>{item.label}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="banner">Geen verplichte gaten meer.</p>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <StrategyActions
             clientId={client.id}
-            onApplied={(payload) => {
+            canvaUrl={canvaUrl}
+            pdfBlob={pdfBlob}
+            pdfName={pdfName || data.strategy_pdf?.filename || data.last_pdf_meta?.filename || ""}
+            strategyPdf={data.strategy_pdf || null}
+            onCanvaUrl={(url) => {
+              setField("canva_strategy_url", url);
+              setNotice(url ? "Canva-link bewaard (optioneel)." : "Canva-link gewist.");
+            }}
+            onPdfStored={(payload, fileMeta) => {
+              dataRef.current = payload;
               setData(payload);
-              setNotice("Strategie-import opgeslagen (handmatige antwoorden behouden).");
+              if (fileMeta?.blob) {
+                setPdfBlob(fileMeta.blob);
+                setPdfName(fileMeta.name || "");
+              }
+              setSaveStatus("saved");
+              setNotice("PDF opgeslagen bij deze klant. Goedgekeurde strategie bleef ongewijzigd.");
             }}
             onError={setError}
           />
 
+          <StrategyImportPanel
+            clientId={client.id}
+            onStaged={(payload, fileMeta) => {
+              dataRef.current = payload;
+              setData(payload);
+              setProposalDraft(payload.pending_proposal || null);
+              if (fileMeta?.blob) {
+                setPdfBlob(fileMeta.blob);
+                setPdfName(fileMeta.name || "");
+              }
+              if (payload.pending_proposal) {
+                setNotice("Voorstel klaargezet ter controle. Nog niet definitief.");
+              } else {
+                setNotice(
+                  "Bron bewaard. Geen nieuwe voorstellen — handmatige antwoorden bleven staan.",
+                );
+              }
+              setSaveStatus("saved");
+            }}
+            onError={setError}
+          />
+
+          {pendingProposal ? (
+            <section className="card stack strategy-proposal-card">
+              <h3>Voorstel ter controle</h3>
+              <p className="hint">
+                Pas het voorstel aan en keur het goed. Pas daarna telt het als opgeslagen strategie.
+                Handmatig ingevulde velden blijven staan.
+              </p>
+              {Object.keys(pendingProposal.start_answers || {}).length ? (
+                <div className="stack">
+                  {questions
+                    .filter((q) => (pendingProposal.start_answers || {})[q.key])
+                    .map((question) => (
+                      <label key={`prop-${question.key}`}>
+                        {question.label}
+                        <span className="hint"> (voorstel)</span>
+                        <textarea
+                          rows={3}
+                          value={(pendingProposal.start_answers || {})[question.key] || ""}
+                          onChange={(e) => setProposalAnswer(question.key, e.target.value)}
+                        />
+                      </label>
+                    ))}
+                </div>
+              ) : (
+                <p className="muted">Geen nieuwe antwoorden in dit voorstel (velden waren al gevuld).</p>
+              )}
+              <div className="row-actions wrap">
+                <button
+                  className="primary"
+                  type="button"
+                  onClick={() => {
+                    api(`/api/clients/${client.id}/strategy/proposal/approve`, {
+                      method: "POST",
+                      body: { proposal: pendingProposal },
+                    })
+                      .then((payload) => {
+                        if (payload?.persist && payload.persist.durable !== true) {
+                          throw new Error(
+                            payload.persist.error || "Externe opslag bevestigde de goedkeuring niet.",
+                          );
+                        }
+                        dataRef.current = payload;
+                        setData(payload);
+                        setProposalDraft(null);
+                        setNotice("Voorstel goedgekeurd en opgenomen in de strategie.");
+                        setSaveStatus("saved");
+                      })
+                      .catch((exc) => setError(dutchSaveError(exc)));
+                  }}
+                >
+                  Voorstel goedkeuren
+                </button>
+                <button
+                  className="secondary"
+                  type="button"
+                  onClick={() => {
+                    api(`/api/clients/${client.id}/strategy/proposal/discard`, { method: "POST", body: {} })
+                      .then((payload) => {
+                        dataRef.current = payload;
+                        setData(payload);
+                        setProposalDraft(null);
+                        setNotice("Voorstel verworpen. Opgeslagen antwoorden ongewijzigd.");
+                      })
+                      .catch((exc) => setError(dutchSaveError(exc)));
+                  }}
+                >
+                  Voorstel verwerpen
+                </button>
+              </div>
+            </section>
+          ) : null}
+
           {(data.overview_sections || []).length ? (
             <section className="card stack">
-              <h3>Overzicht per klant</h3>
-              <p className="hint">
-                Bedrijfscontext, doelen, platforms en afspraken — geen onboarding opnieuw als dit al
-                uit Canva/PDF staat.
-              </p>
+              <h3>Overzicht</h3>
               {(data.overview_sections || []).map((section) => (
                 <div key={section.id} className="stack">
                   <h4 style={{ marginBottom: 0 }}>{section.title}</h4>
@@ -155,97 +426,69 @@ export default function StrategyPage({ client }) {
                   </ul>
                 </div>
               ))}
-              {(data.missing_overview || []).length ? (
-                <p className="banner warn-soft">
-                  Ontbrekend: {(data.missing_overview || []).slice(0, 8).join(" · ")}
-                  {(data.missing_overview || []).length > 8
-                    ? ` · +${data.missing_overview.length - 8}`
-                    : ""}
-                </p>
-              ) : (
-                <p className="banner">Alle overzichtvelden hebben inhoud.</p>
-              )}
             </section>
           ) : null}
 
           <section className="card stack">
-            <h3>Strategy & targets</h3>
-            <p className="hint">
-              Filled by the specialist. Source texts and question labels stay as stored for this
-              client (including original language).
-            </p>
-            <h4>1. Taken from source files</h4>
-            {(data.source_notes || []).length ? (
-              <ul className="plain-list">
-                {(data.source_notes || []).map((note, index) => (
-                  <li key={index}>
-                    <strong>{note.bron}</strong> — {note.gebruik}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="hint">No source notes yet. Use “Prefill from Red Rock sources”.</p>
-            )}
-            <div className="row-actions">
-              <button
-                className="secondary"
-                type="button"
-                onClick={() => {
-                  api(`/api/clients/${client.id}/strategy/prefill-redrock`, { method: "POST", body: {} })
-                    .then((payload) => {
-                      setData(payload);
-                      setNotice("Prefill from local Red Rock sources applied.");
-                    })
-                    .catch((exc) => setError(exc.message));
-                }}
-              >
-                Prefill from Red Rock sources
-              </button>
-            </div>
-            {filledKeys.length ? (
-              <div className="stack">
-                {questions
-                  .filter((q) => filledKeys.includes(q.key))
-                  .map((question) => (
-                    <label key={question.key}>
-                      {question.label}
-                      <span className="hint"> (imported / editable)</span>
-                      <textarea
-                        rows={3}
-                        value={answers[question.key] || ""}
-                        onChange={(e) => setAnswer(question.key, e.target.value)}
-                      />
-                    </label>
-                  ))}
+            <h3>Strategie bewerken</h3>
+            <p className="hint">Wijzigingen worden automatisch bewaard (zelfde gegevens als Klant inrichten).</p>
+            {isRedRock ? (
+              <div className="row-actions">
+                <button
+                  className="secondary"
+                  type="button"
+                  onClick={() => {
+                    api(`/api/clients/${client.id}/strategy/prefill-redrock`, { method: "POST", body: {} })
+                      .then((payload) => {
+                        dataRef.current = payload;
+                        setData(payload);
+                        setNotice("Red Rock-bronnen als starttekst gezet (handmatige antwoorden behouden).");
+                      })
+                      .catch((exc) => setError(exc.message));
+                  }}
+                >
+                  Prefill uit Red Rock-bronnen
+                </button>
               </div>
             ) : null}
             <label>
-              Account name
+              Accountnaam
               <input
                 value={account.naam || ""}
-                onChange={(e) => setData({ ...data, account_info: { ...account, naam: e.target.value } })}
+                onChange={(e) =>
+                  patchLocal((prev) => ({
+                    ...prev,
+                    account_info: { ...(prev?.account_info || {}), naam: e.target.value },
+                  }))
+                }
               />
             </label>
-            {Object.keys(fields).filter((k) => k !== "specialist_findings" && k !== "specialist_conclusions").length ? (
+            {questions.map((question) => (
+              <label key={question.key}>
+                {question.label}
+                {question.required_for_complete ? "" : " (optioneel)"}
+                <textarea
+                  rows={3}
+                  value={answers[question.key] || ""}
+                  onChange={(e) => setAnswer(question.key, e.target.value)}
+                  placeholder={question.short_question || ""}
+                />
+              </label>
+            ))}
+            {Object.keys(publicFields).filter(
+              (k) => k !== "specialist_findings" && k !== "specialist_conclusions",
+            ).length ? (
               <>
-                <h4>Strategy fields from sources</h4>
-                {Object.entries(fields)
+                <h4>Overige strategieveelden</h4>
+                {Object.entries(publicFields)
                   .filter(([key]) => key !== "specialist_findings" && key !== "specialist_conclusions")
                   .map(([key, value]) => {
                     const text =
-                      value == null
-                        ? ""
-                        : typeof value === "string"
-                          ? value
-                          : JSON.stringify(value, null, 2);
+                      value == null ? "" : typeof value === "string" ? value : JSON.stringify(value, null, 2);
                     return (
                       <label key={key}>
                         {key}
-                        <textarea
-                          rows={4}
-                          value={text}
-                          onChange={(e) => setField(key, e.target.value)}
-                        />
+                        <textarea rows={3} value={text} onChange={(e) => setField(key, e.target.value)} />
                       </label>
                     );
                   })}
@@ -254,77 +497,68 @@ export default function StrategyPage({ client }) {
           </section>
 
           <section className="card stack">
-            <h4>2. Open questions</h4>
+            <h4>Open vragen</h4>
             {!openRequired.length && !openOptional.length ? (
-              <p className="banner">No open questions left. You can mark the strategy complete.</p>
+              <p className="banner">Geen open vragen meer. Je kunt afronden zonder Canva-link.</p>
             ) : null}
-            {openRequired.length ? (
-              <>
-                <p>
-                  <strong>Required to complete</strong>
-                </p>
-                {openRequired.map((item) => (
-                  <label key={`req-${item.key}-${item.question}`}>
-                    {item.question}
-                    <textarea
-                      rows={3}
-                      placeholder="Not in source files yet — add here"
-                      value={answers[item.key] || ""}
-                      onChange={(e) => setAnswer(item.key, e.target.value)}
-                    />
-                  </label>
-                ))}
-              </>
-            ) : null}
-            {openOptional.length ? (
-              <>
-                <p>
-                  <strong>Optional</strong>
-                </p>
-                {openOptional.map((item) => (
-                  <label key={`opt-${item.key}-${item.question}`}>
-                    {item.question}
-                    <textarea
-                      rows={2}
-                      placeholder="Optional"
-                      value={answers[item.key] || ""}
-                      onChange={(e) => setAnswer(item.key, e.target.value)}
-                    />
-                  </label>
-                ))}
-              </>
-            ) : null}
-            <div className="row-actions">
-              <button className="primary" type="button" disabled={saving} onClick={() => save()}>
-                Save draft
-              </button>
-              <button className="secondary" type="button" disabled={saving} onClick={() => save({ markComplete: true })}>
-                Mark strategy complete
-              </button>
+            {openRequired.map((item) => (
+              <label key={`req-${item.key}`}>
+                {item.question}
+                <textarea
+                  rows={3}
+                  placeholder="Nog niet in bronnen — vul hier in"
+                  value={answers[item.key] || ""}
+                  onChange={(e) => setAnswer(item.key, e.target.value)}
+                />
+              </label>
+            ))}
+            {openOptional.map((item) => (
+              <label key={`opt-${item.key}`}>
+                {item.question} <span className="hint">(optioneel)</span>
+                <textarea
+                  rows={2}
+                  value={answers[item.key] || ""}
+                  onChange={(e) => setAnswer(item.key, e.target.value)}
+                />
+              </label>
+            ))}
+            <div className="row-actions wrap">
+              {reviewStatus === "definitief" ? (
+                <button
+                  className="secondary"
+                  type="button"
+                  onClick={() => flushAutosave({ clearComplete: true }).catch(() => {})}
+                >
+                  Terug naar concept
+                </button>
+              ) : (
+                <button
+                  className="primary"
+                  type="button"
+                  disabled={Boolean(pendingProposal) || (data.missing_required_items || []).length > 0}
+                  onClick={() => flushAutosave({ markComplete: true }).catch(() => {})}
+                >
+                  Strategie definitief maken
+                </button>
+              )}
             </div>
+            {pendingProposal ? (
+              <p className="hint">Keur eerst het voorstel goed of verwerp het, daarna kun je afronden.</p>
+            ) : null}
           </section>
 
           <section className="card stack">
-            <h4>3. Targets</h4>
+            <h4>Doelen</h4>
             <p className="hint">
-              Year and optional quarter targets. Use <code>absolute</code> for “reach this number”
-              and <code>growth</code> for “add this many”. Without a measurement, progress stays “not
-              measurable yet”.
+              Jaar- of kwartaaldoelen. Zonder meting blijft de voortgang “nog niet meetbaar”.
             </p>
             <div className="filters-row">
               <label>
-                Platform / account
+                Platform
                 <input
                   value={targetDraft.platform}
                   onChange={(e) => setTargetDraft({ ...targetDraft, platform: e.target.value })}
-                  placeholder="e.g. Instagram"
-                />
-              </label>
-              <label>
-                Account label (optional)
-                <input
-                  value={targetDraft.account_key}
-                  onChange={(e) => setTargetDraft({ ...targetDraft, account_key: e.target.value })}
+                  placeholder="bijv. Instagram"
                 />
               </label>
               <label>
@@ -332,54 +566,31 @@ export default function StrategyPage({ client }) {
                 <input
                   value={targetDraft.metric_name}
                   onChange={(e) => setTargetDraft({ ...targetDraft, metric_name: e.target.value })}
-                  placeholder="e.g. followers"
+                  placeholder="bijv. volgers"
                 />
               </label>
               <label>
-                Kind
+                Soort
                 <select
                   value={targetDraft.target_kind}
                   onChange={(e) => setTargetDraft({ ...targetDraft, target_kind: e.target.value })}
                 >
-                  <option value="absolute">absolute (reach)</option>
-                  <option value="growth">growth (add)</option>
+                  <option value="absolute">absoluut (bereiken)</option>
+                  <option value="growth">groei (erbij)</option>
                 </select>
               </label>
               <label>
-                Baseline
-                <input
-                  value={targetDraft.baseline_value}
-                  onChange={(e) => setTargetDraft({ ...targetDraft, baseline_value: e.target.value })}
-                />
-              </label>
-              <label>
-                Target value
+                Doelwaarde
                 <input
                   value={targetDraft.target_value}
                   onChange={(e) => setTargetDraft({ ...targetDraft, target_value: e.target.value })}
                 />
               </label>
               <label>
-                Unit
-                <input
-                  value={targetDraft.unit}
-                  onChange={(e) => setTargetDraft({ ...targetDraft, unit: e.target.value })}
-                  placeholder="count / %"
-                />
-              </label>
-              <label>
-                Year
+                Jaar
                 <input
                   value={targetDraft.period_year}
                   onChange={(e) => setTargetDraft({ ...targetDraft, period_year: e.target.value })}
-                />
-              </label>
-              <label>
-                Quarter (optional)
-                <input
-                  value={targetDraft.period_quarter}
-                  onChange={(e) => setTargetDraft({ ...targetDraft, period_quarter: e.target.value })}
-                  placeholder="1–4"
                 />
               </label>
             </div>
@@ -388,42 +599,43 @@ export default function StrategyPage({ client }) {
               type="button"
               onClick={() => {
                 if (!String(targetDraft.metric_name || "").trim()) {
-                  setError("Enter a metric for the target.");
+                  setError("Vul een metric in voor het doel.");
                   return;
                 }
                 api(`/api/clients/${client.id}/targets`, {
                   method: "POST",
                   body: {
                     ...targetDraft,
-                    baseline_value: targetDraft.baseline_value === "" ? null : Number(targetDraft.baseline_value),
-                    target_value: targetDraft.target_value === "" ? null : Number(targetDraft.target_value),
-                    period_year: targetDraft.period_year === "" ? null : Number(targetDraft.period_year),
-                    period_quarter: targetDraft.period_quarter === "" ? null : Number(targetDraft.period_quarter),
+                    baseline_value:
+                      targetDraft.baseline_value === "" ? null : Number(targetDraft.baseline_value),
+                    target_value:
+                      targetDraft.target_value === "" ? null : Number(targetDraft.target_value),
+                    period_year:
+                      targetDraft.period_year === "" ? null : Number(targetDraft.period_year),
+                    period_quarter:
+                      targetDraft.period_quarter === "" ? null : Number(targetDraft.period_quarter),
                   },
                 })
                   .then(() => reload())
-                  .then(() => setNotice("Target saved."))
+                  .then(() => setNotice("Doel opgeslagen."))
                   .catch((exc) => setError(exc.message));
               }}
             >
-              Save target
+              Doel opslaan
             </button>
-
-            {(data.targets || []).length === 0 ? <p className="hint">No targets yet.</p> : null}
+            {(data.targets || []).length === 0 ? <p className="hint">Nog geen doelen.</p> : null}
             {(data.targets || []).map((target) => (
               <article className="card stack" key={target.id}>
                 <p>
                   <strong>
-                    {target.platform || "—"}
-                    {target.account_key ? ` · ${target.account_key}` : ""} · {target.metric_name}
+                    {target.platform || "—"} · {target.metric_name}
                   </strong>{" "}
                   ({target.target_kind}) {target.period_year}
                   {target.period_quarter ? ` Q${target.period_quarter}` : ""}
                 </p>
                 <p className="hint">
-                  Baseline {target.baseline_value ?? "—"} → target {target.target_value ?? "—"}{" "}
-                  {target.unit}. Progress: <strong>{target.progress?.status || "not measurable yet"}</strong>
-                  {target.progress?.ratio != null ? ` (${Math.round(target.progress.ratio * 100)}%)` : ""}
+                  Basis {target.baseline_value ?? "—"} → doel {target.target_value ?? "—"} {target.unit}.
+                  Voortgang: <strong>{target.progress?.status || "nog niet meetbaar"}</strong>
                 </p>
                 <ManualMeasure clientId={client.id} target={target} onSaved={reload} onError={setError} />
               </article>
@@ -431,34 +643,23 @@ export default function StrategyPage({ client }) {
           </section>
 
           <section className="card stack specialist-findings">
-            <h3>Specialist Findings & Conclusions</h3>
-            <p className="hint">
-              Human specialist notes — kept separate from AI report concepts. Stored with this
-              client’s strategy fields. Review workflow for AI output stays in Reports & Analysis.
-            </p>
+            <h3>Bevindingen & conclusies</h3>
             <label>
-              Findings
+              Bevindingen
               <textarea
-                rows={5}
+                rows={4}
                 value={findingsText}
                 onChange={(e) => setField("specialist_findings", e.target.value)}
-                placeholder="What the specialist observed…"
               />
             </label>
             <label>
-              Conclusions
+              Conclusies
               <textarea
-                rows={5}
+                rows={4}
                 value={conclusionsText}
                 onChange={(e) => setField("specialist_conclusions", e.target.value)}
-                placeholder="Conclusions and recommendations…"
               />
             </label>
-            <div className="row-actions">
-              <button className="primary" type="button" disabled={saving} onClick={() => save()}>
-                Save findings
-              </button>
-            </div>
           </section>
         </>
       ) : null}
@@ -469,17 +670,190 @@ export default function StrategyPage({ client }) {
   );
 }
 
-function StrategyImportPanel({ clientId, onApplied, onError }) {
-  const [canvaUrl, setCanvaUrl] = useState("");
-  const [preview, setPreview] = useState(null);
-  const [busy, setBusy] = useState(false);
+function StrategyActions({
+  clientId,
+  canvaUrl,
+  pdfBlob,
+  pdfName,
+  strategyPdf,
+  onCanvaUrl,
+  onPdfStored,
+  onError,
+}) {
+  const [draftCanva, setDraftCanva] = useState(canvaUrl || "");
+  const [reuploadBusy, setReuploadBusy] = useState(false);
+  useEffect(() => {
+    setDraftCanva(canvaUrl || "");
+  }, [canvaUrl]);
+
+  const storedAvailable = Boolean(strategyPdf?.available);
+  const needsReupload = !storedAvailable && !pdfBlob && Boolean(strategyPdf?.needs_reupload);
+  const hasPdfFile = storedAvailable || Boolean(pdfBlob);
+  const resolvedName = pdfName || strategyPdf?.filename || "strategie.pdf";
+
+  async function fetchStoredPdfBlob(disposition = "inline") {
+    const query = new URLSearchParams({ disposition });
+    if (strategyPdf?.file_ref) query.set("ref", strategyPdf.file_ref);
+    const response = await fetch(
+      apiUrl(`/api/clients/${clientId}/strategy/pdf?${query.toString()}`),
+      { credentials: "include" },
+    );
+    if (!response.ok) {
+      let detail = "PDF openen mislukt.";
+      try {
+        const payload = await response.json();
+        if (payload?.detail) detail = payload.detail;
+      } catch {
+        // ignore non-JSON body
+      }
+      throw new Error(detail);
+    }
+    return response.blob();
+  }
 
   return (
     <section className="card stack">
-      <h3>Import strategie (Canva / PDF)</h3>
+      <h3>Bronnen & acties</h3>
       <p className="hint">
-        Plak de Canva-bronlink of upload de PDF-export. Eerst preview — pas na bevestiging wordt
-        opgeslagen. Bestaande handmatige antwoorden blijven staan.
+        Canva is optioneel en blokkeert afronden niet. Acties verschijnen als er een link of
+        opgeslagen PDF beschikbaar is.
+      </p>
+      <label>
+        Canva-link (optioneel)
+        <input
+          value={draftCanva}
+          onChange={(e) => setDraftCanva(e.target.value)}
+          onBlur={() => {
+            const next = String(draftCanva || "").trim();
+            if (next !== String(canvaUrl || "").trim()) onCanvaUrl(next);
+          }}
+          placeholder="https://www.canva.com/design/…"
+        />
+      </label>
+      {hasPdfFile ? (
+        <p className="hint">
+          Opgeslagen PDF bij deze klant: <strong>{resolvedName}</strong>
+        </p>
+      ) : null}
+      {needsReupload ? (
+        <p className="hint">
+          Alleen bestandsnaam bekend (<strong>{strategyPdf.filename}</strong>) — voeg het originele
+          PDF-bestand opnieuw toe om te bekijken of downloaden.
+        </p>
+      ) : null}
+      <div className="row-actions wrap">
+        {canvaUrl ? (
+          <a className="button secondary" href={canvaUrl} target="_blank" rel="noreferrer">
+            Openen in Canva
+          </a>
+        ) : null}
+        {hasPdfFile ? (
+          <>
+            <button
+              type="button"
+              className="secondary"
+              onClick={async () => {
+                try {
+                  if (storedAvailable) {
+                    const blob = await fetchStoredPdfBlob("inline");
+                    const url = URL.createObjectURL(blob);
+                    window.open(url, "_blank", "noopener,noreferrer");
+                    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+                    return;
+                  }
+                  if (pdfBlob) {
+                    const url = URL.createObjectURL(pdfBlob);
+                    window.open(url, "_blank", "noopener,noreferrer");
+                    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+                  }
+                } catch (exc) {
+                  onError?.(dutchSaveError(exc));
+                }
+              }}
+            >
+              PDF bekijken
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={async () => {
+                try {
+                  const blob = storedAvailable
+                    ? await fetchStoredPdfBlob("attachment")
+                    : pdfBlob;
+                  if (!blob) return;
+                  const url = URL.createObjectURL(blob);
+                  const anchor = document.createElement("a");
+                  anchor.href = url;
+                  anchor.download = resolvedName;
+                  anchor.click();
+                  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+                } catch (exc) {
+                  onError?.(dutchSaveError(exc));
+                }
+              }}
+            >
+              PDF downloaden
+            </button>
+          </>
+        ) : null}
+        {needsReupload ? (
+          <label className="secondary file-btn">
+            {reuploadBusy ? "Bezig…" : "PDF opnieuw toevoegen"}
+            <input
+              type="file"
+              accept="application/pdf,.pdf"
+              hidden
+              disabled={reuploadBusy}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                const body = new FormData();
+                body.append("file", file);
+                setReuploadBusy(true);
+                api(`/api/clients/${clientId}/strategy/pdf`, {
+                  method: "POST",
+                  body,
+                  raw: true,
+                })
+                  .then((payload) => {
+                    if (payload?.persist && payload.persist.durable !== true) {
+                      throw new Error(
+                        payload.persist.error ||
+                          "Externe opslag bevestigde de PDF-opslag niet.",
+                      );
+                    }
+                    onPdfStored?.(payload, { blob: file, name: file.name });
+                  })
+                  .catch((exc) => onError?.(dutchSaveError(exc)))
+                  .finally(() => {
+                    setReuploadBusy(false);
+                    event.target.value = "";
+                  });
+              }}
+            />
+          </label>
+        ) : null}
+        {!canvaUrl && !hasPdfFile && !needsReupload ? (
+          <p className="muted">Nog geen Canva-link of opgeslagen PDF voor deze klant.</p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function StrategyImportPanel({ clientId, onStaged, onError }) {
+  const [canvaUrl, setCanvaUrl] = useState("");
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [localFile, setLocalFile] = useState(null);
+
+  return (
+    <section className="card stack">
+      <h3>Voorstel inlezen (Canva / PDF)</h3>
+      <p className="hint">
+        Eerst een preview. Daarna staat het klaar als voorstel — pas na jouw goedkeuring wordt het
+        strategie. Bestaande handmatige antwoorden blijven staan.
       </p>
       <div className="row-actions wrap">
         <label style={{ flex: 1, minWidth: "16rem" }}>
@@ -496,6 +870,7 @@ function StrategyImportPanel({ clientId, onApplied, onError }) {
           disabled={busy || !canvaUrl.trim()}
           onClick={() => {
             setBusy(true);
+            setLocalFile(null);
             api(`/api/clients/${clientId}/strategy/import/canva-preview`, {
               method: "POST",
               body: { url: canvaUrl.trim() },
@@ -505,10 +880,10 @@ function StrategyImportPanel({ clientId, onApplied, onError }) {
               .finally(() => setBusy(false));
           }}
         >
-          Preview Canva-link
+          Canva-link controleren
         </button>
         <label className="secondary file-btn">
-          PDF preview
+          PDF kiezen
           <input
             type="file"
             accept="application/pdf,.pdf"
@@ -519,6 +894,7 @@ function StrategyImportPanel({ clientId, onApplied, onError }) {
               const body = new FormData();
               body.append("file", file);
               setBusy(true);
+              setLocalFile(file);
               api(`/api/clients/${clientId}/strategy/import/pdf-preview`, {
                 method: "POST",
                 body,
@@ -544,7 +920,7 @@ function StrategyImportPanel({ clientId, onApplied, onError }) {
                 {" "}
                 ·{" "}
                 <a href={preview.canva_url} target="_blank" rel="noreferrer">
-                  open Canva
+                  Openen in Canva
                 </a>
               </>
             ) : null}
@@ -558,12 +934,6 @@ function StrategyImportPanel({ clientId, onApplied, onError }) {
           {(preview.filled_keys || []).length ? (
             <p className="hint">Gevonden velden: {preview.filled_keys.join(", ")}</p>
           ) : null}
-          {(preview.missing || []).length ? (
-            <p className="banner warn-soft">
-              Nog open na import: {preview.missing.slice(0, 6).join(" · ")}
-              {preview.missing.length > 6 ? ` · +${preview.missing.length - 6}` : ""}
-            </p>
-          ) : null}
           <div className="row-actions">
             <button
               className="primary"
@@ -573,17 +943,29 @@ function StrategyImportPanel({ clientId, onApplied, onError }) {
                 setBusy(true);
                 api(`/api/clients/${clientId}/strategy/import/apply`, {
                   method: "POST",
-                  body: { proposed: preview.proposed || {}, preserve_manual: true },
+                  body: {
+                    proposed: preview.proposed || {},
+                    preserve_manual: true,
+                    stage_only: true,
+                    source_kind: preview.source_kind || "",
+                    filename: preview.filename || localFile?.name || "",
+                    file_ref: preview.file_ref || "",
+                  },
                 })
                   .then((payload) => {
+                    if (payload?.persist && payload.persist.durable !== true) {
+                      throw new Error(
+                        payload.persist.error || "Externe opslag bevestigde de PDF-import niet.",
+                      );
+                    }
                     setPreview(null);
-                    onApplied(payload);
+                    onStaged(payload, localFile ? { blob: localFile, name: localFile.name } : null);
                   })
                   .catch((exc) => onError(exc.message))
                   .finally(() => setBusy(false));
               }}
             >
-              Opslaan na preview
+              Klaarzetten ter controle
             </button>
             <button className="secondary" type="button" onClick={() => setPreview(null)}>
               Annuleren
@@ -615,7 +997,7 @@ function FigmaPlanningPanel({ clientId, onError, onNotice }) {
     reload().catch((exc) => onError(exc.message));
   }, [clientId]);
 
-  if (!overview) return <p className="muted">Loading Figma planning…</p>;
+  if (!overview) return <p className="muted">Figma-planning laden…</p>;
 
   const items = overview.items || [];
   const connection = overview.connection || {};
@@ -623,12 +1005,10 @@ function FigmaPlanningPanel({ clientId, onError, onNotice }) {
   return (
     <div className="stack">
       <section className="card stack">
-        <h3>Figma planning</h3>
+        <h3>Figma-planning</h3>
         <p className="hint">
-          Read-only link to Social Beheer creatives. Format / pillar / hook come from Figma briefs.
-          Placeholders such as “Hier in te vullen” and “n.v.t.” are not usable. Week codes (B1, C1)
-          are hints only — confirm post matches manually. Existing manual classifications are never
-          overwritten automatically.
+          Koppel het Figma-bestand van deze klant. Handmatige classificaties worden niet automatisch
+          overschreven.
         </p>
         <div className="row-actions wrap">
           <label>
@@ -643,15 +1023,15 @@ function FigmaPlanningPanel({ clientId, onError, onNotice }) {
               setBusy(true);
               api(`/api/clients/${clientId}/figma-planning/connection`, {
                 method: "PUT",
-                body: { file_key: fileKey, file_name: "RRO - Social Beheer - Uitwerking creatives" },
+                body: { file_key: fileKey, file_name: "" },
               })
                 .then(() => reload())
-                .then(() => onNotice("Figma file linked to this client."))
+                .then(() => onNotice("Figma-bestand gekoppeld."))
                 .catch((exc) => onError(exc.message))
                 .finally(() => setBusy(false));
             }}
           >
-            Link file to client
+            Bestand koppelen
           </button>
           <button
             className="primary"
@@ -667,58 +1047,42 @@ function FigmaPlanningPanel({ clientId, onError, onNotice }) {
                     items: payload.items,
                   });
                   onNotice(
-                    `Sync complete: ${payload.stats?.inserted || 0} new, ${payload.stats?.updated || 0} updated.`,
+                    `Sync klaar: ${payload.stats?.inserted || 0} nieuw, ${payload.stats?.updated || 0} bijgewerkt.`,
                   );
                 })
                 .catch((exc) => onError(exc.message))
                 .finally(() => setBusy(false));
             }}
           >
-            Sync from Figma API
+            Sync vanuit Figma
           </button>
         </div>
         <p className="hint">
-          Linked: {connection.linked ? "yes" : "no"}
+          Gekoppeld: {connection.linked ? "ja" : "nee"}
           {connection.source_url ? (
             <>
               {" "}
               ·{" "}
               <a href={connection.source_url} target="_blank" rel="noreferrer">
-                Open source file
+                Openen in Figma
               </a>
             </>
           ) : null}
-          {connection.last_synced_at ? ` · Last sync ${connection.last_synced_at}` : null}
-          {connection.last_sync_note ? ` — ${connection.last_sync_note}` : null}
         </p>
-        <p className="hint">
-          Figma API token:{" "}
-          {overview.figma_api?.configured
-            ? "configured"
-            : overview.figma_api?.missing_setting || "missing"}
-          . Without a token, use a metadata snapshot import (server-side).
-        </p>
-        {!overview.figma_api?.configured ? (
-          <p className="hint">
-            Live Figma API sync needs <code>FIGMA_ACCESS_TOKEN</code> in <code>.env</code>. Until
-            then this panel uses the linked file + imported snapshot (read-only) — fine for the demo.
-          </p>
-        ) : null}
       </section>
 
       <section className="card stack">
-        <h3>Imported planning items</h3>
+        <h3>Geïmporteerde planningitems</h3>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Period</th>
+                <th>Periode</th>
                 <th>Code</th>
-                <th>Kind</th>
+                <th>Soort</th>
                 <th>Format</th>
-                <th>Pillar</th>
+                <th>Pilaar</th>
                 <th>Hook</th>
-                <th>Node</th>
                 <th>Link</th>
                 <th></th>
               </tr>
@@ -733,24 +1097,13 @@ function FigmaPlanningPanel({ clientId, onError, onNotice }) {
                   </td>
                   <td>{item.code || "—"}</td>
                   <td>{item.content_kind || "—"}</td>
-                  <td>
-                    {item.format_usable ? item.format_raw : <span className="muted">unusable</span>}
-                  </td>
-                  <td>
-                    {item.pillar_usable ? item.pillar_raw : <span className="muted">unusable</span>}
-                  </td>
+                  <td>{item.format_usable ? item.format_raw : <span className="muted">niet bruikbaar</span>}</td>
+                  <td>{item.pillar_usable ? item.pillar_raw : <span className="muted">niet bruikbaar</span>}</td>
                   <td title={item.hook_raw || ""}>
-                    {item.hook_usable ? (item.hook_raw || "").slice(0, 48) : <span className="muted">unusable</span>}
+                    {item.hook_usable ? (item.hook_raw || "").slice(0, 48) : <span className="muted">niet bruikbaar</span>}
                   </td>
                   <td>
-                    <a href={item.source_url} target="_blank" rel="noreferrer">
-                      {item.node_id}
-                    </a>
-                  </td>
-                  <td>
-                    {item.linked_post_id
-                      ? `post #${item.linked_post_id}`
-                      : item.link_status || "unlinked"}
+                    {item.linked_post_id ? `post #${item.linked_post_id}` : item.link_status || "ongelinkt"}
                   </td>
                   <td>
                     <button
@@ -774,21 +1127,16 @@ function FigmaPlanningPanel({ clientId, onError, onNotice }) {
             </tbody>
           </table>
         </div>
-        {!items.length ? (
-          <p className="hint">No planning items imported yet for this client.</p>
-        ) : null}
+        {!items.length ? <p className="hint">Nog geen planningitems voor deze klant.</p> : null}
       </section>
 
       {selectedItemId ? (
         <section className="card stack">
-          <h3>Link planning item #{selectedItemId} to a post</h3>
-          <p className="hint">
-            Suggestions are low-confidence hints. Confirm the post yourself before saving.
-          </p>
+          <h3>Koppel item #{selectedItemId} aan een post</h3>
           <div className="row-actions wrap">
             <label>
-              Post ID
-              <input value={postId} onChange={(e) => setPostId(e.target.value)} placeholder="e.g. 8" />
+              Post-ID
+              <input value={postId} onChange={(e) => setPostId(e.target.value)} placeholder="bijv. 8" />
             </label>
             <button
               className="secondary"
@@ -804,7 +1152,7 @@ function FigmaPlanningPanel({ clientId, onError, onNotice }) {
                   .catch((exc) => onError(exc.message));
               }}
             >
-              Preview field changes
+              Wijzigingen bekijken
             </button>
           </div>
           {suggestions.length ? (
@@ -812,29 +1160,15 @@ function FigmaPlanningPanel({ clientId, onError, onNotice }) {
               {suggestions.map((s) => (
                 <li key={s.post_id}>
                   <button type="button" className="secondary" onClick={() => setPostId(String(s.post_id))}>
-                    Use post #{s.post_id}
+                    Gebruik post #{s.post_id}
                   </button>{" "}
-                  {s.platform} · {s.published_at || "no date"} · {s.content_kind || "—"}
-                  {s.planning_month ? ` · planning ${s.planning_month}` : ""}
-                  {s.week_letter ? ` · week ${s.week_letter}` : ""}
-                  {s.planning_week_letter ? ` (wanted ${s.planning_week_letter})` : ""} · score{" "}
-                  {s.score}/{s.confidence || "low"} ({(s.reasons || []).join(", ") || "hint"}) —{" "}
-                  {s.note}
+                  {s.platform} · {s.published_at || "geen datum"}
                 </li>
               ))}
             </ul>
-          ) : (
-            <p className="hint">
-              No suggestions in the planning month/week yet — sync or import posts for that month, then
-              enter a post ID manually. Date + content kind alone never auto-links.
-            </p>
-          )}
+          ) : null}
           {preview ? (
             <div className="stack">
-              <h4>Before save</h4>
-              <p className="banner">
-                <strong>{preview.content_kind_compare?.display || "Figma / gepubliceerd"}</strong>
-              </p>
               <p className="hint">{preview.note}</p>
               {preview.content_kind_compare?.mismatch ? (
                 <label className="stack">
@@ -845,42 +1179,15 @@ function FigmaPlanningPanel({ clientId, onError, onNotice }) {
                       onChange={(e) => setAcceptKindMismatch(e.target.checked)}
                     />{" "}
                     {preview.content_kind_compare.accept_prompt ||
-                      "Ik bevestig bewust dat Figma en de gepubliceerde post een andere contentsoort hebben."}
+                      "Ik bevestig dat Figma en de post een andere contentsoort hebben."}
                   </span>
                 </label>
-              ) : null}
-              {(preview.changes || []).length ? (
-                <ul className="plain-list">
-                  {preview.changes.map((c) => (
-                    <li key={c.field}>
-                      <strong>{c.field}</strong>: fill “{c.from || "(empty)"}” → “{c.to}”
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="hint">No fields would be filled (all skipped or empty proposals).</p>
-              )}
-              {(preview.skipped || []).length ? (
-                <>
-                  <h4>Skipped</h4>
-                  <ul className="plain-list">
-                    {preview.skipped.map((s) => (
-                      <li key={`${s.field}-${s.reason}`}>
-                        <strong>{s.field}</strong>: {s.reason}
-                        {s.current ? ` (current: ${s.current})` : ""}
-                        {s.proposed ? ` (proposed: ${s.proposed})` : ""}
-                      </li>
-                    ))}
-                  </ul>
-                </>
               ) : null}
               <div className="row-actions wrap">
                 <button
                   className="primary"
                   type="button"
-                  disabled={
-                    busy || (preview.content_kind_compare?.mismatch && !acceptKindMismatch)
-                  }
+                  disabled={busy || (preview.content_kind_compare?.mismatch && !acceptKindMismatch)}
                   onClick={() => {
                     setBusy(true);
                     api(`/api/clients/${clientId}/figma-planning/items/${selectedItemId}/link`, {
@@ -889,13 +1196,13 @@ function FigmaPlanningPanel({ clientId, onError, onNotice }) {
                         post_id: Number(postId),
                         confirm: true,
                         accept_content_kind_mismatch: Boolean(
-                          preview.content_kind_compare?.mismatch && acceptKindMismatch
+                          preview.content_kind_compare?.mismatch && acceptKindMismatch,
                         ),
                       },
                     })
                       .then(() => reload())
                       .then(() => {
-                        onNotice(`Linked planning item #${selectedItemId} to post #${postId}.`);
+                        onNotice(`Item #${selectedItemId} gekoppeld aan post #${postId}.`);
                         setPreview(null);
                         setAcceptKindMismatch(false);
                       })
@@ -903,21 +1210,10 @@ function FigmaPlanningPanel({ clientId, onError, onNotice }) {
                       .finally(() => setBusy(false));
                   }}
                 >
-                  Confirm link (fill empty fields only)
+                  Koppeling bevestigen
                 </button>
-                <button
-                  className="secondary"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => {
-                    setPreview(null);
-                    setAcceptKindMismatch(false);
-                    onNotice(
-                      "Link cancelled — no format or pillar was saved from this preview."
-                    );
-                  }}
-                >
-                  Cancel
+                <button className="secondary" type="button" onClick={() => setPreview(null)}>
+                  Annuleren
                 </button>
               </div>
             </div>
@@ -931,18 +1227,18 @@ function FigmaPlanningPanel({ clientId, onError, onNotice }) {
 function ManualMeasure({ clientId, target, onSaved, onError }) {
   const [value, setValue] = useState("");
   const [measuredAt, setMeasuredAt] = useState("");
-  const [source, setSource] = useState("manual");
+  const [source, setSource] = useState("handmatig");
   return (
     <div className="row-actions wrap">
-      <input type="date" value={measuredAt} onChange={(e) => setMeasuredAt(e.target.value)} title="Measured on" />
-      <input placeholder="measurement" value={value} onChange={(e) => setValue(e.target.value)} />
-      <input placeholder="source (manual/Meta/…)" value={source} onChange={(e) => setSource(e.target.value)} />
+      <input type="date" value={measuredAt} onChange={(e) => setMeasuredAt(e.target.value)} title="Gemeten op" />
+      <input placeholder="meting" value={value} onChange={(e) => setValue(e.target.value)} />
+      <input placeholder="bron" value={source} onChange={(e) => setSource(e.target.value)} />
       <button
         className="secondary"
         type="button"
         onClick={() => {
           if (value === "") {
-            onError("Enter a measurement value.");
+            onError("Vul een meetwaarde in.");
             return;
           }
           api(`/api/clients/${clientId}/targets/${target.id}/measurements`, {
@@ -953,7 +1249,7 @@ function ManualMeasure({ clientId, target, onSaved, onError }) {
             .catch((exc) => onError(exc.message));
         }}
       >
-        Add measurement
+        Meting toevoegen
       </button>
     </div>
   );

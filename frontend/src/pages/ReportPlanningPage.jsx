@@ -29,6 +29,9 @@ export default function ReportPlanningPage() {
   const [busy, setBusy] = useState("");
   const [draft, setDraft] = useState(null);
   const [showMore, setShowMore] = useState(false);
+  const [simYear, setSimYear] = useState(() => new Date().getFullYear());
+  const [simMonth, setSimMonth] = useState(() => new Date().getMonth() + 1);
+  const [simResult, setSimResult] = useState(null);
 
   function buildDraft(payload) {
     const clients = (payload.clients || []).filter((c) => !isJunkTestName(c.name));
@@ -166,10 +169,39 @@ export default function ReportPlanningPage() {
     }
   }
 
+  async function simulateMonthlyTrend() {
+    setBusy("sim_trend");
+    setError("");
+    setNotice("");
+    try {
+      const res = await api("/api/report-planning/monthly-trend/simulate", {
+        method: "POST",
+        body: {
+          year: Number(simYear),
+          month: Number(simMonth),
+          simulate_without_paid_ai: true,
+        },
+      });
+      setSimResult(res);
+      setNotice(
+        res.created
+          ? `Simulatie geslaagd: '${res.title}' is aangemaakt en opgeslagen in het dashboard (zonder betaalde AI-run).`
+          : `Geen dubbel rapport aangemaakt: '${res.title}' bestond al voor deze maand (idempotent gecontroleerd).`
+      );
+      await reload();
+    } catch (exc) {
+      setError(exc.message);
+    } finally {
+      setBusy("");
+    }
+  }
+
   if (!data || !draft) {
     return error ? <p className="banner error">{error}</p> : <p className="muted">Laden…</p>;
   }
 
+  const trendSched = data.monthly_trend_schedule || {};
+  const trendRuns = trendSched.recent_runs || [];
   const nextDate = data?.suggested_dates?.[0];
   const lastRun = data.last_run;
   const lastRunClients = (lastRun?.clients || []).filter((row) => !isJunkTestName(row.client_name));
@@ -184,6 +216,110 @@ export default function ReportPlanningPage() {
     <div className="stack">
       {error ? <p className="banner error">{error}</p> : null}
       {notice ? <p className="banner">{notice}</p> : null}
+
+      <section className="card stack">
+        <div className="search-form-header">
+          <h3 style={{ marginTop: 0, marginBottom: 0 }}>
+            Automatisch algemeen trendrapport (1e van de maand)
+          </h3>
+          <span className="pill ok">Actief · {trendSched.timezone || "Europe/Amsterdam"}</span>
+        </div>
+        <p style={{ margin: 0, lineHeight: 1.55 }}>
+          Op de <strong>1e van iedere maand om 06:00 uur</strong> ({trendSched.timezone || "Europe/Amsterdam"})
+          maakt HAMSTER automatisch één zelfstandig <strong>Algemeen trendrapport</strong> over trends per
+          socialmediakanaal en bewaart dit in het dashboard. Een herstart of nieuwe poging maakt geen
+          dubbele rapporten aan.
+        </p>
+        {trendSched.next_run?.label_nl ? (
+          <p className="hint" style={{ margin: 0 }}>
+            Eerstvolgende automatische run: <strong>{trendSched.next_run.label_nl}</strong>.
+          </p>
+        ) : null}
+
+        <div className="row-actions wrap" style={{ alignItems: "end" }}>
+          <label>
+            Simulatiemaand
+            <select value={String(simMonth)} onChange={(e) => setSimMonth(Number(e.target.value))}>
+              {[
+                [1, "januari"],
+                [2, "februari"],
+                [3, "maart"],
+                [4, "april"],
+                [5, "mei"],
+                [6, "juni"],
+                [7, "juli"],
+                [8, "augustus"],
+                [9, "september"],
+                [10, "oktober"],
+                [11, "november"],
+                [12, "december"],
+              ].map(([m, label]) => (
+                <option key={m} value={m}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Jaar
+            <input
+              type="number"
+              min={2024}
+              max={2035}
+              value={simYear}
+              onChange={(e) => setSimYear(Number(e.target.value) || 2026)}
+              style={{ width: "6.5rem" }}
+            />
+          </label>
+          <button
+            className="secondary"
+            type="button"
+            disabled={Boolean(busy)}
+            onClick={simulateMonthlyTrend}
+          >
+            {busy === "sim_trend"
+              ? "Simuleren…"
+              : "Test 1e-van-de-maand planning (zonder betaalde AI)"}
+          </button>
+        </div>
+
+        {simResult ? (
+          <p className="hint" style={{ margin: 0 }}>
+            Laatste simulatie: rapport #{simResult.report_id} ({simResult.title}) ·{" "}
+            {simResult.created ? "nieuw aangemaakt" : "bestaand rapport behouden (geen duplicaat)"} ·
+            tijdzone {simResult.timezone}.
+          </p>
+        ) : null}
+
+        {trendRuns.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Maand</th>
+                  <th>Rapport</th>
+                  <th>Status</th>
+                  <th>Laatste controle ({trendSched.timezone || "Europe/Amsterdam"})</th>
+                </tr>
+              </thead>
+              <tbody>
+                {trendRuns.slice(0, 5).map((r) => (
+                  <tr key={`${r.period_year}-${r.period_month}`}>
+                    <td>
+                      <strong>
+                        {String(r.period_month).padStart(2, "0")}-{r.period_year}
+                      </strong>
+                    </td>
+                    <td>{r.report_title || `#${r.report_id}`}</td>
+                    <td>{r.report_status || r.status}</td>
+                    <td>{r.last_checked_at || r.triggered_at || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </section>
 
       <section className="card stack">
         <h3 style={{ marginTop: 0 }}>Eén planning voor alle klanten</h3>

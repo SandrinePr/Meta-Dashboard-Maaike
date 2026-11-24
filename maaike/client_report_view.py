@@ -884,6 +884,12 @@ def build_client_report_presentation(
         "year": report.get("period_year"),
         "month": report.get("period_month"),
     }
+    format_pattern_window = snapshot.get("format_pattern_window") or (
+        (snapshot.get("prompt_input") or {}).get("format_pattern_window")
+    ) or {}
+    linked_trend = snapshot.get("linked_trend") or (
+        (snapshot.get("prompt_input") or {}).get("linked_trend_report")
+    )
     summary = _short_summary(body, content_source=content_source)
     show_summary = bool(summary)
 
@@ -907,17 +913,30 @@ def build_client_report_presentation(
         and str(i.get("key") or "") not in {"action_plan.human_approval"}
     ]
 
+    p_dict = period if isinstance(period, dict) else {}
+    period_label_nl = str(p_dict.get("label_nl") or _period_label(p_dict))
+    compare_label_nl = str(p_dict.get("compare_label_nl") or _compare_label(p_dict))
+    format_pattern_period_nl = str(format_pattern_window.get("label_nl") or "")
+    format_pattern_note_nl = str(format_pattern_window.get("used_period_note_nl") or format_pattern_period_nl or "")
+
     return {
         "report_id": report.get("id"),
         "report_type": report.get("report_type"),
         "title": title_nl,
         "title_en": title_en,
-        "title_ui": title_en,
-        "title_raw": report.get("title") or "Client report",
+        "title_ui": title_nl,
+        "title_raw": report.get("title") or "Klantrapport",
         "client_id": client_id,
         "client_name": client_name,
-        "period_label": _period_label(period if isinstance(period, dict) else {}),
-        "compare_label": _compare_label(period if isinstance(period, dict) else {}),
+        "period_label": _period_label(p_dict),
+        "compare_label": _compare_label(p_dict),
+        "period_label_nl": period_label_nl,
+        "compare_label_nl": compare_label_nl,
+        "format_pattern_period_nl": format_pattern_period_nl,
+        "format_pattern_note_nl": format_pattern_note_nl,
+        "format_pattern_post_count": format_pattern_window.get("post_count"),
+        "linked_trend": linked_trend,
+        "sources_overview": snapshot.get("sources_overview"),
         "period_year": year,
         "period_month": month,
         "version": report.get("version"),
@@ -989,8 +1008,134 @@ def build_client_report_presentation(
     }
 
 
+TREND_CHAPTER_SECTIONS = [
+    ("positionering", "Positionering van deze editie"),
+    ("managementsamenvatting", "Managementsamenvatting"),
+    ("platform_verschuivingen", "Trends per socialmediakanaal"),
+    ("belangrijkste_trends", "Overkoepelende socialmediatrends"),
+    ("contentkansen", "Kansen voor contentformats en rubrieken"),
+    ("zoekclusters", "Zoekgedrag en opvallende onderwerpen"),
+    ("conclusie", "Conclusie en aandachtspunten"),
+]
+
+TREND_CHANNEL_LABELS = [
+    ("instagram", "Instagram"),
+    ("facebook", "Facebook"),
+    ("linkedin", "LinkedIn"),
+    ("tiktok", "TikTok"),
+    ("overig", "YouTube & overige kanalen"),
+]
+
+
+def build_trend_report_presentation(
+    report: dict[str, Any],
+    *,
+    review: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Readable Dutch presentation for standalone channel-based general trend reports."""
+    review = review or {}
+    body = report.get("body") if isinstance(report.get("body"), dict) else {}
+    snapshot = report.get("input_snapshot") if isinstance(report.get("input_snapshot"), dict) else {}
+    year = report.get("period_year")
+    month = report.get("period_month")
+    month_nl = (
+        f"{MONTHS_NL[int(month)]} {int(year)}"
+        if year and month and 1 <= int(month) <= 12
+        else "—"
+    )
+    title = _display_title(report.get("title") or f"Algemeen trendrapport – {month_nl}")
+    status = presentation_status(
+        body=body,
+        review=review,
+        report_status=str(report.get("status") or ""),
+    )
+
+    chapters_raw = body.get("chapters") if isinstance(body.get("chapters"), dict) else {}
+    channels_raw = body.get("channels") if isinstance(body.get("channels"), dict) else {}
+    channel_cards = [
+        {"key": key, "label": label, "text": str(channels_raw.get(key) or "").strip()}
+        for key, label in TREND_CHANNEL_LABELS
+        if str(channels_raw.get(key) or "").strip()
+    ]
+    document_sections = []
+    for key, label_nl in TREND_CHAPTER_SECTIONS:
+        val = chapters_raw.get(key)
+        if isinstance(val, list):
+            txt = "\n".join(f"• {x}" for x in val if str(x).strip())
+        else:
+            txt = str(val or "").strip()
+        if not txt:
+            continue
+        document_sections.append(
+            {
+                "key": key,
+                "review_key": f"chapters.{key}",
+                "label_nl": label_nl,
+                "label_en": label_nl,
+                "text": txt,
+                "text_display": txt,
+                "group": "trend_chapters",
+                "items": [],
+                "items_display": [],
+            }
+        )
+
+    distinctions = body.get("distinctions") if isinstance(body.get("distinctions"), dict) else {}
+    final_text = str(review.get("final_version_text") or "").strip()
+    approved = bool(review.get("is_approved"))
+    content_source = "approved_final" if approved and final_text else "ai_concept"
+    return {
+        "report_id": report.get("id"),
+        "report_type": "trend",
+        "scope": "algemeen_per_kanaal",
+        "title": title,
+        "title_ui": title,
+        "month_label_nl": month_nl,
+        "period_year": year,
+        "period_month": month,
+        "version": report.get("version"),
+        "created_at": _display_timestamp(report.get("prepared_at") or report.get("created_at")),
+        "executed_at": _display_timestamp(report.get("executed_at")),
+        "status": status,
+        "content_source": content_source,
+        "approved_final_text": final_text if content_source == "approved_final" else "",
+        "channel_cards": channel_cards,
+        "document_sections": document_sections,
+        "distinctions": {
+            "facts": list(distinctions.get("facts") or []),
+            "trends": list(distinctions.get("trends") or []),
+            "suggestions": list(distinctions.get("suggestions") or []),
+        },
+        "simulation_without_paid_ai": bool(body.get("simulation_without_paid_ai")),
+        "has_readable_content": bool(document_sections or channel_cards or final_text),
+        "human_review": {
+            "can_review": bool(review.get("can_review")),
+            "is_approved": approved,
+            "review_status": review.get("review_status") or "",
+            "review_status_label": review.get("review_status_label") or "",
+            "reviewer_name": review.get("reviewer_name") or "",
+            "approved_at": (review.get("record") or {}).get("approved_at") or review.get("approved_at"),
+            "final_version_text": final_text,
+        },
+        "technical": {
+            "body": body,
+            "usage": report.get("usage") or {},
+            "estimate": report.get("estimate") or {},
+            "notes": report.get("notes") or [],
+            "error_text": report.get("error_text") or "",
+            "context_preview": snapshot.get("context_preview"),
+        },
+    }
+
+
 def attach_presentation_to_payload(conn, client_id: int, payload: dict[str, Any]) -> dict[str, Any]:
     report = payload.get("report") or {}
+    if report.get("report_type") == "trend":
+        payload["presentation"] = build_trend_report_presentation(
+            report,
+            review=payload.get("review") or {},
+        )
+        return payload
     if report.get("report_type") != "client":
         payload["presentation"] = None
         return payload
@@ -1008,21 +1153,31 @@ def comparison_prompt_block(period_bundle: dict[str, Any]) -> dict[str, Any]:
     comparison = period_bundle.get("comparison") or {}
     metrics = period_bundle.get("metrics") or {}
     period = period_bundle.get("period") or {}
+    format_pattern_window = period_bundle.get("format_pattern_window") or {}
     by_platform = metrics.get("by_platform") or {}
     current = comparison.get("current") if isinstance(comparison.get("current"), dict) else {}
     previous = comparison.get("previous") if isinstance(comparison.get("previous"), dict) else {}
     return {
         "current_period": {
             "label": period.get("label") or _period_label(period),
+            "label_nl": period.get("label_nl") or _period_label(period),
             "start": period.get("start"),
             "end": period.get("end"),
             "post_count": comparison.get("current_post_count") or metrics.get("post_count"),
         },
         "comparison_period": {
             "label": period.get("compare_label") or _compare_label(period),
+            "label_nl": period.get("compare_label_nl") or _compare_label(period),
             "start": period.get("previous_start"),
             "end": period.get("previous_end"),
             "post_count": comparison.get("previous_post_count"),
+        },
+        "format_pattern_period": {
+            "label_nl": format_pattern_window.get("label_nl"),
+            "used_period_note_nl": format_pattern_window.get("used_period_note_nl"),
+            "start": format_pattern_window.get("start"),
+            "end": format_pattern_window.get("end"),
+            "post_count": format_pattern_window.get("post_count"),
         },
         "metric": comparison.get("metric") or "reach",
         "platforms_in_period": by_platform,
@@ -1037,6 +1192,7 @@ def comparison_prompt_block(period_bundle: dict[str, Any]) -> dict[str, Any]:
         "note": comparison.get("note"),
         "rules": [
             "State platform, metric and usable post counts for each comparison.",
+            "Evaluate formats and recurring patterns across the calendar-year window up to the report end date, and state which period was used.",
             "Do not treat missing format/pillar/hook registration as proof of poor content.",
             "No significance claims without a suitable analysis.",
         ],

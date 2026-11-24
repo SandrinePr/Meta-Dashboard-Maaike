@@ -690,6 +690,8 @@ def planning_overview(conn) -> dict[str, Any]:
                 "time": slot["time"],
             }
         )
+    from maaike.monthly_trend_scheduler import monthly_trend_schedule_status
+
     last_run = conn.execute(
         "SELECT * FROM report_plan_runs ORDER BY id DESC LIMIT 1"
     ).fetchone()
@@ -709,10 +711,11 @@ def planning_overview(conn) -> dict[str, Any]:
         "server_runtime": server_runtime_requirements(),
         "last_run": last_run_payload,
         "scheduler": schedule_status(),
+        "monthly_trend_schedule": monthly_trend_schedule_status(conn),
         "notes": [
-            "Voorbeeld: Red Rock 12:00, Test1 13:00 = pauze van 1 uur tussen die twee.",
-            "Definitieve datums kiezen we later — dit is bewerkbaar.",
-            "Automatisch uitvoeren staat uit; geen betaalde AI-runs vanuit planning.",
+            "Algemeen trendrapport: wordt op de 1e van iedere maand automatisch aangemaakt en bewaard (Europe/Amsterdam).",
+            "Voorbeeld klantrapporten: Red Rock 12:00, Test1 13:00 = pauze van 1 uur tussen die twee.",
+            "Automatisch betaalde AI uitvoeren voor klantrapporten staat uit totdat dit expliciet wordt vrijgegeven.",
         ],
     }
 

@@ -56,20 +56,18 @@ def load_report_instruction_bundle(report_type: str) -> dict[str, Any]:
         primary = trend
         primary_label = TREND_FILE.replace(".txt", ".docx")
         required_sources = [
-            "Externe trends/platformupdates (websearch / Frankwatching / Social Media Today / officiële platformbronnen)",
-            "Google Trends / AnswerThePublic / Ahrefs waar relevant",
-            "Handmatig toegevoegde bronnen met titel, URL, publicatiedatum, raadpleegdatum",
+            "Externe trends en platformupdates per socialmediakanaal (Instagram, Facebook, LinkedIn, TikTok/overig)",
+            "Google Trends / zoeksignalen waar relevant",
+            "Handmatig toegevoegde bronnen met titel, URL, publicatiedatum en raadpleegdatum",
         ]
         chapters = [
-            "Titelpagina of openingsblok",
-            "Korte positionering van deze editie",
+            "Korte positionering van deze maandeditie",
             "Managementsamenvatting",
-            "Belangrijkste trends en ontwikkelingen",
-            "Platform- en formatverschuivingen",
-            "Contentkansen voor maand x+2",
-            "Zoekclusters en opvallende richtingen",
-            "Conclusie en prioriteiten",
-            "Bronoverzicht",
+            "Belangrijkste socialmediatrends",
+            "Trends per socialmediakanaal (Instagram, Facebook, LinkedIn, TikTok/overig)",
+            "Kansen voor contentformats en rubrieken",
+            "Zoekgedrag en opvallende onderwerpen",
+            "Conclusie en aandachtspunten",
         ]
         chapter_keys = [
             "positionering",
@@ -84,13 +82,14 @@ def load_report_instruction_bundle(report_type: str) -> dict[str, Any]:
         primary = client
         primary_label = CLIENT_FILE.replace(".txt", ".docx")
         required_sources = [
-            "Klantstrategie / startantwoorden in dashboard",
-            "Post performance en formats uit Logs/Excel",
-            "AI-analyses + menselijke feedback/eindconclusies (indien aanwezig)",
-            "Passend trendrapport (of expliciet gedeeltelijk zonder)",
-            "SEO/SERP/Ahrefs/websearch alleen indien als bron aangeleverd — anders: Niet onderzocht / onvoldoende gegevens",
-            "Concurrentensignalen alleen indien aangeleverd — anders: Niet onderzocht / onvoldoende gegevens",
-            "Instructies/voorbeeldrapporten tellen niet als onderzoeksbron",
+            "Klantstrategie in het dashboard",
+            "Eigen berichten in de vaste rapportperiode (21e vorige maand t/m 20e rapportmaand) en vergelijkingsperiode",
+            "Beschikbare eigen berichten van het kalenderjaar t/m einddatum rapport voor formats en terugkerende patronen",
+            "Inzichten uit de berichtencontrole (indien beschikbaar)",
+            "Figma-planning (indien gekoppeld)",
+            "Algemeen trendrapport van dezelfde rapportmaand (verplicht automatisch gekoppeld)",
+            "SEO/SERP/Ahrefs en concurrentsignalen alleen indien aangeleverd — anders: Niet onderzocht / onvoldoende gegevens",
+            "Instructies en voorbeeldrapporten tellen niet als onderzoeksbron",
         ]
         chapters = [
             "Input van brainstorm voor planning MAAND JAAR",

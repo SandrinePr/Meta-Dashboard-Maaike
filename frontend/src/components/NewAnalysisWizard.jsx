@@ -1,782 +1,656 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 
 const MONTHS_NL = [
-  "",
-  "januari",
-  "februari",
-  "maart",
-  "april",
-  "mei",
-  "juni",
-  "juli",
-  "augustus",
-  "september",
-  "oktober",
-  "november",
-  "december",
+  [1, "januari"],
+  [2, "februari"],
+  [3, "maart"],
+  [4, "april"],
+  [5, "mei"],
+  [6, "juni"],
+  [7, "juli"],
+  [8, "augustus"],
+  [9, "september"],
+  [10, "oktober"],
+  [11, "november"],
+  [12, "december"],
 ];
 
-const TYPE_OPTIONS = [
-  {
-    value: "client",
-    label: "Klantrapport",
-    blurb:
-      "Bekijk hoe de posts van één klant hebben gepresteerd en krijg advies voor de volgende planning.",
-    example: "Welke posts van Red Rock werkten goed in september? Wat gaan we herhalen of testen?",
-  },
-  {
-    value: "trend",
-    label: "Trendrapport",
-    blurb:
-      "Bekijk ontwikkelingen in de markt en op social media en haal daar ideeën uit voor de komende planning.",
-    example:
-      "Welke nieuwe Instagram-formats zijn interessant voor de novemberplanning?",
-  },
+const TREND_CHANNELS = [
+  "Instagram",
+  "Facebook",
+  "LinkedIn",
+  "TikTok",
+  "YouTube & overige kanalen",
 ];
 
-function money(range) {
-  if (!range) return "nog onbekend";
-  if (range.low == null && range.high == null) return "nog onbekend";
-  return `USD ${range.low} – ${range.high}`;
+function monthNameNl(month) {
+  const found = MONTHS_NL.find(([m]) => m === Number(month));
+  return found ? found[1] : String(month);
 }
 
-function monthLabel(year, month) {
-  if (year && month >= 1 && month <= 12) return `${MONTHS_NL[month]} ${year}`;
-  return "—";
+function defaultReportMonth() {
+  const now = new Date();
+  return {
+    year: now.getFullYear(),
+    month: now.getMonth() + 1,
+  };
 }
 
-function addMonths(year, month, delta) {
-  let m = Number(month) + Number(delta);
-  let y = Number(year);
-  while (m > 12) {
-    m -= 12;
-    y += 1;
-  }
-  while (m < 1) {
-    m += 12;
-    y -= 1;
-  }
-  return { year: y, month: m };
-}
-
-function suggestTitle(reportType, clientName, year, month) {
-  if (reportType === "trend") {
-    const plan = addMonths(year, month, 2);
-    return `Social Trend Radar – planning ${monthLabel(plan.year, plan.month)}`;
-  }
-  return `${clientName} – analyse ${monthLabel(year, month)}`;
-}
-
-function defaultCompareLabel(year, month) {
-  const d = new Date(Date.UTC(year, month - 1, 1));
-  d.setUTCMonth(d.getUTCMonth() - 1);
-  return monthLabel(d.getUTCFullYear(), d.getUTCMonth() + 1);
-}
-
-function isUsableTrend(r) {
-  if (!r || r.report_type !== "trend") return false;
-  if (r.status === "failed") return false;
-  if (r.status === "completed" || r.status === "mock_completed") return true;
-  if (r.analysis_usable) return true;
-  return Boolean(r.executed_at);
-}
-
-function isTechnicalTrendTitle(title) {
-  const t = String(title || "").trim().toLowerCase();
-  if (!t) return true;
-  return (
-    t.startsWith("created in") ||
-    t.startsWith("gemaakt in") ||
-    t.includes("internetonderzoek") ||
-    t.includes("handmatige bronnen")
-  );
-}
-
-function trendOptionLabel(r) {
-  const planY = r.planning_year || r.period_year;
-  const planM = r.planning_month || r.period_month;
-  const fallback = `Social trends – planning ${monthLabel(planY, planM)}`;
-  const title = isTechnicalTrendTitle(r.title) ? fallback : String(r.title).trim();
-  const partial = r.is_partial ? " · onderzoek gedeeltelijk" : "";
-  return `${title} · planning ${monthLabel(planY, planM)}${partial}`;
+function sourcePillClass(src) {
+  if (src.ready || src.status === "ready") return "pill ok";
+  if (src.required) return "pill err";
+  return "pill warn";
 }
 
 export default function NewAnalysisWizard({
   client,
-  trendReports,
-  search,
-  busy,
-  setBusy,
-  setError,
-  setNotice,
-  onCancel,
-  onOpenedReport,
+  initialMode = "client",
+  initialYear,
+  initialMonth,
+  onCreated,
+  onClose,
+  isCollapsible = false,
+  onOpenStrategy,
+  onOpenFigmaPlanning,
+  onOpenSocialPosts,
+  onOpenSettings,
 }) {
-  const [step, setStep] = useState(1);
-  const [reportType, setReportType] = useState("client");
-  const [year, setYear] = useState(2026);
-  const [month, setMonth] = useState(9);
-  const [title, setTitle] = useState(() => suggestTitle("client", client.name, 2026, 9));
-  const [titleTouched, setTitleTouched] = useState(false);
-  const [showMore, setShowMore] = useState(false);
-  const [useCustomDates, setUseCustomDates] = useState(false);
-  const [periodStart, setPeriodStart] = useState("2026-09-01");
-  const [periodEnd, setPeriodEnd] = useState("2026-09-30");
-  const [compareCustom, setCompareCustom] = useState(false);
-  const [compareStart, setCompareStart] = useState("");
-  const [compareEnd, setCompareEnd] = useState("");
-  const [trendId, setTrendId] = useState("");
-  const [researchMode, setResearchMode] = useState("internet");
+  const def = defaultReportMonth();
+  const [mode, setMode] = useState(initialMode || "client");
+  const [year, setYear] = useState(initialYear || def.year);
+  const [month, setMonth] = useState(initialMonth || def.month);
+  const [title, setTitle] = useState("");
+  const [titleEdited, setTitleEdited] = useState(false);
+  const [userNotes, setUserNotes] = useState("");
   const [inspect, setInspect] = useState(null);
-  const [prepared, setPrepared] = useState(null);
-  const [execPreview, setExecPreview] = useState(null);
-  const [runState, setRunState] = useState(null);
-  const [runError, setRunError] = useState("");
-  const [planningNotes, setPlanningNotes] = useState("");
-
-  const x2 = useMemo(() => addMonths(year, month, 2), [year, month]);
-
-  const usableTrends = useMemo(
-    () => (trendReports || []).filter(isUsableTrend),
-    [trendReports]
-  );
-
-  const selectedTrend = useMemo(
-    () => usableTrends.find((r) => String(r.id) === String(trendId)) || null,
-    [usableTrends, trendId]
-  );
+  const [inspectLoading, setInspectLoading] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
-    if (titleTouched) return;
-    setTitle(suggestTitle(reportType, client.name, year, month));
-  }, [reportType, client.name, year, month, titleTouched]);
+    if (initialMode) setMode(initialMode);
+  }, [initialMode]);
 
-  const typeMeta = TYPE_OPTIONS.find((t) => t.value === reportType);
+  useEffect(() => {
+    if (initialYear) setYear(initialYear);
+    if (initialMonth) setMonth(initialMonth);
+  }, [initialYear, initialMonth]);
 
-  const compareHint = useMemo(() => {
-    if (reportType === "trend") return null;
-    if (compareCustom && compareStart && compareEnd) return `${compareStart} t/m ${compareEnd}`;
-    if (inspect?.period?.compare_label) return inspect.period.compare_label;
-    if (useCustomDates) return "vorige periode van gelijke lengte";
-    return defaultCompareLabel(year, month);
-  }, [
-    reportType,
-    compareCustom,
-    compareStart,
-    compareEnd,
-    inspect,
-    useCustomDates,
-    year,
-    month,
-  ]);
+  const defaultTitle =
+    mode === "trend"
+      ? `Algemeen trendrapport – ${monthNameNl(month)} ${year}`
+      : `${client.name} – Maandrapport ${monthNameNl(month)} ${year}`;
 
-  const periodParams = useMemo(() => {
-    const params = new URLSearchParams();
-    if (useCustomDates) {
-      params.set("start", periodStart);
-      params.set("end", periodEnd);
-    } else {
-      params.set("period_year", String(year));
-      params.set("period_month", String(month));
+  useEffect(() => {
+    if (!titleEdited) {
+      setTitle(defaultTitle);
     }
-    if (compareCustom && compareStart && compareEnd) {
-      params.set("compare_start", compareStart);
-      params.set("compare_end", compareEnd);
-    }
-    if (trendId) params.set("linked_trend_report_id", trendId);
-    return params;
-  }, [
-    useCustomDates,
-    periodStart,
-    periodEnd,
-    year,
-    month,
-    compareCustom,
-    compareStart,
-    compareEnd,
-    trendId,
-  ]);
+  }, [defaultTitle, titleEdited]);
 
-  const prepareBody = useMemo(() => {
-    if (reportType === "trend") {
-      return {
-        run_year: year,
-        run_month: month,
-        sources: [],
-        research_mode: researchMode,
-        max_budget_usd: null,
-        title: title.trim() || suggestTitle("trend", client.name, year, month),
-      };
+  const loadInspect = useCallback(async () => {
+    setInspectLoading(true);
+    setError("");
+    try {
+      const qs = new URLSearchParams({
+        period_year: String(year),
+        period_month: String(month),
+      });
+      const res = await api(`/api/clients/${client.id}/reports/client/inspect?${qs.toString()}`);
+      setInspect(res);
+    } catch (exc) {
+      setError(exc.message);
+    } finally {
+      setInspectLoading(false);
     }
-    const body = {
-      period_year: year,
-      period_month: month,
-      linked_trend_report_id: trendId || null,
-      allow_partial_without_trend: !trendId,
-      max_budget_usd: null,
-      title: title.trim() || suggestTitle("client", client.name, year, month),
-      maaike_planning_notes: planningNotes.trim() || null,
-    };
-    if (useCustomDates) {
-      body.start = periodStart;
-      body.end = periodEnd;
-    }
-    if (compareCustom && compareStart && compareEnd) {
-      body.compare_start = compareStart;
-      body.compare_end = compareEnd;
-    }
-    return body;
-  }, [
-    reportType,
-    year,
-    month,
-    researchMode,
-    title,
-    client.name,
-    trendId,
-    useCustomDates,
-    periodStart,
-    periodEnd,
-    compareCustom,
-    compareStart,
-    compareEnd,
-    planningNotes,
-  ]);
+  }, [client.id, year, month]);
 
-  const costLabel = useMemo(() => {
-    const est =
-      execPreview?.estimate?.estimated_cost_usd ||
-      prepared?.report?.estimate?.estimated_cost_usd ||
-      execPreview?.estimated_cost_usd;
-    if (est) return `${money(est)} (zo zuinig mogelijk)`;
-    return "nog onbekend — zo zuinig mogelijk";
-  }, [execPreview, prepared]);
+  useEffect(() => {
+    loadInspect();
+  }, [loadInspect]);
 
-  const postCount =
-    inspect?.data_coverage?.analysis_period?.post_count ??
-    inspect?.metrics?.post_count ??
-    null;
-  const byPlatform =
-    inspect?.data_coverage?.posts_by_platform || inspect?.metrics?.by_platform || {};
-  const missing = inspect?.missing || [];
-  const appliedSettings = useMemo(() => {
-    const bits = [];
-    if (reportType === "client") {
-      if (useCustomDates) bits.push(`aangepaste periode ${periodStart} t/m ${periodEnd}`);
-      if (compareCustom && compareStart && compareEnd) {
-        bits.push(`eigen vergelijking ${compareStart} t/m ${compareEnd}`);
-      }
-      if (selectedTrend) bits.push(`trend: ${selectedTrend.title || `#${selectedTrend.id}`}`);
-      else bits.push("geen trendrapport");
-    } else {
-      bits.push(
-        researchMode === "internet" ? "internetzoeken aan" : "handmatige bronnen"
+  function switchMode(nextMode) {
+    setMode(nextMode);
+    setTitleEdited(false);
+    setError("");
+    setNotice("");
+  }
+
+  function handleSourceAction(src) {
+    if (src.cta_target === "strategy") {
+      onOpenStrategy?.();
+      return;
+    }
+    if (src.cta_target === "figma_planning") {
+      onOpenFigmaPlanning?.();
+      return;
+    }
+    if (src.cta_target === "social_posts") {
+      onOpenSocialPosts?.();
+      return;
+    }
+    if (src.cta_target === "trend_report") {
+      switchMode("trend");
+      setNotice(
+        `Maak eerst het Algemeen trendrapport voor ${monthNameNl(month)} ${year}. Daarna koppelt HAMSTER het automatisch aan het klantrapport.`
       );
     }
-    return bits;
-  }, [
-    reportType,
-    useCustomDates,
-    periodStart,
-    periodEnd,
-    compareCustom,
-    compareStart,
-    compareEnd,
-    selectedTrend,
-    researchMode,
-  ]);
-
-  async function prepareFresh() {
-    const path =
-      reportType === "trend"
-        ? `/api/clients/${client.id}/reports/trend/prepare`
-        : `/api/clients/${client.id}/reports/client/prepare`;
-    const payload = await api(path, { method: "POST", body: prepareBody });
-    setPrepared(payload);
-    return payload;
   }
 
-  async function goToReview() {
+  async function runCreateReport({ simulateWithoutPaidAi }) {
+    setBusy(simulateWithoutPaidAi ? "simulate" : "ai");
     setError("");
-    setBusy(true);
-    setPrepared(null);
-    setExecPreview(null);
-    setRunState("preparing");
-    setRunError("");
+    setNotice("");
     try {
-      if (reportType === "client") {
-        const payload = await api(
-          `/api/clients/${client.id}/reports/client/inspect?${periodParams.toString()}`
-        );
-        setInspect(payload);
+      let reportId = null;
+
+      if (mode === "trend") {
+        if (simulateWithoutPaidAi) {
+          const sim = await api("/api/report-planning/monthly-trend/simulate", {
+            method: "POST",
+            body: {
+              year: Number(year),
+              month: Number(month),
+              simulate_without_paid_ai: true,
+            },
+          });
+          reportId = sim.report_id;
+        } else {
+          const prep = await api(`/api/clients/${client.id}/reports/trend/prepare`, {
+            method: "POST",
+            body: {
+              run_year: Number(year),
+              run_month: Number(month),
+              research_mode: "internet",
+              title: title.trim() || defaultTitle,
+            },
+          });
+          reportId = prep?.report?.id || prep?.report_id;
+          await api(`/api/clients/${client.id}/reports/${reportId}/execute`, {
+            method: "POST",
+            body: { dry_run_paid: false },
+          });
+        }
       } else {
-        setInspect({
-          missing: search?.available
-            ? []
-            : [
-                `Internetzoeken nog niet beschikbaar (${
-                  search?.missing_setting || "AI_API_KEY / Gemini-model"
-                }).`,
-              ],
-          metrics: { post_count: 0, by_platform: {} },
-          data_coverage: { posts_by_platform: {} },
-          input_checklist: [
-            {
-              id: "creation",
-              label: "Aanmaakmaand",
-              ready: true,
-              detail: monthLabel(year, month),
-            },
-            {
-              id: "planning",
-              label: "Planningsmaand (X+2)",
-              ready: true,
-              detail: monthLabel(x2.year, x2.month),
-            },
-            {
-              id: "lookback",
-              label: "Terugblik",
-              ready: true,
-              detail: "21e vorige maand t/m 20e aanmaakmaand",
-            },
-          ],
+        const prep = await api(`/api/clients/${client.id}/reports/client/prepare`, {
+          method: "POST",
+          body: {
+            period_year: Number(year),
+            period_month: Number(month),
+            title: title.trim() || defaultTitle,
+            maaike_planning_notes: userNotes || null,
+          },
         });
-      }
-      // Geen aparte bewerkstap: alleen inputcheck. Prepare gebeurt pas bij Start analyse.
-      setStep(2);
-      setRunState(null);
-      setNotice("Controleer de bronnen — nog geen betaalde analyse gestart.");
-    } catch (exc) {
-      setRunState("failed");
-      setRunError(exc.message || "Controle mislukt.");
-      setError(exc.message || "Controle mislukt.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function startAnalysis() {
-    setError("");
-    setRunError("");
-    setBusy(true);
-    setRunState("starting");
-    try {
-      let payload = prepared;
-      if (!payload?.report?.id) payload = await prepareFresh();
-      const reportId = payload.report.id;
-      if (title.trim() && title.trim() !== payload.report.title) {
-        payload = await api(`/api/clients/${client.id}/reports/${reportId}/title`, {
-          method: "PATCH",
-          body: { title: title.trim() },
-        });
-        setPrepared(payload);
-      }
-      const result = await api(`/api/clients/${client.id}/reports/${reportId}/execute`, {
-        method: "POST",
-        body: { dry_run_paid: false, max_budget_usd: null },
-      });
-      setNotice(`Analyse klaar voor rapport #${reportId}.`);
-      setRunState(null);
-      onOpenedReport(result);
-    } catch (exc) {
-      const msg = exc.message || "Analyse mislukt.";
-      setRunState("failed");
-      setRunError(msg);
-      setError(msg);
-      if (prepared?.report?.id) {
-        try {
-          setPrepared(await api(`/api/clients/${client.id}/reports/${prepared.report.id}`));
-        } catch {
-          /* ignore */
+        reportId = prep?.report?.id || prep?.report_id;
+        if (simulateWithoutPaidAi) {
+          await api(`/api/clients/${client.id}/reports/${reportId}/mock`, {
+            method: "POST",
+            body: { scenario: "success_with_sources" },
+          });
+        } else {
+          await api(`/api/clients/${client.id}/reports/${reportId}/execute`, {
+            method: "POST",
+            body: { dry_run_paid: false },
+          });
         }
       }
+
+      if (onCreated) {
+        await onCreated(reportId, { mode, year, month });
+      }
+    } catch (exc) {
+      setError(exc.message);
     } finally {
-      setBusy(false);
+      setBusy("");
     }
   }
 
+  const win = inspect?.period || inspect?.window || {};
+  const fmtWin = inspect?.format_pattern_window || {};
+  const sourcesOverview = inspect?.sources_overview || {};
+  const sources = sourcesOverview.sources || [];
+  const missingRequired = sources.filter((s) => s.required && !s.ready);
+  const missingOptional = sources.filter((s) => !s.required && !s.ready);
+  const canStartClient = Boolean(inspect?.can_start_analysis) && missingRequired.length === 0;
+  const aiReady = Boolean(inspect?.ai_status?.configured);
+  const existingTrend = inspect?.month_trend_status || {};
+  const usableTrend = existingTrend?.usable_report || existingTrend?.usable || null;
+
   return (
-    <section className="card stack report-wizard" aria-label="Nieuwe analyse">
-      <div className="search-form-header reports-page-header">
+    <section className="card stack report-builder-card">
+      <div className="search-form-header">
         <div>
-          <h3 style={{ marginTop: 0 }}>Nieuwe analyse</h3>
-          <p className="hint" style={{ margin: 0 }}>
-            Stap {step} van 2{typeMeta ? ` · ${typeMeta.label}` : ""}
+          <h3 style={{ margin: 0 }}>Nieuw rapport voorbereiden</h3>
+          <p className="hint" style={{ margin: "0.25rem 0 0" }}>
+            Kies welk rapport je wilt maken en voor welke maand. HAMSTER vult de perioden en
+            beschikbare bronnen automatisch in.
           </p>
         </div>
-        <button className="secondary" type="button" disabled={busy} onClick={onCancel}>
-          Annuleren
+        {isCollapsible && onClose ? (
+          <button className="secondary" type="button" onClick={onClose} disabled={Boolean(busy)}>
+            Sluiten
+          </button>
+        ) : null}
+      </div>
+
+      {error ? <p className="banner error">{error}</p> : null}
+      {notice ? <p className="banner">{notice}</p> : null}
+
+      {/* 1. Keuze welk rapport + maand */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+          gap: "0.75rem",
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => switchMode("client")}
+          disabled={Boolean(busy)}
+          style={{
+            textAlign: "left",
+            padding: "0.9rem 1rem",
+            borderRadius: "10px",
+            border: mode === "client" ? "2px solid #b87844" : "1px solid rgba(242, 240, 236, 0.16)",
+            background: mode === "client" ? "#2d3b4d" : "#1a2533",
+            color: "#f2f0ec",
+            cursor: "pointer",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <strong>Klantrapport ({client.name})</strong>
+            {mode === "client" ? <span className="pill ok">Gekozen</span> : null}
+          </div>
+          <p className="hint" style={{ margin: "0.35rem 0 0" }}>
+            Maandanalyse van eigen berichten, formats, strategie en aanbevelingen — inclusief het
+            algemene trendrapport van dezelfde maand.
+          </p>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => switchMode("trend")}
+          disabled={Boolean(busy)}
+          style={{
+            textAlign: "left",
+            padding: "0.9rem 1rem",
+            borderRadius: "10px",
+            border: mode === "trend" ? "2px solid #b87844" : "1px solid rgba(242, 240, 236, 0.16)",
+            background: mode === "trend" ? "#2d3b4d" : "#1a2533",
+            color: "#f2f0ec",
+            cursor: "pointer",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <strong>Algemeen trendrapport</strong>
+            {mode === "trend" ? <span className="pill ok">Gekozen</span> : null}
+          </div>
+          <p className="hint" style={{ margin: "0.35rem 0 0" }}>
+            Zelfstandig rapport met trends per socialmediakanaal voor alle klanten. Wordt op de 1e
+            van iedere maand automatisch aangemaakt.
+          </p>
         </button>
       </div>
 
-      <ol className="report-wizard-steps" aria-label="Stappen">
-        <li className={step === 1 ? "is-active" : "is-done"}>Type, periode &amp; planning-input</li>
-        <li className={step === 2 ? "is-active" : ""}>Bronnen controleren &amp; starten</li>
-      </ol>
+      <div className="row-actions wrap" style={{ alignItems: "end" }}>
+        <label>
+          Rapportmaand
+          <select
+            value={String(month)}
+            disabled={Boolean(busy)}
+            onChange={(e) => {
+              setMonth(Number(e.target.value));
+              setTitleEdited(false);
+            }}
+          >
+            {MONTHS_NL.map(([m, label]) => (
+              <option key={m} value={m}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
 
-      {step === 1 ? (
+        <label>
+          Jaar
+          <input
+            type="number"
+            min={2024}
+            max={2035}
+            value={year}
+            disabled={Boolean(busy)}
+            onChange={(e) => {
+              setYear(Number(e.target.value) || def.year);
+              setTitleEdited(false);
+            }}
+            style={{ width: "6.5rem" }}
+          />
+        </label>
+
+        <label style={{ flex: "1 1 260px" }}>
+          Rapportnaam
+          <input
+            type="text"
+            value={title}
+            disabled={Boolean(busy)}
+            onChange={(e) => {
+              setTitle(e.target.value);
+              setTitleEdited(true);
+            }}
+          />
+        </label>
+      </div>
+
+      {inspectLoading && !inspect ? <p className="muted">Gegevens voor deze maand ophalen…</p> : null}
+
+      {/* 2A. Klantrapport: automatische perioden + bronnenoverzicht + wat je zelf doet */}
+      {mode === "client" && inspect ? (
         <div className="stack">
-          <p className="banner">
-            Actieve klant: <strong>{client.name}</strong>
-          </p>
-
-          <fieldset className="report-type-fieldset">
-            <legend>Welk rapport maak je?</legend>
-            <div className="report-type-grid">
-              {TYPE_OPTIONS.map((opt) => (
-                <label
-                  key={opt.value}
-                  className={`report-type-card${reportType === opt.value ? " is-selected" : ""}`}
-                >
-                  <input
-                    type="radio"
-                    name="report-type"
-                    value={opt.value}
-                    checked={reportType === opt.value}
-                    onChange={() => {
-                      setReportType(opt.value);
-                      setTitleTouched(false);
-                      setTrendId("");
-                    }}
-                  />
-                  <span className="report-type-label">{opt.label}</span>
-                  <span className="hint">{opt.blurb}</span>
-                  <span className="hint report-type-example">
-                    <em>Voorbeeld:</em> {opt.example}
-                  </span>
-                </label>
-              ))}
-            </div>
-          </fieldset>
-
-          <label>
-            {reportType === "client" ? "Klantrapportnaam" : "Trendrapportnaam"}
-            <input
-              value={title}
-              onChange={(e) => {
-                setTitleTouched(true);
-                setTitle(e.target.value);
+          <div
+            style={{
+              background: "#1a2533",
+              border: "1px solid rgba(242, 240, 236, 0.14)",
+              borderRadius: "10px",
+              padding: "0.9rem 1rem",
+            }}
+          >
+            <h4 style={{ margin: "0 0 0.5rem" }}>
+              Automatisch ingestelde perioden voor {monthNameNl(month)} {year}
+            </h4>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                gap: "0.75rem",
               }}
-              placeholder={suggestTitle(reportType, client.name, year, month)}
-            />
-          </label>
-          <p className="hint" style={{ marginTop: 0 }}>
-            Voorstel op basis van type en periode — pas aan als je wilt.
-          </p>
-
-          <div className="row-actions wrap">
-            <label>
-              {reportType === "trend" ? "Aanmaakmaand — jaar" : "Analyseperiode — jaar"}
-              <input type="number" value={year} onChange={(e) => setYear(Number(e.target.value))} />
-            </label>
-            <label>
-              Maand
-              <input
-                type="number"
-                min={1}
-                max={12}
-                value={month}
-                onChange={(e) => setMonth(Number(e.target.value))}
-              />
-            </label>
+            >
+              <div>
+                <span className="hint" style={{ display: "block" }}>
+                  Analyseperiode (deze rapportmaand)
+                </span>
+                <strong>{win.label_nl || `${win.start} t/m ${win.end}`}</strong>
+              </div>
+              <div>
+                <span className="hint" style={{ display: "block" }}>
+                  Vergelijkingsperiode (maand ervoor)
+                </span>
+                <strong>
+                  {win.compare_label_nl || `${win.compare_start} t/m ${win.compare_end}`}
+                </strong>
+              </div>
+              <div>
+                <span className="hint" style={{ display: "block" }}>
+                  Formats &amp; terugkerende patronen (kalenderjaar)
+                </span>
+                <strong>{fmtWin.label_nl || "—"}</strong>
+                <span className="hint" style={{ display: "block", marginTop: "0.15rem" }}>
+                  {typeof fmtWin.post_count === "number"
+                    ? `${fmtWin.post_count} beschikbare eigen berichten meegenomen`
+                    : ""}
+                </span>
+              </div>
+            </div>
           </div>
 
-          {reportType === "trend" ? (
-            <p className="banner">
-              X+2: aanmaak <strong>{monthLabel(year, month)}</strong> → terugblik apart → planning{" "}
-              <strong>{monthLabel(x2.year, x2.month)}</strong>
-            </p>
-          ) : (
-            <p className="banner">
-              Analyse <strong>{monthLabel(year, month)}</strong> → acties voor planning{" "}
-              <strong>{monthLabel(x2.year, x2.month)}</strong> (X+2)
-            </p>
-          )}
+          {/* 3. Overzicht per bron */}
+          <div className="stack">
+            <div className="search-form-header">
+              <div>
+                <h4 style={{ margin: 0 }}>Bronnen voor dit klantrapport</h4>
+                <p className="hint" style={{ margin: "0.2rem 0 0" }}>
+                  Per bron zie je wat beschikbaar is, wat ontbreekt en of jij nog iets moet doen.
+                </p>
+              </div>
+              <button
+                className="secondary"
+                type="button"
+                onClick={loadInspect}
+                disabled={inspectLoading || Boolean(busy)}
+              >
+                Opnieuw controleren
+              </button>
+            </div>
 
-          {reportType === "client" ? (
-            <>
-              <label>
-                Jouw input voor de planning (X+2)
-                <textarea
-                  rows={4}
-                  value={planningNotes}
-                  onChange={(e) => setPlanningNotes(e.target.value)}
-                  placeholder="Wat wil je meenemen naar de novemberplanning? Ideeën, beperkingen, afspraken met de klant…"
-                />
-              </label>
-              <p className="hint" style={{ margin: 0 }}>
-                Standaardvergelijking: <strong>{compareHint}</strong>
-              </p>
-            </>
-          ) : (
-            <p className="hint" style={{ margin: 0 }}>
-              Internetzoeken:{" "}
-              <strong>{researchMode === "internet" ? "aan" : "uit (handmatige bronnen)"}</strong>
-            </p>
-          )}
-
-          <details
-            className="report-more-options"
-            open={showMore}
-            onToggle={(e) => setShowMore(e.currentTarget.open)}
-          >
-            <summary>Meer opties</summary>
-            <div className="stack" style={{ marginTop: "0.75rem" }}>
-              {reportType === "client" ? (
-                <>
-                  <label className="row-actions">
-                    <input
-                      type="checkbox"
-                      checked={useCustomDates}
-                      onChange={(e) => setUseCustomDates(e.target.checked)}
-                    />
-                    Aangepaste analyseperiode i.p.v. kalendermaand
-                  </label>
-                  {useCustomDates ? (
-                    <div className="row-actions wrap">
-                      <label>
-                        Start
-                        <input
-                          type="date"
-                          value={periodStart}
-                          onChange={(e) => setPeriodStart(e.target.value)}
-                        />
-                      </label>
-                      <label>
-                        Eind
-                        <input
-                          type="date"
-                          value={periodEnd}
-                          onChange={(e) => setPeriodEnd(e.target.value)}
-                        />
-                      </label>
-                    </div>
-                  ) : null}
-
-                  <label className="row-actions">
-                    <input
-                      type="checkbox"
-                      checked={compareCustom}
-                      onChange={(e) => setCompareCustom(e.target.checked)}
-                    />
-                    Afwijkende vergelijkingsperiode
-                  </label>
-                  {compareCustom ? (
-                    <div className="row-actions wrap">
-                      <label>
-                        Vergelijk start
-                        <input
-                          type="date"
-                          value={compareStart}
-                          onChange={(e) => setCompareStart(e.target.value)}
-                        />
-                      </label>
-                      <label>
-                        Vergelijk eind
-                        <input
-                          type="date"
-                          value={compareEnd}
-                          onChange={(e) => setCompareEnd(e.target.value)}
-                        />
-                      </label>
-                    </div>
-                  ) : null}
-
-                  <div className="stack">
-                    <label>
-                      Trendrapport meenemen (optioneel)
-                      <select value={trendId} onChange={(e) => setTrendId(e.target.value)}>
-                        <option value="">Geen trendrapport</option>
-                        {usableTrends.map((r) => (
-                          <option key={r.id} value={String(r.id)}>
-                            {trendOptionLabel(r)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <p className="hint" style={{ margin: 0 }}>
-                      Voeg een bestaand trendrapport toe als je markttrends wilt meenemen in het
-                      advies voor deze klant. Je kunt hetzelfde trendrapport voor meerdere klanten
-                      gebruiken.
-                    </p>
-                    {!usableTrends.length ? (
-                      <p className="hint">
-                        Nog geen bruikbaar trendrapport. Maak eerst een Trendrapport of kies Geen
-                        trendrapport.
+            <div className="stack" style={{ gap: "0.6rem" }}>
+              {sources.map((src) => {
+                const srcKey = src.id || src.key;
+                const isReady = Boolean(src.ready || src.status === "ready");
+                return (
+                  <div
+                    key={srcKey}
+                    style={{
+                      border:
+                        src.required && !isReady
+                          ? "1px solid #e08a6d"
+                          : "1px solid rgba(242, 240, 236, 0.14)",
+                      background:
+                        src.required && !isReady
+                          ? "rgba(217, 119, 87, 0.14)"
+                          : "#1a2533",
+                      borderRadius: "10px",
+                      padding: "0.8rem 0.95rem",
+                      display: "flex",
+                      flexWrap: "wrap",
+                      justifyContent: "space-between",
+                      alignItems: "flex-start",
+                      gap: "0.75rem",
+                    }}
+                  >
+                    <div style={{ flex: "1 1 340px" }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: "0.45rem",
+                          alignItems: "center",
+                          marginBottom: "0.35rem",
+                        }}
+                      >
+                        <strong>{src.label}</strong>
+                        <span className={src.required ? "pill" : "pill muted"}>
+                          {src.requirement_label}
+                        </span>
+                        <span className={sourcePillClass(src)}>{src.status_label}</span>
+                      </div>
+                      <p style={{ margin: "0.15rem 0", fontSize: "0.93rem" }}>
+                        <strong>Beschikbaar:</strong> {src.available_text}
                       </p>
+                      {src.missing_text ? (
+                        <p style={{ margin: "0.15rem 0", fontSize: "0.93rem" }}>
+                          <strong>Ontbreekt:</strong> {src.missing_text}
+                        </p>
+                      ) : null}
+                      <p
+                        className="hint"
+                        style={{
+                          margin: "0.25rem 0 0",
+                          color: src.user_action_needed ? "#ffb49a" : undefined,
+                          fontWeight: src.user_action_needed ? 600 : 400,
+                        }}
+                      >
+                        {src.user_action_needed ? "Actie nodig: " : "Wat jij moet doen: "}
+                        {src.action_text}
+                      </p>
+                    </div>
+
+                    {src.cta_label && !isReady ? (
+                      <div style={{ alignSelf: "center" }}>
+                        <button
+                          className={src.required ? "primary" : "secondary"}
+                          type="button"
+                          disabled={Boolean(busy)}
+                          onClick={() => handleSourceAction(src)}
+                        >
+                          {src.cta_label}
+                        </button>
+                      </div>
                     ) : null}
                   </div>
-                </>
-              ) : (
-                <>
-                  <label>
-                    Bronnen / internetzoeken
-                    <select value={researchMode} onChange={(e) => setResearchMode(e.target.value)}>
-                      <option value="internet">Internetzoeken aan (Gemini Google Search)</option>
-                      <option value="manual">Alleen handmatige bronnen</option>
-                    </select>
-                  </label>
-                  <p className="hint" style={{ margin: 0 }}>
-                    Extra bronnen kun je na de voorbereiding toevoegen onder Technische details.
-                  </p>
-                </>
-              )}
+                );
+              })}
             </div>
-          </details>
+          </div>
+
+          <label>
+            Eigen aandachtspunten of afspraken voor deze maand (optioneel)
+            <textarea
+              rows={2}
+              value={userNotes}
+              disabled={Boolean(busy)}
+              onChange={(e) => setUserNotes(e.target.value)}
+              placeholder="Bijvoorbeeld: extra focus op vacatures, lopende campagne of afgesproken wijziging."
+            />
+          </label>
+
+          {/* 4. Samenvatting wat de gebruiker nog moet doen + startknop */}
+          {!canStartClient ? (
+            <div className="banner error" style={{ margin: 0 }}>
+              <strong>Je kunt de analyse nog niet starten.</strong>{" "}
+              {sourcesOverview.summary_nl ||
+                "Vul eerst de verplichte bronnen aan voordat HAMSTER dit klantrapport kan maken."}
+              {missingRequired.some((s) => (s.id || s.key) === "trend") ? (
+                <div style={{ marginTop: "0.55rem" }}>
+                  <button
+                    className="primary"
+                    type="button"
+                    disabled={Boolean(busy)}
+                    onClick={() => switchMode("trend")}
+                  >
+                    Ga naar Algemeen trendrapport – {monthNameNl(month)} {year}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : missingOptional.length > 0 ? (
+            <div className="banner" style={{ margin: 0 }}>
+              <strong>Klaar om te starten.</strong> Alle verplichte bronnen zijn aanwezig (inclusief{" "}
+              <em>
+                {usableTrend?.title || `Algemeen trendrapport – ${monthNameNl(month)} ${year}`}
+              </em>
+              ). Aanvullende bronnen die je eventueel later nog kunt toevoegen:{" "}
+              <strong>{missingOptional.map((s) => s.label).join(", ")}</strong>.
+            </div>
+          ) : (
+            <div className="banner" style={{ margin: 0 }}>
+              <strong>Alle verplichte én aanvullende bronnen staan klaar.</strong> Je kunt het
+              klantrapport direct starten.
+            </div>
+          )}
 
           <div className="row-actions wrap">
-            <button className="primary" type="button" disabled={busy || !title.trim()} onClick={goToReview}>
-              Volgende: controleer &amp; start
+            {aiReady ? (
+              <button
+                className="primary"
+                type="button"
+                disabled={!canStartClient || Boolean(busy)}
+                onClick={() => runCreateReport({ simulateWithoutPaidAi: false })}
+              >
+                {busy === "ai" ? "Klantrapport wordt gemaakt…" : "Klantrapport starten"}
+              </button>
+            ) : null}
+            <button
+              className={aiReady ? "secondary" : "primary"}
+              type="button"
+              disabled={!canStartClient || Boolean(busy)}
+              onClick={() => runCreateReport({ simulateWithoutPaidAi: true })}
+            >
+              {busy === "simulate"
+                ? "Rapport wordt opgebouwd…"
+                : "Klantrapport maken (simulatie zonder AI-kosten)"}
             </button>
+            {!aiReady && onOpenSettings ? (
+              <button
+                className="secondary"
+                type="button"
+                disabled={Boolean(busy)}
+                onClick={() => onOpenSettings("ai")}
+              >
+                AI-koppeling bekijken in Beheerinstellingen
+              </button>
+            ) : null}
           </div>
         </div>
       ) : null}
 
-      {step === 2 ? (
+      {/* 2B. Algemeen trendrapport: zelfstandig per socialmediakanaal (geen klantperiode/terugblik/X+2) */}
+      {mode === "trend" && inspect ? (
         <div className="stack">
-          <p className="banner">
-            <strong>{title.trim() || prepared?.report?.title || typeMeta?.label}</strong>
-          </p>
-
-          <ul className="plain-list report-wizard-summary">
-            {reportType === "client" ? (
-              <>
-                <li>
-                  <strong>Klant:</strong> {client.name}
-                </li>
-                <li>
-                  <strong>Analyseperiode:</strong>{" "}
-                  {useCustomDates
-                    ? `${periodStart} t/m ${periodEnd}`
-                    : monthLabel(year, month)}
-                </li>
-                <li>
-                  <strong>Planning (X+2):</strong> {monthLabel(x2.year, x2.month)}
-                </li>
-                <li>
-                  <strong>Vergelijkingsperiode:</strong> {compareHint}
-                </li>
-                <li>
-                  <strong>Aantal posts:</strong>{" "}
-                  {postCount != null
-                    ? `${postCount}${
-                        Object.keys(byPlatform).length
-                          ? ` (${Object.entries(byPlatform)
-                              .map(([n, c]) => `${n} ${c}`)
-                              .join(" · ")})`
-                          : ""
-                      }`
-                    : "—"}
-                </li>
-                <li>
-                  <strong>Trendrapport:</strong>{" "}
-                  {selectedTrend
-                    ? selectedTrend.title || `Social trends #${selectedTrend.id}`
-                    : "Geen trendrapport"}
-                </li>
-                <li>
-                  <strong>Jouw planning-input:</strong>{" "}
-                  {planningNotes.trim() ? planningNotes.trim() : <span className="muted">nog leeg</span>}
-                </li>
-              </>
-            ) : (
-              <>
-                <li>
-                  <strong>Aanmaakmaand:</strong> {monthLabel(year, month)}
-                </li>
-                <li>
-                  <strong>Planningsmaand (X+2):</strong> {monthLabel(x2.year, x2.month)}
-                </li>
-                <li>
-                  <strong>Internetzoeken:</strong>{" "}
-                  {researchMode === "internet" ? "aan" : "uit"}
-                </li>
-                <li>
-                  <strong>Bronnen:</strong> nog geen handmatige bronnen (optioneel later toe te
-                  voegen)
-                </li>
-              </>
-            )}
-            <li>
-              <strong>Geschatte kosten:</strong> {costLabel}
-            </li>
-            <li className="hint">
-              <strong>Van toepassing:</strong> {appliedSettings.join(" · ")}
-            </li>
-          </ul>
-
-          {(inspect?.input_checklist || []).length ? (
-            <section className="card stack">
-              <h4 style={{ marginTop: 0 }}>Bronnen klaar?</h4>
-              <ul className="plain-list">
-                {inspect.input_checklist.map((item) => (
-                  <li key={item.id}>
-                    {item.ready ? "✓" : "○"} <strong>{item.label}</strong>
-                    {item.detail ? ` — ${item.detail}` : ""}
-                    {!item.ready ? <span className="muted"> (ontbreekt)</span> : null}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
-
-          {missing.length ? (
-            <p className="banner warn-soft">
-              Ontbrekende bronnen: {missing.slice(0, 4).join(" · ")}
-              {missing.length > 4 ? ` · +${missing.length - 4} meer` : ""}
+          <div
+            style={{
+              background: "#1a2533",
+              border: "1px solid rgba(242, 240, 236, 0.14)",
+              borderRadius: "10px",
+              padding: "0.9rem 1rem",
+            }}
+          >
+            <h4 style={{ margin: "0 0 0.45rem" }}>
+              Zelfstandig Algemeen trendrapport – {monthNameNl(month)} {year}
+            </h4>
+            <p style={{ margin: "0 0 0.55rem", lineHeight: 1.5 }}>
+              Dit rapport behandelt actuele trends per socialmediakanaal voor heel{" "}
+              <strong>
+                {monthNameNl(month)} {year}
+              </strong>
+              . Het staat los van individuele klanten en gebruikt geen klantperiode, terugblik of
+              vooruitgeschoven planningsmaand.
             </p>
-          ) : null}
-
-          {runState === "preparing" || runState === "starting" ? (
-            <p className="banner">
-              {runState === "preparing" ? "Bezig met voorbereiden…" : "Analyse wordt gestart…"}
-            </p>
-          ) : null}
-
-          {runState === "failed" ? (
-            <div className="banner error stack">
-              <strong>Analyse niet gestart of mislukt</strong>
-              <p>{runError || "Onbekende fout."}</p>
-              <p className="hint">
-                Controleer of de periode posts heeft, of Synchroniseer Meta recent is gedraaid, of
-                open het voorbereide rapport. Er is geen nieuwe kostenpost als de start vóór de
-                betaalde aanroep is geblokkeerd.
-              </p>
-              {prepared?.report?.id ? (
-                <button
-                  className="secondary"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => onOpenedReport(prepared)}
-                >
-                  Open voorbereid rapport
-                </button>
-              ) : null}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
+              {TREND_CHANNELS.map((ch) => (
+                <span key={ch} className="pill">
+                  {ch}
+                </span>
+              ))}
             </div>
-          ) : null}
+            <p className="hint" style={{ margin: "0.55rem 0 0" }}>
+              Automatische planning: HAMSTER maakt dit rapport op de <strong>1e van iedere maand</strong>{" "}
+              automatisch aan (tijdzone <code>Europe/Amsterdam</code>) en koppelt het daarna aan elk
+              klantrapport van diezelfde maand.
+            </p>
+          </div>
 
-          <p className="hint">
-            Alleen <strong>Start analyse</strong> start de betaalde run. Daarna open je direct het
-            rapport om concept te beoordelen en goed te keuren — geen aparte bewerkstap in de
-            analyseroute.
-          </p>
+          {usableTrend ? (
+            <div className="banner" style={{ margin: 0 }}>
+              Er staat al een afgerond trendrapport klaar voor {monthNameNl(month)} {year}:{" "}
+              <strong>{usableTrend.title}</strong>. Opnieuw uitvoeren via de simulatieknop maakt geen
+              dubbel rapport aan.
+            </div>
+          ) : (
+            <label>
+              Eigen signalen of bronnen meegeven aan dit trendrapport (optioneel)
+              <textarea
+                rows={2}
+                value={userNotes}
+                disabled={Boolean(busy)}
+                onChange={(e) => setUserNotes(e.target.value)}
+                placeholder="Bijvoorbeeld: nieuwe Instagram-functie, opvallende LinkedIn-update of seizoensinhaker."
+              />
+            </label>
+          )}
 
           <div className="row-actions wrap">
+            {aiReady && !usableTrend ? (
+              <button
+                className="primary"
+                type="button"
+                disabled={Boolean(busy)}
+                onClick={() => runCreateReport({ simulateWithoutPaidAi: false })}
+              >
+                {busy === "ai" ? "Trendrapport wordt gemaakt…" : "Algemeen trendrapport starten"}
+              </button>
+            ) : null}
             <button
-              className="secondary"
+              className={!aiReady || usableTrend ? "primary" : "secondary"}
               type="button"
-              disabled={busy}
-              onClick={() => {
-                setStep(1);
-                setPrepared(null);
-                setExecPreview(null);
-              }}
+              disabled={Boolean(busy)}
+              onClick={() => runCreateReport({ simulateWithoutPaidAi: true })}
             >
-              Terug
-            </button>
-            <button className="primary" type="button" disabled={busy} onClick={startAnalysis}>
-              Start analyse
+              {busy === "simulate"
+                ? "Trendrapport controleren / maken…"
+                : usableTrend
+                  ? `Open bestaand trendrapport (${monthNameNl(month)} ${year})`
+                  : "Algemeen trendrapport maken (simulatie zonder AI-kosten)"}
             </button>
           </div>
         </div>
