@@ -6,12 +6,13 @@ import ClientSetupPage from "./pages/ClientSetupPage.jsx";
 import ComparisonPage from "./pages/ComparisonPage.jsx";
 import ReportsAnalysisPage from "./pages/ReportsAnalysisPage.jsx";
 import SettingsHubPage from "./pages/SettingsHubPage.jsx";
+import TechAdminPage from "./pages/TechAdminPage.jsx";
 import SocialPostsPage from "./pages/SocialPostsPage.jsx";
 import StrategyPage from "./pages/StrategyPage.jsx";
 
 const APP_NAME = "Bruine Beer";
 
-const NAV_PAGES = [
+const NAV_PAGES_BASE = [
   ["strategy", "Doelen & Strategie"],
   ["reports_analysis", "Rapporten"],
   ["comparison", "Concurrenten"],
@@ -25,13 +26,26 @@ const TITLES = {
   comparison: "Concurrenten",
   social_posts: "Socialmediaberichten",
   settings: "Instellingen",
+  tech_admin: "Technisch beheer",
   client_settings: "Alle klanten",
   client_setup: "Klant inrichten",
 };
 
 const REPORTS_TABS = new Set(["reports"]);
-const SETTINGS_TABS = new Set(["ai", "prompts", "planning", "legend", "backup"]);
+const SETTINGS_TABS = new Set(["home", "legend", "ai", "prompts", "planning", "backup"]);
+const TECH_TABS = new Set(["status", "prompts", "planning", "backup", "trial"]);
 const SOCIAL_TABS = new Set(["all_posts", "performance"]);
+
+function navPagesForRole(role) {
+  const pages = [...NAV_PAGES_BASE];
+  if (role === "admin") {
+    pages.push(["tech_admin", "Technisch beheer"]);
+  }
+  if (role === "viewer") {
+    return pages.filter(([id]) => id !== "settings");
+  }
+  return pages;
+}
 
 // Capture deep-link query once at module load so React StrictMode remounts still
 // see ?page=/client=/post= after the first effect clears the address bar.
@@ -51,7 +65,8 @@ function resolveRoute(requestedPage) {
     return {
       page: "social_posts",
       reportsTab: "reports",
-      settingsTab: "ai",
+      settingsTab: "home",
+      techTab: "status",
       socialTab: "all_posts",
     };
   }
@@ -59,7 +74,8 @@ function resolveRoute(requestedPage) {
     return {
       page: "social_posts",
       reportsTab: "reports",
-      settingsTab: "ai",
+      settingsTab: "home",
+      techTab: "status",
       socialTab: "performance",
     };
   }
@@ -67,15 +83,17 @@ function resolveRoute(requestedPage) {
     return {
       page: "reports_analysis",
       reportsTab: "reports",
-      settingsTab: "ai",
+      settingsTab: "home",
+      techTab: "status",
       socialTab: "all_posts",
     };
   }
-  if (raw === "data" || raw === "export" || raw === "import") {
+  if (raw === "data" || raw === "export" || raw === "import" || raw === "backup" || raw === "backup_restore") {
     return {
-      page: "settings",
+      page: "tech_admin",
       reportsTab: "reports",
-      settingsTab: "backup",
+      settingsTab: "home",
+      techTab: "backup",
       socialTab: "all_posts",
     };
   }
@@ -84,32 +102,35 @@ function resolveRoute(requestedPage) {
     return {
       page: "reports_analysis",
       reportsTab: "reports",
-      settingsTab: "ai",
+      settingsTab: "home",
+      techTab: "status",
       socialTab: "all_posts",
     };
   }
   if (raw === "ai_trial" || raw === "ai-proef") {
-    // AI Trial moved under Settings → AI Connections.
     return {
-      page: "settings",
+      page: "tech_admin",
       reportsTab: "reports",
-      settingsTab: "ai",
+      settingsTab: "home",
+      techTab: "trial",
       socialTab: "all_posts",
     };
   }
-  if (raw === "ai" || raw === "ai_connections") {
+  if (raw === "ai" || raw === "ai_connections" || raw === "technisch" || raw === "tech_admin" || raw === "technisch_beheer") {
     return {
-      page: "settings",
+      page: "tech_admin",
       reportsTab: "reports",
-      settingsTab: "ai",
+      settingsTab: "home",
+      techTab: "status",
       socialTab: "all_posts",
     };
   }
   if (raw === "prompts" || raw === "prompt_settings" || raw === "prompten") {
     return {
-      page: "settings",
+      page: "tech_admin",
       reportsTab: "reports",
-      settingsTab: "prompts",
+      settingsTab: "home",
+      techTab: "prompts",
       socialTab: "all_posts",
     };
   }
@@ -118,22 +139,16 @@ function resolveRoute(requestedPage) {
       page: "settings",
       reportsTab: "reports",
       settingsTab: "legend",
+      techTab: "status",
       socialTab: "all_posts",
     };
   }
   if (raw === "planning" || raw === "rapportplanning" || raw === "report_planning") {
     return {
-      page: "settings",
+      page: "tech_admin",
       reportsTab: "reports",
-      settingsTab: "planning",
-      socialTab: "all_posts",
-    };
-  }
-  if (raw === "backup" || raw === "backup_restore") {
-    return {
-      page: "settings",
-      reportsTab: "reports",
-      settingsTab: "backup",
+      settingsTab: "home",
+      techTab: "planning",
       socialTab: "all_posts",
     };
   }
@@ -141,7 +156,8 @@ function resolveRoute(requestedPage) {
     return {
       page: "client_settings",
       reportsTab: "reports",
-      settingsTab: "ai",
+      settingsTab: "home",
+      techTab: "status",
       socialTab: "all_posts",
     };
   }
@@ -149,7 +165,8 @@ function resolveRoute(requestedPage) {
     return {
       page: "client_setup",
       reportsTab: "reports",
-      settingsTab: "ai",
+      settingsTab: "home",
+      techTab: "status",
       socialTab: "all_posts",
     };
   }
@@ -157,22 +174,25 @@ function resolveRoute(requestedPage) {
     return {
       page: raw,
       reportsTab: "reports",
-      settingsTab: "ai",
-      socialTab: raw === "social_posts" ? "all_posts" : "all_posts",
+      settingsTab: "home",
+      techTab: "status",
+      socialTab: "all_posts",
     };
   }
   if (raw === "reports_analysis" || raw === "settings") {
     return {
       page: raw,
       reportsTab: "reports",
-      settingsTab: "ai",
+      settingsTab: raw === "settings" ? "home" : "home",
+      techTab: "status",
       socialTab: "all_posts",
     };
   }
   return {
     page: "social_posts",
     reportsTab: "reports",
-    settingsTab: "ai",
+    settingsTab: "home",
+    techTab: "status",
     socialTab: "all_posts",
   };
 }
@@ -184,12 +204,14 @@ export default function App() {
     return resolveRoute(BOOT_PARAMS.get("page") || saved || "").page;
   });
   const [reportsTab, setReportsTab] = useState("reports");
-  const [settingsTab, setSettingsTab] = useState("ai");
+  const [settingsTab, setSettingsTab] = useState("home");
+  const [techTab, setTechTab] = useState("status");
   const [socialTab, setSocialTab] = useState("all_posts");
   const [strategyTab, setStrategyTab] = useState("specialist");
   const [socialPeriod, setSocialPeriod] = useState("");
   const [clients, setClients] = useState([]);
   const [clientId, setClientId] = useState(null);
+  const [session, setSession] = useState(null);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -208,8 +230,16 @@ export default function App() {
     return payload.clients || [];
   }, []);
 
+  const loadSession = useCallback(async () => {
+    const payload = await api("/api/session");
+    setSession(payload);
+    return payload;
+  }, []);
+
   // Do not auto-pick the first client: after delete / empty state the overview must stay open.
   const selected = clients.find((item) => item.id === clientId) || null;
+  const role = session?.role || "admin";
+  const navPages = navPagesForRole(role);
 
   const loadTotals = useCallback(async (id) => {
     if (!id) {
@@ -260,7 +290,8 @@ export default function App() {
     const route = resolveRoute(params.get("page") || savedPage || "");
     setPage(route.page);
     setReportsTab(REPORTS_TABS.has(route.reportsTab) ? route.reportsTab : "reports");
-    setSettingsTab(SETTINGS_TABS.has(route.settingsTab) ? route.settingsTab : "ai");
+    setSettingsTab(SETTINGS_TABS.has(route.settingsTab) ? route.settingsTab : "home");
+    setTechTab(TECH_TABS.has(route.techTab) ? route.techTab : "status");
     setSocialTab(SOCIAL_TABS.has(route.socialTab) ? route.socialTab : "all_posts");
     if (params.get("meta") === "choose") {
       setMetaChoice(true);
@@ -295,8 +326,21 @@ export default function App() {
       }
     }
     window.history.replaceState({}, "", window.location.pathname);
+    loadSession().catch((exc) => setError(exc.message));
     loadClients().catch((exc) => setError(exc.message));
-  }, [loadClients]);
+  }, [loadClients, loadSession]);
+
+  useEffect(() => {
+    if (!session) return;
+    if (page === "tech_admin" && session.role !== "admin") {
+      setPage("settings");
+      setSettingsTab("home");
+      setNotice("Technisch beheer is alleen voor beheerders. Je bent doorgestuurd naar Instellingen.");
+    }
+    if (page === "settings" && session.role === "viewer") {
+      setPage("social_posts");
+    }
+  }, [session, page]);
 
   useEffect(() => {
     if (popupReturn) return undefined;
@@ -485,15 +529,17 @@ export default function App() {
             ) : (
               <p className="muted">Nog geen klanten aangemaakt.</p>
             )}
-            <button
-              className="icon-btn add-client-icon"
-              type="button"
-              title="Nieuwe klant toevoegen"
-              aria-label="Nieuwe klant toevoegen"
-              onClick={openAddClient}
-            >
-              +
-            </button>
+            {role === "admin" || role === "editor" ? (
+              <button
+                className="icon-btn add-client-icon"
+                type="button"
+                title="Nieuwe klant toevoegen"
+                aria-label="Nieuwe klant toevoegen"
+                onClick={openAddClient}
+              >
+                +
+              </button>
+            ) : null}
             <button
               className="icon-btn gear-btn"
               type="button"
@@ -554,7 +600,7 @@ export default function App() {
         <hr className="sidebar-rule" />
 
         <nav className="nav">
-          {NAV_PAGES.map(([id, label]) => (
+          {navPages.map(([id, label]) => (
             <button
               key={id}
               type="button"
@@ -565,6 +611,16 @@ export default function App() {
             </button>
           ))}
         </nav>
+        {selected && (role === "admin" || role === "editor") ? (
+          <button
+            className="secondary"
+            type="button"
+            style={{ width: "100%", marginTop: "0.75rem" }}
+            onClick={() => openClientSetup(selected)}
+          >
+            Klant inrichten
+          </button>
+        ) : null}
       </aside>
 
       <main className="main">
@@ -617,6 +673,8 @@ export default function App() {
               onOpenClient={openClientDashboard}
               onEditClient={openClientSetup}
               onAddClient={openAddClient}
+              canDelete={Boolean(session?.can_delete_clients ?? role === "admin")}
+              canEdit={Boolean(session?.can_edit_clients ?? role !== "viewer")}
               onDeletedSelected={() => {
                 chooseClient(null);
                 setPage("client_settings");
@@ -626,7 +684,7 @@ export default function App() {
             />
           ) : null}
 
-          {!selected && page !== "settings" && page !== "client_settings" && page !== "client_setup" ? (
+          {!selected && page !== "settings" && page !== "tech_admin" && page !== "client_settings" && page !== "client_setup" ? (
             <div className="stack">
               <p className="banner">
                 Er is geen klant geselecteerd. Open <strong>Alle klanten</strong> via het tandwiel of
@@ -667,8 +725,13 @@ export default function App() {
                 openPage("social_posts");
               }}
               onOpenSettings={(tab = "planning") => {
-                setSettingsTab(tab);
-                openPage("settings");
+                if (role === "admin") {
+                  setTechTab(TECH_TABS.has(tab) ? tab : tab === "ai" ? "status" : "planning");
+                  openPage("tech_admin");
+                } else {
+                  setSettingsTab("home");
+                  openPage("settings");
+                }
               }}
             />
           ) : null}
@@ -701,10 +764,27 @@ export default function App() {
           {page === "settings" ? (
             <SettingsHubPage
               client={selected}
+              session={session}
               initialTab={settingsTab}
               onNotice={setNotice}
               onError={setError}
               onTabChange={setSettingsTab}
+              onOpenClientSetup={(client) => openClientSetup(client || selected)}
+              onOpenClients={openClientsOverview}
+              onOpenTechAdmin={() => {
+                setTechTab("status");
+                openPage("tech_admin");
+              }}
+            />
+          ) : null}
+          {page === "tech_admin" && role === "admin" ? (
+            <TechAdminPage
+              client={selected}
+              initialTab={techTab}
+              onNotice={setNotice}
+              onError={setError}
+              onTabChange={setTechTab}
+              onOpenClientSetup={() => openClientSetup(selected)}
             />
           ) : null}
         </section>

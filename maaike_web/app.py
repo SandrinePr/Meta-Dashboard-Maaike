@@ -107,49 +107,68 @@ from maaike_web.settings import WebSettings, load_settings
 
 _COOKIE_MAX_AGE = 8 * 60 * 60
 _FRONTEND_DIST = project_root() / "frontend" / "dist"
-_PUBLIC_PATHS = frozenset(
-    {
-        "/api/health",
-        "/api/meta/callback",
-        "/api/report-planning/monthly-trend/trigger",
-    }
-)
 _PROCESS_STARTED_AT = datetime.now(tz=timezone.utc).isoformat()
 
 
-class _OptionalBasicAuth(BaseHTTPMiddleware):
-    """Protect the public URL when MAAIKE_BASIC_AUTH_PASSWORD is set.
+class _HamsterAccessMiddleware(BaseHTTPMiddleware):
+    """HTTP Basic Auth with admin / editor / viewer roles + API path guards.
 
-    /api/health stays open for Render health checks. Meta OAuth callback stays
-    open so Facebook can redirect back after login.
+    /api/health stays open for Render. Meta OAuth callback stays open so Facebook
+    can redirect back. Technical admin APIs return 403 for non-admins even when
+    the caller authenticated as editor/viewer.
     """
 
-    def __init__(self, app, *, username: str, password: str):
-        super().__init__(app)
-        self.username = username
-        self.password = password
-
     async def dispatch(self, request: Request, call_next):
-        path = request.url.path.rstrip("/") or "/"
-        if path in _PUBLIC_PATHS or path == "/api/health":
-            return await call_next(request)
-        header = request.headers.get("authorization") or ""
-        if header.lower().startswith("basic "):
-            try:
-                decoded = base64.b64decode(header.split(" ", 1)[1].strip()).decode("utf-8")
-                user, _, pwd = decoded.partition(":")
-            except Exception:
-                user, pwd = "", ""
-            if secrets.compare_digest(user, self.username) and secrets.compare_digest(
-                pwd, self.password
-            ):
-                return await call_next(request)
-        return Response(
-            content="Authenticatie vereist.",
-            status_code=401,
-            headers={"WWW-Authenticate": 'Basic realm="HAMSTER"'},
-            media_type="text/plain",
+        from maaike_web.access import (
+            PUBLIC_PATHS,
+            path_requires_admin,
+            path_requires_editor_or_admin,
+            resolve_identity,
         )
+
+        resolved = resolve_identity(request)
+        if isinstance(resolved, Response):
+            return resolved
+        request.state.identity = resolved
+
+        path = request.url.path
+        method = request.method.upper()
+        cleaned_public = path.rstrip("/") or "/"
+        if cleaned_public in PUBLIC_PATHS or cleaned_public == "/api/health":
+            return await call_next(request)
+        if path_requires_admin(path) and resolved.role != "admin":
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": (
+                        "Dit scherm of deze actie is alleen voor technisch beheer. "
+                        "Vraag een beheerder om hulp."
+                    )
+                },
+            )
+        if resolved.role == "viewer" and path_requires_editor_or_admin(path, method):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": (
+                        "Je hebt geen rechten voor deze actie. "
+                        "Vraag een editor of beheerder."
+                    )
+                },
+            )
+        # Client delete is admin-only even for editors.
+        cleaned = path.rstrip("/")
+        if (
+            method == "DELETE"
+            and cleaned.startswith("/api/clients/")
+            and cleaned.count("/") == 3
+            and resolved.role != "admin"
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Klanten verwijderen mag alleen technisch beheer."},
+            )
+        return await call_next(request)
 
 
 class NameBody(BaseModel):
@@ -260,10 +279,7 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization"],
     )
-    basic_user = os.getenv("MAAIKE_BASIC_AUTH_USER", "maaike").strip() or "maaike"
-    basic_password = os.getenv("MAAIKE_BASIC_AUTH_PASSWORD", "").strip()
-    if basic_password:
-        app.add_middleware(_OptionalBasicAuth, username=basic_user, password=basic_password)
+    app.add_middleware(_HamsterAccessMiddleware)
 
     @app.exception_handler(Exception)
     async def unhandled(request: Request, exc: Exception):
@@ -271,6 +287,12 @@ def create_app() -> FastAPI:
             detail = exc.detail if isinstance(exc.detail, str) else "De aanvraag is mislukt."
             return JSONResponse(status_code=exc.status_code, content={"detail": detail})
         return JSONResponse(status_code=500, content={"detail": "Er ging iets mis. Probeer het opnieuw of vraag een beheerder."})
+
+    @app.get("/api/session")
+    def session_info(request: Request) -> dict:
+        from maaike_web.access import identity_from_request, session_payload
+
+        return session_payload(identity_from_request(request))
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -2331,7 +2353,7 @@ def create_app() -> FastAPI:
         with transaction() as conn:
             client = _require_client(conn, client_id)
         pending = pending_for(session_id, client_id)
-        payload = _meta_out(client, settings)
+        payload = _attach_meta_admin(_meta_out(client, settings), request)
         payload["pages"] = pages_public(pending) if pending is not None else None
         response = JSONResponse(payload)
         if cookie:
@@ -2793,19 +2815,6 @@ def _meta_out(client: Client, settings: WebSettings) -> dict:
                 0,
                 f"Laatst gekoppeld account: {last}. De toegang is niet meer geldig — koppel opnieuw.",
             )
-    admin_notes = [
-        "Tokens blijven server-side in de lokale database en worden niet getoond.",
-        "Die database is niet versleuteld. Host dit dashboard niet op de huidige TAOL-service.",
-    ]
-    if info.ready and info.uses_configuration:
-        admin_notes.insert(0, "Login gebruikt de geconfigureerde Meta-loginconfiguratie.")
-    elif info.ready:
-        scopes = ", ".join(LOGIN_SCOPES)
-        admin_notes.insert(
-            0,
-            "MAAIKE_META_LOGIN_CONFIG_ID is niet gezet. De knop vraagt deze rechten direct aan: "
-            f"{scopes}.",
-        )
     base = _client_out(client)
     base.update(
         {
@@ -2819,16 +2828,43 @@ def _meta_out(client: Client, settings: WebSettings) -> dict:
             "reconnect_label": "Opnieuw koppelen" if connected else "Facebook en Instagram koppelen",
             "page_name": client.meta_page_name,
             "ig_username": client.meta_ig_username,
-            "admin": {
-                "redirect_uri": info.redirect_uri,
-                # OAuth client_id only (public in the Facebook login URL). Never the app secret.
-                "meta_app_id": _public_meta_app_id(),
-                "notes": admin_notes,
-                "missing_raw": list(info.missing),
-            },
         }
     )
     return base
+
+
+def _attach_meta_admin(payload: dict, request: Request | None = None) -> dict:
+    """Add technical Meta notes only for admin callers."""
+    from maaike_web.access import identity_from_request
+
+    if request is None:
+        return payload
+    identity = identity_from_request(request)
+    if identity.role != "admin":
+        payload.pop("admin", None)
+        return payload
+    settings = load_settings()
+    info = readiness(settings.oauth_redirect_uri)
+    admin_notes = [
+        "Tokens blijven server-side in de lokale database en worden niet getoond.",
+        "Die database is niet versleuteld. Host dit dashboard niet op de huidige TAOL-service.",
+    ]
+    if info.ready and info.uses_configuration:
+        admin_notes.insert(0, "Login gebruikt de geconfigureerde Meta-loginconfiguratie.")
+    elif info.ready:
+        scopes = ", ".join(LOGIN_SCOPES)
+        admin_notes.insert(
+            0,
+            "MAAIKE_META_LOGIN_CONFIG_ID is niet gezet. De knop vraagt deze rechten direct aan: "
+            f"{scopes}.",
+        )
+    payload["admin"] = {
+        "redirect_uri": info.redirect_uri,
+        "meta_app_id": _public_meta_app_id(),
+        "notes": admin_notes,
+        "missing_raw": list(info.missing),
+    }
+    return payload
 
 
 def _public_meta_app_id() -> str | None:

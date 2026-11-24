@@ -24,6 +24,8 @@ export default function ClientsPage({
   onDeletedSelected,
   onNotice,
   onError,
+  canDelete = true,
+  canEdit = true,
 }) {
   const [confirmClient, setConfirmClient] = useState(null);
   const [busyId, setBusyId] = useState(null);
@@ -60,13 +62,16 @@ export default function ClientsPage({
         <div>
           <h3>Alle klanten</h3>
           <p className="hint">
-            Open een klant voor het dashboard, bewerk de inrichting, of verwijder een klant. Het
-            tandwiel opent altijd dit overzicht.
+            Open een klant voor het dashboard
+            {canEdit ? ", bewerk de inrichting" : ""}
+            {canDelete ? ", of verwijder een klant" : ""}. Het tandwiel opent altijd dit overzicht.
           </p>
         </div>
-        <button className="primary" type="button" onClick={onAddClient}>
-          Nieuwe klant toevoegen
-        </button>
+        {canEdit ? (
+          <button className="primary" type="button" onClick={onAddClient}>
+            Nieuwe klant toevoegen
+          </button>
+        ) : null}
       </div>
 
       {localError ? <p className="banner error">{localError}</p> : null}
@@ -75,9 +80,11 @@ export default function ClientsPage({
         <div className="card stack">
           <p className="banner">Er zijn nog geen klanten</p>
           <p className="hint">Voeg een klant toe om Meta te koppelen en het dashboard te gebruiken.</p>
-          <button className="primary" type="button" onClick={onAddClient}>
-            Nieuwe klant toevoegen
-          </button>
+          {canEdit ? (
+            <button className="primary" type="button" onClick={onAddClient}>
+              Nieuwe klant toevoegen
+            </button>
+          ) : null}
         </div>
       ) : (
         <ul className="client-list">
@@ -101,20 +108,24 @@ export default function ClientsPage({
                   <button className="primary" type="button" onClick={() => onOpenClient(item)}>
                     Openen
                   </button>
-                  <button className="secondary" type="button" onClick={() => onEditClient(item)}>
-                    Bewerken
-                  </button>
-                  <button
-                    className="secondary"
-                    type="button"
-                    disabled={busyId === item.id}
-                    onClick={() => {
-                      setLocalError("");
-                      setConfirmClient(item);
-                    }}
-                  >
-                    Verwijderen
-                  </button>
+                  {canEdit ? (
+                    <button className="secondary" type="button" onClick={() => onEditClient(item)}>
+                      Bewerken
+                    </button>
+                  ) : null}
+                  {canDelete ? (
+                    <button
+                      className="secondary"
+                      type="button"
+                      disabled={busyId === item.id}
+                      onClick={() => {
+                        setLocalError("");
+                        setConfirmClient(item);
+                      }}
+                    >
+                      Verwijderen
+                    </button>
+                  ) : null}
                 </div>
               </li>
             );
