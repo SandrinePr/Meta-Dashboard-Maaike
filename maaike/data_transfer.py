@@ -245,11 +245,16 @@ def export_package(conn, *, client_id: int | None = None) -> dict[str, Any]:
                     rparams,
                 ).fetchall()
             ]
+    monthly_trend_settings = None
     if _table_exists(conn, "monthly_trend_schedule_runs"):
         monthly_trend_runs = [
             dict(r)
             for r in conn.execute("SELECT * FROM monthly_trend_schedule_runs ORDER BY id").fetchall()
         ]
+    if _table_exists(conn, "monthly_trend_planner_settings"):
+        s_row = conn.execute("SELECT * FROM monthly_trend_planner_settings WHERE id = 1").fetchone()
+        if s_row is not None:
+            monthly_trend_settings = dict(s_row)
 
     activity = []
     if _table_exists(conn, "dashboard_activity_events"):
@@ -390,6 +395,7 @@ def export_package(conn, *, client_id: int | None = None) -> dict[str, Any]:
         "client_report_sources": report_sources,
         "client_report_reviews": report_reviews,
         "monthly_trend_schedule_runs": monthly_trend_runs,
+        "monthly_trend_planner_settings": monthly_trend_settings,
         "activity_events": activity,
         "logs_export_rows": logs_rows,
         "prompt_settings": prompt_settings,
@@ -1193,7 +1199,7 @@ def apply_import(
             except Exception:
                 pass
 
-        if data.get("monthly_trend_schedule_runs"):
+        if data.get("monthly_trend_schedule_runs") or data.get("monthly_trend_planner_settings"):
             try:
                 from maaike.monthly_trend_scheduler import ensure_monthly_trend_tables
 
@@ -1201,26 +1207,63 @@ def apply_import(
                 for mrun in data.get("monthly_trend_schedule_runs") or []:
                     raw_rid = mrun.get("report_id")
                     live_rid = pkg_report_to_live.get(int(raw_rid)) if raw_rid is not None else None
+                    scope = mrun.get("run_scope") or (
+                        "production" if int(mrun.get("paid_ai_called") or 0) == 1 else "simulation"
+                    )
+                    # Never restore a stale 'in_progress' claim from an older snapshot
+                    restored_status = mrun.get("status") or "completed"
+                    if restored_status == "in_progress":
+                        restored_status = "retry_needed"
                     conn.execute(
                         """
                         INSERT OR IGNORE INTO monthly_trend_schedule_runs (
-                            period_year, period_month, timezone, scheduled_for, report_id,
-                            mode, paid_ai_called, attempt_count, status, detail, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            period_year, period_month, run_scope, timezone, scheduled_for, report_id,
+                            mode, paid_ai_called, caught_up, trigger_source, attempt_count,
+                            status, claim_token, claim_expires_at, detail, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?)
                         """,
                         (
                             int(mrun["period_year"]),
                             int(mrun["period_month"]),
+                            scope,
                             mrun.get("timezone") or "Europe/Amsterdam",
                             mrun.get("scheduled_for") or f"{int(mrun['period_year']):04d}-{int(mrun['period_month']):02d}-01",
                             live_rid,
                             mrun.get("mode") or "simulation_no_paid_ai",
                             int(mrun.get("paid_ai_called") or 0),
+                            int(mrun.get("caught_up") or 0),
+                            mrun.get("trigger_source") or "",
                             int(mrun.get("attempt_count") or 1),
-                            mrun.get("status") or "completed",
+                            restored_status,
                             mrun.get("detail") or "",
                             mrun.get("created_at") or now,
                             mrun.get("updated_at") or now,
+                        ),
+                    )
+                ms = data.get("monthly_trend_planner_settings")
+                if isinstance(ms, dict):
+                    conn.execute(
+                        """
+                        UPDATE monthly_trend_planner_settings
+                        SET production_enabled = ?,
+                            catchup_enabled = ?,
+                            active_from = COALESCE(?, active_from),
+                            last_external_trigger_at = ?,
+                            last_external_trigger_mode = ?,
+                            last_external_trigger_source = ?,
+                            last_external_trigger_result = ?,
+                            updated_at = ?
+                        WHERE id = 1
+                        """,
+                        (
+                            1 if ms.get("production_enabled", 1) else 0,
+                            1 if ms.get("catchup_enabled", 1) else 0,
+                            ms.get("active_from"),
+                            ms.get("last_external_trigger_at"),
+                            ms.get("last_external_trigger_mode"),
+                            ms.get("last_external_trigger_source"),
+                            ms.get("last_external_trigger_result"),
+                            ms.get("updated_at") or now,
                         ),
                     )
             except Exception:

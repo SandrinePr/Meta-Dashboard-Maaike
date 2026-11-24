@@ -222,17 +222,40 @@ export default function ReportPlanningPage() {
           <h3 style={{ marginTop: 0, marginBottom: 0 }}>
             Automatisch algemeen trendrapport (1e van de maand)
           </h3>
-          <span className="pill ok">Actief · {trendSched.timezone || "Europe/Amsterdam"}</span>
+          <span className={`pill ${trendSched.production_schedule_active ? "ok" : "warn"}`}>
+            {trendSched.production_schedule_active
+              ? `Productieplanning actief · ${trendSched.timezone || "Europe/Amsterdam"}`
+              : `Planner klaar · ${trendSched.timezone || "Europe/Amsterdam"}`}
+          </span>
         </div>
         <p style={{ margin: 0, lineHeight: 1.55 }}>
-          Op de <strong>1e van iedere maand om 06:00 uur</strong> ({trendSched.timezone || "Europe/Amsterdam"})
+          Op de <strong>1e van iedere maand rond 06:00 uur</strong> ({trendSched.timezone || "Europe/Amsterdam"})
           maakt HAMSTER automatisch één zelfstandig <strong>Algemeen trendrapport</strong> over trends per
-          socialmediakanaal en bewaart dit in het dashboard. Een herstart of nieuwe poging maakt geen
-          dubbele rapporten aan.
+          socialmediakanaal. Een externe wake-up (GitHub Actions) wekt ook een slapende gratis Render-service.
+          Gemiste runs worden na de 1e automatisch ingehaald. Herstarts, retries of gelijktijdige triggers
+          maken geen dubbele rapporten en starten geen dubbele AI-aanroepen.
+        </p>
+        <p className="hint" style={{ margin: 0 }}>
+          {trendSched.default_mode_label_nl || "Veilige simulatiemodus"}
+          {trendSched.external_trigger_configured
+            ? " · Externe wake-up-secret staat ingesteld."
+            : " · Externe wake-up-secret ontbreekt nog (MAAIKE_CRON_SECRET)."}
+          {trendSched.catchup_after_first_enabled === false
+            ? " · Inhalen na de 1e staat uit."
+            : " · Inhalen na de 1e staat aan."}
         </p>
         {trendSched.next_run?.label_nl ? (
           <p className="hint" style={{ margin: 0 }}>
-            Eerstvolgende automatische run: <strong>{trendSched.next_run.label_nl}</strong>.
+            Eerstvolgende automatische run: <strong>{trendSched.next_run.label_nl}</strong>
+            {trendSched.active_from ? ` (productie actief vanaf ${trendSched.active_from})` : ""}.
+          </p>
+        ) : null}
+        {trendSched.last_external_trigger?.at ? (
+          <p className="hint" style={{ margin: 0 }}>
+            Laatste externe trigger: {trendSched.last_external_trigger.at} ·{" "}
+            {trendSched.last_external_trigger.source || "extern"} ·{" "}
+            {trendSched.last_external_trigger.mode || "—"} ·{" "}
+            {trendSched.last_external_trigger.result || "—"}
           </p>
         ) : null}
 
@@ -303,16 +326,21 @@ export default function ReportPlanningPage() {
                 </tr>
               </thead>
               <tbody>
-                {trendRuns.slice(0, 5).map((r) => (
-                  <tr key={`${r.period_year}-${r.period_month}`}>
+                {trendRuns.slice(0, 8).map((r) => (
+                  <tr key={`${r.period_year}-${r.period_month}-${r.run_scope || "sim"}-${r.id || r.report_id}`}>
                     <td>
                       <strong>
                         {String(r.period_month).padStart(2, "0")}-{r.period_year}
                       </strong>
+                      {r.run_scope ? ` · ${r.run_scope}` : ""}
+                      {r.caught_up ? " · inhaal" : ""}
                     </td>
-                    <td>{r.report_title || `#${r.report_id}`}</td>
-                    <td>{r.report_status || r.status}</td>
-                    <td>{r.last_checked_at || r.triggered_at || "—"}</td>
+                    <td>{r.report_title || (r.report_id ? `#${r.report_id}` : "—")}</td>
+                    <td>
+                      {r.report_status || r.status}
+                      {Number(r.paid_ai_called) === 1 ? " · betaalde AI" : " · geen betaalde AI"}
+                    </td>
+                    <td>{r.updated_at || r.created_at || "—"}</td>
                   </tr>
                 ))}
               </tbody>

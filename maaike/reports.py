@@ -719,26 +719,51 @@ def _figma_planning_summary(
     }
 
 
+def is_simulated_report_row(row: Any) -> bool:
+    """Return True when a report row was generated in simulation/mock mode rather than a real AI run."""
+    if row is None:
+        return False
+    keys = set(row.keys()) if hasattr(row, "keys") else set()
+    if "is_mock" in keys and bool(row["is_mock"]):
+        return True
+    status = str((row["status"] if "status" in keys else "") or "").strip().lower()
+    if status == "mock_completed":
+        return True
+    body = _safe_json(row["body_json"] if "body_json" in keys else None, {})
+    if isinstance(body, dict):
+        if bool(body.get("simulation_without_paid_ai")):
+            return True
+        test_lbl = str(body.get("test_label") or "").strip().upper()
+        if test_lbl.startswith(("SIMULATIE", "MOCK", "LOCAL_TEST")):
+            return True
+    return False
+
+
 def find_month_trend_status(conn, *, year: int, month: int) -> dict[str, Any]:
-    """Find the general trend report for the exact same report month (dashboard-wide)."""
+    """Find the general trend report for the exact same report month (dashboard-wide).
+
+    Simulated/mock trend reports NEVER qualify as usable_report for a real client report.
+    """
     ensure_report_tables(conn)
-    usable = conn.execute(
+    candidates = conn.execute(
         """
         SELECT *
         FROM client_reports
         WHERE report_type = 'trend'
           AND period_year = ? AND period_month = ?
           AND status IN ('completed', 'mock_completed')
-        ORDER BY CASE WHEN status = 'completed' THEN 0 ELSE 1 END,
+        ORDER BY CASE WHEN status = 'completed' AND COALESCE(is_mock, 0) = 0 THEN 0 ELSE 1 END,
                  version DESC, id DESC
-        LIMIT 1
         """,
         (int(year), int(month)),
-    ).fetchone()
+    ).fetchall()
+
+    usable = next((r for r in candidates if r["status"] == "completed" and not is_simulated_report_row(r)), None)
+    simulated = next((r for r in candidates if is_simulated_report_row(r)), None)
+
     if usable is not None:
-        try:
-            usable_body = json.loads(usable["body_json"] or "{}")
-        except (TypeError, json.JSONDecodeError):
+        usable_body = _safe_json(usable["body_json"], {})
+        if not isinstance(usable_body, dict):
             usable_body = {}
         return {
             "state": "available",
@@ -752,7 +777,8 @@ def find_month_trend_status(conn, *, year: int, month: int) -> dict[str, Any]:
                 "period_month": usable["period_month"],
                 "planning_year": usable["planning_year"],
                 "planning_month": usable["planning_month"],
-                "is_mock": bool(usable["is_mock"]),
+                "is_mock": False,
+                "is_simulated": False,
                 "body_present": bool(str(usable["body_json"] or "").strip() not in ("", "{}")),
                 "shared_across_clients": True,
                 "owner_client_id": int(usable["client_id"]),
@@ -764,15 +790,17 @@ def find_month_trend_status(conn, *, year: int, month: int) -> dict[str, Any]:
                 },
             },
             "prepared_report": None,
+            "simulated_report": None,
         }
 
     prepared = conn.execute(
         """
-        SELECT id, title, status, version, period_year, period_month, client_id
+        SELECT id, title, status, version, period_year, period_month, client_id, is_mock
         FROM client_reports
         WHERE report_type = 'trend'
           AND period_year = ? AND period_month = ?
           AND status IN ('prepared', 'running')
+          AND COALESCE(is_mock, 0) = 0
         ORDER BY version DESC, id DESC
         LIMIT 1
         """,
@@ -792,6 +820,39 @@ def find_month_trend_status(conn, *, year: int, month: int) -> dict[str, Any]:
                 "period_month": prepared["period_month"],
                 "owner_client_id": int(prepared["client_id"]),
             },
+            "simulated_report": (
+                {
+                    "id": int(simulated["id"]),
+                    "title": simulated["title"],
+                    "status": simulated["status"],
+                    "version": simulated["version"],
+                    "period_year": simulated["period_year"],
+                    "period_month": simulated["period_month"],
+                    "is_mock": True,
+                    "is_simulated": True,
+                }
+                if simulated is not None
+                else None
+            ),
+        }
+
+    if simulated is not None:
+        return {
+            "state": "simulated_only",
+            "month_label_nl": month_label_nl(year, month),
+            "usable_report": None,
+            "prepared_report": None,
+            "simulated_report": {
+                "id": int(simulated["id"]),
+                "title": simulated["title"],
+                "status": simulated["status"],
+                "version": simulated["version"],
+                "period_year": simulated["period_year"],
+                "period_month": simulated["period_month"],
+                "owner_client_id": int(simulated["client_id"]),
+                "is_mock": True,
+                "is_simulated": True,
+            },
         }
 
     return {
@@ -799,6 +860,7 @@ def find_month_trend_status(conn, *, year: int, month: int) -> dict[str, Any]:
         "month_label_nl": month_label_nl(year, month),
         "usable_report": None,
         "prepared_report": None,
+        "simulated_report": None,
     }
 
 
@@ -1011,14 +1073,17 @@ def build_client_sources_overview(
         "cta_target": "figma_planning",
     }
 
-    # 5. Algemeen trendrapport (Verplicht — zelfde rapportmaand)
-    trend_ok = trend is not None
+    # 5. Algemeen trendrapport (Verplicht — zelfde rapportmaand; gesimuleerde rapporten zijn geblokkeerd)
+    trend_ok = trend is not None and not bool(trend.get("is_simulated") or trend.get("is_mock"))
     prep_trend = month_trend_info.get("prepared_report")
+    sim_trend = month_trend_info.get("simulated_report")
     if trend_ok:
         trend_avail = f"{trend.get('title') or f'Algemeen trendrapport – {month_nl}'} wordt automatisch meegenomen."
         trend_missing = "Niets ontbreekt."
         trend_action = "Wordt automatisch gekoppeld aan dit klantrapport; je hoeft niets te kiezen."
         trend_cta = "Trendrapport bekijken"
+        trend_status_key = "ready"
+        trend_status_lbl = "Klaar"
     elif prep_trend is not None:
         trend_avail = (
             f"Concept ‘{prep_trend.get('title')}’ staat klaar, maar is nog niet uitgevoerd."
@@ -1028,6 +1093,21 @@ def build_client_sources_overview(
             f"Verplicht vóór starten: open het concept voor {month_nl} en voer het trendrapport eerst uit."
         )
         trend_cta = f"Trendrapport {month_nl} afronden"
+        trend_status_key = "missing_required"
+        trend_status_lbl = "Actie nodig"
+    elif sim_trend is not None:
+        trend_avail = (
+            f"Alleen een gesimuleerd trendrapport aanwezig (‘{sim_trend.get('title')}’, #{sim_trend.get('id')}). "
+            "Een gesimuleerd rapport kan niet als bron voor een echt klantrapport dienen."
+        )
+        trend_missing = f"Echt algemeen trendrapport voor {month_nl} (simulatie is geblokkeerd als bron)."
+        trend_action = (
+            f"Verplicht vóór starten: maak eerst een echt algemeen trendrapport voor {month_nl}. "
+            "Gesimuleerde testrapporten mogen niet voor klantrapporten worden gebruikt."
+        )
+        trend_cta = f"Echt trendrapport {month_nl} maken"
+        trend_status_key = "simulated_not_usable"
+        trend_status_lbl = "Simulatie geblokkeerd"
     else:
         trend_avail = f"Nog geen algemeen trendrapport beschikbaar voor {month_nl}."
         trend_missing = f"Algemeen trendrapport voor {month_nl} (trends per socialmediakanaal)."
@@ -1036,6 +1116,8 @@ def build_client_sources_overview(
             "Zodra dat klaarstaat, kun je dit klantrapport direct starten."
         )
         trend_cta = f"Trendrapport {month_nl} maken"
+        trend_status_key = "missing_required"
+        trend_status_lbl = "Actie nodig"
 
     src_trend = {
         "id": "trend",
@@ -1043,8 +1125,8 @@ def build_client_sources_overview(
         "required": True,
         "requirement_label": "Verplicht",
         "ready": trend_ok,
-        "status": "ready" if trend_ok else "missing_required",
-        "status_label": "Klaar" if trend_ok else "Actie nodig",
+        "status": trend_status_key,
+        "status_label": trend_status_lbl,
         "available_text": trend_avail,
         "missing_text": trend_missing,
         "user_action_needed": not trend_ok,
@@ -1053,8 +1135,9 @@ def build_client_sources_overview(
         "cta_target": "trend_report",
         "report_year": window.get("year"),
         "report_month": window.get("month"),
-        "linked_trend_id": trend.get("id") if trend else None,
+        "linked_trend_id": trend.get("id") if trend_ok and trend else None,
         "prepared_trend_id": prep_trend.get("id") if prep_trend else None,
+        "simulated_trend_id": sim_trend.get("id") if sim_trend else None,
     }
 
     sources_list = [src_strategy, src_posts, src_insights, src_figma, src_trend]
@@ -1171,11 +1254,18 @@ def _available_stories(conn, client_id: int, *, year: int, month: int) -> dict[s
     }
 
 
-def _trend_summary(conn, client_id: int, linked_trend_report_id: int | None) -> dict[str, Any] | None:
+def _trend_summary(
+    conn,
+    client_id: int,
+    linked_trend_report_id: int | None,
+    *,
+    allow_simulated: bool = False,
+) -> dict[str, Any] | None:
     """Resolve a trend report for linking.
 
-    Same-client trends are preferred, but a completed/mock trend from another
+    Same-client trends are preferred, but a completed trend from another
     client may be reused as the shared monthly trend for all clients.
+    Simulated/mock trend reports are rejected unless allow_simulated=True (test-only).
     """
     if linked_trend_report_id is None:
         return None
@@ -1198,9 +1288,14 @@ def _trend_summary(conn, client_id: int, linked_trend_report_id: int | None) -> 
         raise ValueError(
             "Gekozen trendrapport bestaat niet of is niet bruikbaar als gedeeld maandtrend."
         )
-    try:
-        t_body = json.loads(row["body_json"] or "{}")
-    except (TypeError, json.JSONDecodeError):
+    simulated = is_simulated_report_row(row)
+    if simulated and not allow_simulated:
+        raise ValueError(
+            f"Gesimuleerd trendrapport ‘{row['title']}’ (#{row['id']}) kan niet als bron voor een echt klantrapport dienen. "
+            "Maak eerst een echt algemeen trendrapport aan."
+        )
+    t_body = _safe_json(row["body_json"], {})
+    if not isinstance(t_body, dict):
         t_body = {}
     return {
         "id": row["id"],
@@ -1212,6 +1307,7 @@ def _trend_summary(conn, client_id: int, linked_trend_report_id: int | None) -> 
         "planning_year": row["planning_year"] if "planning_year" in row.keys() else None,
         "planning_month": row["planning_month"] if "planning_month" in row.keys() else None,
         "is_mock": bool(row["is_mock"]),
+        "is_simulated": simulated,
         "body_present": bool(str(row["body_json"] or "").strip() not in ("", "{}")),
         "shared_across_clients": shared,
         "owner_client_id": int(row["client_id"]),
@@ -1448,10 +1544,19 @@ def inspect_client_report_data(
     format_pattern_window = period_bundle.get("format_pattern_window") or {}
     py, pm = int(period_bundle["period"]["year"]), int(period_bundle["period"]["month"])
 
-    # Point 31: automatically attach the usable general trend report of the SAME report month.
+    # Point 31 & 28: automatically attach the usable real general trend report of the SAME report month.
     month_trend_info = find_month_trend_status(conn, year=py, month=pm)
     if linked_trend_report_id is not None:
-        trend = _trend_summary(conn, client_id, linked_trend_report_id)
+        raw_t = _trend_summary(conn, client_id, linked_trend_report_id, allow_simulated=True)
+        if raw_t and (raw_t.get("is_simulated") or raw_t.get("is_mock")):
+            trend = None
+            month_trend_info = {
+                **month_trend_info,
+                "state": "simulated_only",
+                "simulated_report": raw_t,
+            }
+        else:
+            trend = raw_t
     else:
         trend = month_trend_info.get("usable_report")
 
@@ -1485,9 +1590,16 @@ def inspect_client_report_data(
 
     missing: list[str] = []
     if trend is None:
-        missing.append(
-            f"Het algemeen trendrapport voor {month_label_nl(py, pm)} ontbreekt nog."
-        )
+        if month_trend_info.get("state") == "simulated_only":
+            sim_rep = month_trend_info.get("simulated_report") or {}
+            missing.append(
+                f"Voor {month_label_nl(py, pm)} bestaat alleen een gesimuleerd trendrapport "
+                f"(#{sim_rep.get('id')}); een gesimuleerd rapport kan niet als bron voor een echt klantrapport dienen."
+            )
+        else:
+            missing.append(
+                f"Het algemeen trendrapport voor {month_label_nl(py, pm)} ontbreekt nog."
+            )
     if metrics["post_count"] == 0:
         missing.append("Geen eigen berichten met een publicatiedatum in deze rapportperiode.")
     if not (strategy.get("start_answers") or {}):
@@ -1622,6 +1734,7 @@ def prepare_client_report(
     period_month: int,
     linked_trend_report_id: int | None = None,
     allow_partial_without_trend: bool = False,
+    allow_simulated_trend: bool = False,
     max_budget_usd: float | None = None,
     start: str | None = None,
     end: str | None = None,
@@ -1658,10 +1771,16 @@ def prepare_client_report(
     strategy = get_strategy(conn, client_id)
     legend = _legend_payload(conn, client_id)
 
-    # Point 31: automatically attach the usable general trend report of the SAME report month.
+    # Point 31 & 28: automatically attach the usable general trend report of the SAME report month.
+    # Simulated trend reports are strictly blocked for real client reports unless allow_simulated_trend=True (mock tests only).
     month_trend_info = find_month_trend_status(conn, year=period_year, month=period_month)
     if linked_trend_report_id is not None:
-        trend = _trend_summary(conn, client_id, linked_trend_report_id)
+        trend = _trend_summary(
+            conn,
+            client_id,
+            linked_trend_report_id,
+            allow_simulated=allow_simulated_trend,
+        )
     else:
         trend = month_trend_info.get("usable_report")
         if trend is not None:
@@ -1702,17 +1821,30 @@ def prepare_client_report(
     missing = []
     if trend is None:
         m_nl = month_label_nl(period_year, period_month)
-        missing.append(f"Het algemeen trendrapport voor {m_nl} ontbreekt nog.")
-        if not allow_partial_without_trend:
-            if month_trend_info.get("state") == "prepared_not_executed":
-                raise ValueError(
-                    f"Het algemeen trendrapport voor {m_nl} staat nog op ‘voorbereid’ en is nog niet uitgevoerd. "
-                    f"Voer eerst het algemeen trendrapport voor {m_nl} uit voordat je dit klantrapport start."
-                )
-            raise ValueError(
-                f"Het algemeen trendrapport voor {m_nl} ontbreekt nog. "
-                f"Maak eerst het algemeen trendrapport voor {m_nl} voordat je dit klantrapport start."
+        if month_trend_info.get("state") == "simulated_only":
+            sim_rep = month_trend_info.get("simulated_report") or {}
+            missing.append(
+                f"Voor {m_nl} bestaat alleen een gesimuleerd trendrapport (#{sim_rep.get('id')}); "
+                "simulaties kunnen niet als bron voor een echt klantrapport dienen."
             )
+            if not allow_partial_without_trend:
+                raise ValueError(
+                    f"Voor {m_nl} bestaat alleen een gesimuleerd trendrapport (‘{sim_rep.get('title')}’, #{sim_rep.get('id')}). "
+                    f"Een gesimuleerd rapport kan niet als bron voor een echt klantrapport dienen. "
+                    f"Maak eerst een echt algemeen trendrapport voor {m_nl}."
+                )
+        else:
+            missing.append(f"Het algemeen trendrapport voor {m_nl} ontbreekt nog.")
+            if not allow_partial_without_trend:
+                if month_trend_info.get("state") == "prepared_not_executed":
+                    raise ValueError(
+                        f"Het algemeen trendrapport voor {m_nl} staat nog op ‘voorbereid’ en is nog niet uitgevoerd. "
+                        f"Voer eerst het algemeen trendrapport voor {m_nl} uit voordat je dit klantrapport start."
+                    )
+                raise ValueError(
+                    f"Het algemeen trendrapport voor {m_nl} ontbreekt nog. "
+                    f"Maak eerst het algemeen trendrapport voor {m_nl} voordat je dit klantrapport start."
+                )
     if metrics["post_count"] == 0:
         missing.append("Geen eigen berichten met een publicatiedatum in deze rapportperiode.")
     if not (strategy.get("start_answers") or {}):

@@ -530,23 +530,41 @@ CREATE INDEX IF NOT EXISTS idx_report_reviews_report
     ON client_report_reviews(client_id, report_id, execution_key);
 
 -- Maandelijkse automatische trendrapport-runs op de 1e van iedere maand (Europe/Amsterdam, idempotent).
+-- run_scope scheidt productie- en simulatieboekhouding zodat testrapporten nooit productie blokkeren.
 CREATE TABLE IF NOT EXISTS monthly_trend_schedule_runs (
     id INTEGER PRIMARY KEY,
     period_year INTEGER NOT NULL,
     period_month INTEGER NOT NULL,
+    run_scope TEXT NOT NULL DEFAULT 'simulation',
     timezone TEXT NOT NULL DEFAULT 'Europe/Amsterdam',
     scheduled_for TEXT NOT NULL,
     report_id INTEGER,
     mode TEXT NOT NULL DEFAULT 'simulation_no_paid_ai',
     paid_ai_called INTEGER NOT NULL DEFAULT 0,
+    caught_up INTEGER NOT NULL DEFAULT 0,
+    trigger_source TEXT NOT NULL DEFAULT '',
     attempt_count INTEGER NOT NULL DEFAULT 1,
     status TEXT NOT NULL DEFAULT 'completed',
+    claim_token TEXT NOT NULL DEFAULT '',
+    claim_expires_at TEXT NOT NULL DEFAULT '',
     detail TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    UNIQUE(period_year, period_month),
+    UNIQUE(period_year, period_month, run_scope),
     FOREIGN KEY(report_id) REFERENCES client_reports(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_monthly_trend_runs_period
-    ON monthly_trend_schedule_runs(period_year, period_month);
+    ON monthly_trend_schedule_runs(period_year, period_month, run_scope);
+
+CREATE TABLE IF NOT EXISTS monthly_trend_planner_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    production_enabled INTEGER NOT NULL DEFAULT 1,
+    catchup_enabled INTEGER NOT NULL DEFAULT 1,
+    active_from TEXT NOT NULL DEFAULT '2026-12-01',
+    last_external_trigger_at TEXT,
+    last_external_trigger_mode TEXT,
+    last_external_trigger_source TEXT,
+    last_external_trigger_result TEXT,
+    updated_at TEXT NOT NULL
+);

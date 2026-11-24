@@ -1,0 +1,135 @@
+# Wekt de gratis Render Free-service van HAMSTER en triggert het maandelijkse
+# algemene trendrapport rond 06:00 Nederlandse tijd (Europe/Amsterdam).
+#
+# GitHub Actions cron is UTC. Daarom twee runs op de 1e (04:05 en 05:05 UTC)
+# om zowel CEST (UTC+2) als CET (UTC+1) te dekken, plus een dagelijkse
+# inhaalrun die een gemiste 1e alsnog oppikt zodra de service weer wakker is.
+#
+# Vereiste GitHub Actions secrets (zelfde waarden als op Render):
+#   MAAIKE_CRON_SECRET  — zelfde secret als Render env MAAIKE_CRON_SECRET
+#   MAAIKE_TRIGGER_URL  — https://hamster-8zgq.onrender.com/api/report-planning/monthly-trend/trigger
+#
+# Productiemodus start nooit een betaalde AI-run als ENABLE_MONTHLY_TREND_PAID_AI
+# op Render nog op 0 staat; het endpoint blijft dan bij een prepared concept.
+
+name: Monthly trend wake-up
+
+on:
+  schedule:
+    # ~06:00 Europe/Amsterdam in zomertijd (CEST = UTC+2)
+    - cron: "5 4 * * *"
+    # ~06:00 Europe/Amsterdam in wintertijd (CET = UTC+1)
+    - cron: "5 5 * * *"
+    # Extra inhaalcontrole later op de ochtend (slapende Free-instance na wake)
+    - cron: "20 6 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "production (echte planning) of simulation (alleen test, geen bron voor klantrapport)"
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - simulation
+      year:
+        description: "Alleen voor simulation: expliciet jaar (leeg = huidige Amsterdam-maand)"
+        required: false
+        default: ""
+      month:
+        description: "Alleen voor simulation: expliciete maand 1-12 (leeg = huidige Amsterdam-maand)"
+        required: false
+        default: ""
+      simulated_datetime:
+        description: "Alleen voor simulation: ISO-tijdstip Europe/Amsterdam (bijv. 2027-01-02T07:00:00+01:00 voor inhaaltest)"
+        required: false
+        default: ""
+
+jobs:
+  trigger-monthly-trend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Wake Render Free + trigger monthly trend
+        env:
+          MAAIKE_CRON_SECRET: ${{ secrets.MAAIKE_CRON_SECRET }}
+          MAAIKE_TRIGGER_URL: ${{ secrets.MAAIKE_TRIGGER_URL }}
+          MODE: ${{ github.event.inputs.mode || 'production' }}
+          YEAR: ${{ github.event.inputs.year || '' }}
+          MONTH: ${{ github.event.inputs.month || '' }}
+          SIMULATED_DATETIME: ${{ github.event.inputs.simulated_datetime || '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MAAIKE_CRON_SECRET:-}" ]; then
+            echo "Missing GitHub secret MAAIKE_CRON_SECRET" >&2
+            exit 1
+          fi
+          if [ -z "${MAAIKE_TRIGGER_URL:-}" ]; then
+            echo "Missing GitHub secret MAAIKE_TRIGGER_URL" >&2
+            exit 1
+          fi
+
+          # 1) Wake slapende Render Free-service via open health-check (tot ~90s cold start)
+          HEALTH_URL="$(python3 - <<'PY'
+          from urllib.parse import urlparse
+          import os
+          u = urlparse(os.environ["MAAIKE_TRIGGER_URL"])
+          print(f"{u.scheme}://{u.netloc}/api/health")
+          PY
+          )"
+          echo "Waking service via ${HEALTH_URL}"
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS --max-time 20 "${HEALTH_URL}" >/tmp/hamster-health.json; then
+              echo "Health OK (poging ${i})"
+              cat /tmp/hamster-health.json
+              break
+            fi
+            echo "Health nog niet bereikbaar (poging ${i}); wacht 10s…"
+            sleep 10
+          done
+
+          # 2) Beveiligde trigger (idempotent: retries/gelijktijdige cron maken geen dubbel rapport)
+          python3 - <<'PY'
+          import json, os, sys, urllib.error, urllib.request
+
+          url = os.environ["MAAIKE_TRIGGER_URL"]
+          secret = os.environ["MAAIKE_CRON_SECRET"]
+          mode = (os.environ.get("MODE") or "production").strip().lower()
+          body = {
+              "mode": mode,
+              "trigger_source": "github_actions",
+          }
+          year = (os.environ.get("YEAR") or "").strip()
+          month = (os.environ.get("MONTH") or "").strip()
+          sim_dt = (os.environ.get("SIMULATED_DATETIME") or "").strip()
+          if mode == "simulation":
+              if year:
+                  body["year"] = int(year)
+              if month:
+                  body["month"] = int(month)
+              if sim_dt:
+                  body["simulated_datetime"] = sim_dt
+
+          data = json.dumps(body).encode("utf-8")
+          req = urllib.request.Request(
+              url,
+              data=data,
+              method="POST",
+              headers={
+                  "Content-Type": "application/json",
+                  "X-Cron-Secret": secret,
+                  "User-Agent": "hamster-github-actions-monthly-trend/1.0",
+              },
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=120) as resp:
+                  payload = json.loads(resp.read().decode("utf-8"))
+                  print(json.dumps(payload, ensure_ascii=False, indent=2))
+                  if payload.get("paid_ai_called"):
+                      print("NOTE: paid_ai_called=true")
+                  sys.exit(0)
+          except urllib.error.HTTPError as exc:
+              detail = exc.read().decode("utf-8", errors="replace")
+              print(f"HTTP {exc.code}: {detail}", file=sys.stderr)
+              sys.exit(1)
+          PY

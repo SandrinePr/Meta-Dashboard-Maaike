@@ -153,6 +153,7 @@ def test_point_28_first_of_month_amsterdam_schedule_and_idempotency(tmp_path: Pa
     assert first["period_month"] == 11
     assert first["timezone"] == "Europe/Amsterdam"
     assert first["title"] == "Algemeen trendrapport – november 2026"
+    assert first["paid_ai_called"] is False
 
     # Herstart / nieuwe poging op dezelfde 1e van de maand mag GEEN duplicaat maken
     retry = ensure_monthly_trend_report(
@@ -164,13 +165,14 @@ def test_point_28_first_of_month_amsterdam_schedule_and_idempotency(tmp_path: Pa
     assert retry["created"] is False
     assert retry["deduped"] is True
     assert retry["report_id"] == first["report_id"]
+    assert retry["paid_ai_called"] is False
 
     count = conn.execute(
         "SELECT COUNT(*) AS n FROM client_reports WHERE report_type = 'trend' AND period_year = 2026 AND period_month = 11"
     ).fetchone()["n"]
     assert count == 1
 
-    # Op de 2e van de maand met only_on_first_of_month=True doet de automatische tick niets
+    # Op de 2e van de maand met only_on_first_of_month=True doet de primaire tick niets
     non_first = ensure_monthly_trend_report(
         conn,
         now_amsterdam=datetime(2026, 12, 2, 6, 0, tzinfo=ZoneInfo("Europe/Amsterdam")),
@@ -178,7 +180,44 @@ def test_point_28_first_of_month_amsterdam_schedule_and_idempotency(tmp_path: Pa
         only_on_first_of_month=True,
     )
     assert non_first["skipped"] is True
+
+    # Inhaalrun na de 1e (zonder only_on_first) mag een gemiste maand alsnog aanmaken
+    catchup = ensure_monthly_trend_report(
+        conn,
+        now_amsterdam=datetime(2026, 12, 2, 7, 0, tzinfo=ZoneInfo("Europe/Amsterdam")),
+        simulate_without_paid_ai=True,
+        only_on_first_of_month=False,
+        allow_catchup_after_first=True,
+        enforce_due_time=True,
+    )
+    assert catchup["skipped"] is False
+    assert catchup["created"] is True
+    assert catchup["caught_up"] is True
+    assert catchup["period_year"] == 2026
+    assert catchup["period_month"] == 12
+    assert catchup["paid_ai_called"] is False
     conn.close()
+
+
+def _mark_trend_as_real_completed(conn, report_id: int) -> None:
+    """Promote a simulated trend row into a real completed report for client-report tests."""
+    import json
+
+    row = conn.execute("SELECT body_json FROM client_reports WHERE id = ?", (report_id,)).fetchone()
+    body = json.loads(row["body_json"] or "{}")
+    body.pop("simulation_without_paid_ai", None)
+    body.pop("test_label", None)
+    body["label"] = "Echt trendrapport (testdata zonder simulatievlag)"
+    conn.execute(
+        """
+        UPDATE client_reports
+        SET status = 'completed', is_mock = 0, body_json = ?,
+            usage_json = '{"status":"completed","paid_ai_called":true}',
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (json.dumps(body, ensure_ascii=False), datetime.now(tz=timezone.utc).isoformat(), report_id),
+    )
 
 
 def test_point_29_automatic_21_to_20_periods_and_year_rollover() -> None:
@@ -241,14 +280,22 @@ def test_points_30_31_32_33_calendar_year_formats_mandatory_trend_and_sources(tm
     with pytest.raises(ValueError, match="trendrapport"):
         prepare_client_report(conn, cid, period_year=2026, period_month=11)
 
-    # Maak nu het trendrapport voor november 2026 (simulatie zonder betaalde AI)
-    trend = ensure_monthly_trend_report(conn, year=2026, month=11, simulate_without_paid_ai=True)
-    assert trend["report_id"] > 0
+    # Gesimuleerd trendrapport mag NIET als bron voor een echt klantrapport dienen
+    trend_sim = ensure_monthly_trend_report(conn, year=2026, month=11, simulate_without_paid_ai=True)
+    assert trend_sim["report_id"] > 0
+    insp_sim = inspect_client_report_data(conn, cid, period_year=2026, period_month=11)
+    assert insp_sim["can_start_analysis"] is False
+    sim_sources = {s["id"]: s for s in insp_sim["sources_overview"]["sources"]}
+    assert sim_sources["trend"]["ready"] is False
+    assert sim_sources["trend"]["status"] == "simulated_not_usable"
+    with pytest.raises(ValueError, match="gesimuleerd"):
+        prepare_client_report(conn, cid, period_year=2026, period_month=11)
 
-    # Inspect koppelt nu automatisch het trendrapport van november 2026 en laat starten toe (ondanks ontbrekende optionele Figma-bron)
+    # Echt (niet-gesimuleerd) trendrapport voor november 2026 -> starten toegestaan
+    _mark_trend_as_real_completed(conn, trend_sim["report_id"])
     insp_ready = inspect_client_report_data(conn, cid, period_year=2026, period_month=11)
     assert insp_ready["can_start_analysis"] is True
-    assert insp_ready["linked_trend"]["id"] == trend["report_id"]
+    assert insp_ready["linked_trend"]["id"] == trend_sim["report_id"]
     ready_sources = {s["id"]: s for s in insp_ready["sources_overview"]["sources"]}
     assert ready_sources["trend"]["ready"] is True
     assert ready_sources["figma"]["ready"] is False
@@ -256,7 +303,7 @@ def test_points_30_31_32_33_calendar_year_formats_mandatory_trend_and_sources(tm
 
     prep_client = prepare_client_report(conn, cid, period_year=2026, period_month=11)
     snap = prep_client["report"]["input_snapshot"]
-    assert snap["linked_trend"]["id"] == trend["report_id"]
+    assert snap["linked_trend"]["id"] == trend_sim["report_id"]
     assert snap["format_pattern_window"]["label_nl"] == "1 januari 2026 t/m 20 november 2026"
     conn.close()
 
@@ -266,6 +313,7 @@ def test_api_monthly_trend_simulation_and_report_persistence(tmp_path: Path, mon
     initialize_database(db_path)
     monkeypatch.setenv("MAAIKE_DATABASE_PATH", str(db_path))
     monkeypatch.setenv("MAAIKE_PERSIST_ENABLED", "0")
+    monkeypatch.setenv("MAAIKE_CRON_SECRET", "test-cron-secret-point-28")
 
     from maaike_web.app import create_app
 
@@ -282,6 +330,7 @@ def test_api_monthly_trend_simulation_and_report_persistence(tmp_path: Path, mon
         assert sim.status_code == 200
         sim_data = sim.json()
         assert sim_data["created"] is True
+        assert sim_data["paid_ai_called"] is False
 
         sim_dup = http.post(
             "/api/report-planning/monthly-trend/simulate",
@@ -290,27 +339,65 @@ def test_api_monthly_trend_simulation_and_report_persistence(tmp_path: Path, mon
         assert sim_dup.status_code == 200
         assert sim_dup.json()["created"] is False
         assert sim_dup.json()["deduped"] is True
+        assert sim_dup.json()["paid_ai_called"] is False
 
-        prep = http.post(
+        # Gesimuleerd trendrapport blokkeert klantrapport-prepare
+        blocked = http.post(
             f"/api/clients/{cid}/reports/client/prepare",
             json={"period_year": 2026, "period_month": 11},
         )
-        assert prep.status_code == 200
-        rid = prep.json()["report"]["id"]
+        assert blocked.status_code == 400
+        assert "gesimuleerd" in blocked.json()["detail"].lower()
 
-        mock_res = http.post(
-            f"/api/clients/{cid}/reports/{rid}/mock",
-            json={"scenario": "success_with_sources"},
+        # Externe wake-up trigger: catch-up na de 1e in simulatiestand, daarna dedupe
+        catchup = http.post(
+            "/api/report-planning/monthly-trend/trigger",
+            headers={"X-Cron-Secret": "test-cron-secret-point-28"},
+            json={
+                "mode": "simulation",
+                "simulated_datetime": "2027-02-03T07:15:00+01:00",
+                "trigger_source": "unit_test_catchup",
+            },
         )
-        assert mock_res.status_code == 200
-        detail = mock_res.json()
-        assert detail["presentation"]["period_label_nl"] == "21 oktober 2026 t/m 20 november 2026"
-        assert detail["presentation"]["compare_label_nl"] == "21 september 2026 t/m 20 oktober 2026"
-        assert detail["presentation"]["format_pattern_period_nl"] == "1 januari 2026 t/m 20 november 2026"
-        assert detail["presentation"]["linked_trend"]["id"] == sim_data["report_id"]
+        assert catchup.status_code == 200
+        catch_body = catchup.json()
+        assert catch_body["paid_ai_called"] is False
+        assert catch_body["created"] is True
+        assert catch_body["caught_up"] is True
+        assert catch_body["period_year"] == 2027
+        assert catch_body["period_month"] == 2
+
+        catchup_dup = http.post(
+            "/api/report-planning/monthly-trend/trigger",
+            headers={"X-Cron-Secret": "test-cron-secret-point-28"},
+            json={
+                "mode": "simulation",
+                "simulated_datetime": "2027-02-03T08:00:00+01:00",
+                "trigger_source": "unit_test_catchup_retry",
+            },
+        )
+        assert catchup_dup.status_code == 200
+        assert catchup_dup.json()["created"] is False
+        assert catchup_dup.json()["deduped"] is True
+        assert catchup_dup.json()["paid_ai_called"] is False
+
+        bad_auth = http.post(
+            "/api/report-planning/monthly-trend/trigger",
+            headers={"X-Cron-Secret": "wrong"},
+            json={"mode": "simulation", "year": 2027, "month": 3},
+        )
+        assert bad_auth.status_code == 401
+
+        status = http.get("/api/report-planning/monthly-trend")
+        assert status.status_code == 200
+        st = status.json()
+        assert st["external_trigger_configured"] is True
+        assert st["external_trigger_endpoint"] == "/api/report-planning/monthly-trend/trigger"
+        assert st["catchup_after_first_enabled"] is True
+        assert st["timezone"] == "Europe/Amsterdam"
 
         listing = http.get(f"/api/clients/{cid}/reports")
         assert listing.status_code == 200
         ids = {r["id"] for r in listing.json()["reports"]}
-        assert rid in ids
         assert sim_data["report_id"] in ids
+        assert catch_body["report_id"] in ids

@@ -18,6 +18,7 @@ from pathlib import Path
 import base64
 import os
 import secrets
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -106,7 +107,14 @@ from maaike_web.settings import WebSettings, load_settings
 
 _COOKIE_MAX_AGE = 8 * 60 * 60
 _FRONTEND_DIST = project_root() / "frontend" / "dist"
-_PUBLIC_PATHS = frozenset({"/api/health", "/api/meta/callback"})
+_PUBLIC_PATHS = frozenset(
+    {
+        "/api/health",
+        "/api/meta/callback",
+        "/api/report-planning/monthly-trend/trigger",
+    }
+)
+_PROCESS_STARTED_AT = datetime.now(tz=timezone.utc).isoformat()
 
 
 class _OptionalBasicAuth(BaseHTTPMiddleware):
@@ -266,7 +274,10 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
-        return {"status": "ok"}
+        return {
+            "status": "ok",
+            "process_started_at": _PROCESS_STARTED_AT,
+        }
 
     @app.get("/api/ai-status")
     def ai_status() -> dict:
@@ -389,7 +400,9 @@ def create_app() -> FastAPI:
         from maaike.monthly_trend_scheduler import monthly_trend_schedule_status
 
         with transaction() as conn:
-            return monthly_trend_schedule_status(conn)
+            payload = monthly_trend_schedule_status(conn)
+            payload["process_started_at"] = _PROCESS_STARTED_AT
+            return payload
 
     @app.post("/api/report-planning/monthly-trend/simulate")
     def simulate_monthly_trend_schedule(body: dict | None = None) -> dict:
@@ -413,10 +426,113 @@ def create_app() -> FastAPI:
                     month=int(month_raw) if month_raw not in (None, "") else None,
                     simulate_without_paid_ai=True,
                     only_on_first_of_month=only_first,
+                    allow_catchup_after_first=not only_first,
+                    enforce_due_time=bool(sim_dt and year_raw in (None, "") and month_raw in (None, "")),
+                    trigger_source="ui_simulate",
                 )
                 result["schedule"] = monthly_trend_schedule_status(conn)
                 result["persist"] = _safe_persist_push(conn)
                 return result
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/report-planning/monthly-trend/trigger")
+    def trigger_monthly_trend_schedule(request: Request, body: dict | None = None) -> dict:
+        """Secured external cron/wake-up endpoint (e.g. GitHub Actions -> Render).
+
+        Authenticated via MAAIKE_CRON_SECRET using X-Cron-Secret, X-Maaike-Cron-Secret,
+        or Authorization: Bearer <secret>.
+        """
+        from maaike.monthly_trend_scheduler import (
+            monthly_trend_schedule_status,
+            run_monthly_trend_trigger,
+        )
+
+        expected_secret = os.getenv("MAAIKE_CRON_SECRET", "").strip()
+        if not expected_secret:
+            raise HTTPException(
+                status_code=503,
+                detail="MAAIKE_CRON_SECRET niet ingesteld op de server.",
+            )
+
+        provided = (
+            (request.headers.get("x-cron-secret") or "").strip()
+            or (request.headers.get("x-maaike-cron-secret") or "").strip()
+        )
+        if not provided:
+            auth_hdr = (request.headers.get("authorization") or "").strip()
+            if auth_hdr.lower().startswith("bearer "):
+                provided = auth_hdr[7:].strip()
+
+        if not provided or not secrets.compare_digest(provided, expected_secret):
+            raise HTTPException(
+                status_code=401,
+                detail="Ongeldige of ontbrekende cron-authenticatie.",
+            )
+
+        payload = body or {}
+        mode = str(payload.get("mode") or "production").strip().lower()
+        sim_dt = payload.get("simulated_datetime") or payload.get("now_amsterdam")
+        year_raw = payload.get("year")
+        month_raw = payload.get("month")
+        trigger_source = str(payload.get("trigger_source") or "github_actions").strip()[:80]
+
+        # Optional QA cleanup for temporary simulation test periods only (never deletes non-mock reports!)
+        if payload.get("cleanup_simulation_periods") and mode == "simulation":
+            periods = payload.get("cleanup_simulation_periods") or []
+            removed_reports = 0
+            removed_runs = 0
+            with transaction() as conn:
+                for item in periods:
+                    py = int(item["year"])
+                    pm = int(item["month"])
+                    sim_rows = conn.execute(
+                        """
+                        SELECT id FROM client_reports
+                        WHERE report_type = 'trend' AND period_year = ? AND period_month = ?
+                          AND (is_mock = 1 OR status = 'mock_completed')
+                        """,
+                        (py, pm),
+                    ).fetchall()
+                    for sr in sim_rows:
+                        rid = int(sr["id"])
+                        conn.execute("DELETE FROM client_report_sources WHERE report_id = ?", (rid,))
+                        conn.execute("DELETE FROM client_report_reviews WHERE report_id = ?", (rid,))
+                        conn.execute("DELETE FROM client_reports WHERE id = ? AND is_mock = 1", (rid,))
+                        removed_reports += 1
+                    cur = conn.execute(
+                        """
+                        DELETE FROM monthly_trend_schedule_runs
+                        WHERE period_year = ? AND period_month = ? AND run_scope = 'simulation'
+                        """,
+                        (py, pm),
+                    )
+                    removed_runs += int(cur.rowcount or 0)
+                sched = monthly_trend_schedule_status(conn)
+                persist_res = _safe_persist_push(conn)
+            return {
+                "cleaned": True,
+                "removed_simulation_reports": removed_reports,
+                "removed_simulation_runs": removed_runs,
+                "paid_ai_called": False,
+                "process_started_at": _PROCESS_STARTED_AT,
+                "schedule": sched,
+                "persist": persist_res,
+            }
+
+        try:
+            result = run_monthly_trend_trigger(
+                mode=mode,
+                now_amsterdam=sim_dt,
+                year=int(year_raw) if year_raw not in (None, "") else None,
+                month=int(month_raw) if month_raw not in (None, "") else None,
+                trigger_source=trigger_source,
+                record_external_audit=True,
+            )
+            with transaction() as conn:
+                result["schedule"] = monthly_trend_schedule_status(conn)
+            result["process_started_at"] = _PROCESS_STARTED_AT
+            return result
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

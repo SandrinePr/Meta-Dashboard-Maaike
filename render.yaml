@@ -70,3 +70,12 @@ services:
         sync: false
       - key: MAAIKE_PERSIST_PROVIDER
         value: github
+      # External wake-up for monthly trend on Render Free (GitHub Actions cron).
+      # Same secret value must be stored as GitHub Actions secret MAAIKE_CRON_SECRET.
+      - key: MAAIKE_CRON_SECRET
+        sync: false
+      # Keep 0 until paid monthly AI is explicitly approved. Trigger still wakes + catch-up works.
+      - key: ENABLE_MONTHLY_TREND_PAID_AI
+        value: "0"
+      - key: MAAIKE_MONTHLY_TREND_ACTIVE_FROM
+        value: "2026-12-01"

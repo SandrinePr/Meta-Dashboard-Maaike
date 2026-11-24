@@ -894,6 +894,32 @@ def execute_report(
     if row["status"] in {"completed", "mock_completed"} and row["executed_at"]:
         raise ValueError("Er is al een opgeslagen resultaat. Openen/herladen start geen nieuwe aanvraag.")
 
+    snap_check = json.loads(row["input_snapshot_json"] or "{}")
+    if row["report_type"] == "client":
+        from maaike.reports import is_simulated_report_row
+
+        linked_tid = row["linked_trend_report_id"] if "linked_trend_report_id" in row.keys() else None
+        if linked_tid is not None:
+            linked_row = conn.execute(
+                "SELECT * FROM client_reports WHERE id = ?",
+                (int(linked_tid),),
+            ).fetchone()
+            if linked_row is None or is_simulated_report_row(linked_row):
+                raise ValueError(
+                    "Een gesimuleerd trendrapport kan niet als bron voor een echt klantrapport dienen. "
+                    "Maak eerst een echt algemeen trendrapport aan."
+                )
+        snap_trend = snap_check.get("linked_trend")
+        if isinstance(snap_trend, dict) and (
+            bool(snap_trend.get("is_mock"))
+            or bool(snap_trend.get("is_simulated"))
+            or str(snap_trend.get("status") or "").strip().lower() == "mock_completed"
+        ):
+            raise ValueError(
+                "Een gesimuleerd trendrapport kan niet als bron voor een echt klantrapport dienen. "
+                "Maak eerst een echt algemeen trendrapport aan."
+            )
+
     if dry_run_paid:
         raise ValueError(
             "Betaalde uitvoering is in deze stap geblokkeerd (dry_run_paid). "

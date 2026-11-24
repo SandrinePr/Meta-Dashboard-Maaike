@@ -412,13 +412,47 @@ def test_execution_mocks_and_dry_run(tmp_path: Path, monkeypatch) -> None:
         assert fail["report"]["usage"].get("status") == "failed_may_still_cost"
         assert fail["report"]["usage"].get("cost_known") is False
 
-        # Client report mock with trend link + isolation of mock label
+        # Mock/gesimuleerd trendrapport mag niet als bron voor klantrapport dienen
+        try:
+            prepare_client_report(
+                conn,
+                client_id,
+                period_year=2026,
+                period_month=9,
+                linked_trend_report_id=ok["report"]["id"],
+                max_budget_usd=0.10,
+            )
+            mock_trend_blocked = False
+        except ValueError as exc:
+            mock_trend_blocked = "gesimuleerd" in str(exc).lower()
+        assert mock_trend_blocked
+
+        # Echt (niet-mock) voltooid trendrapport → klantrapport-mock mag wel linken
+        real_trend = prepare_trend_report(
+            conn, client_id, run_year=2026, run_month=9, research_mode="manual", sources=[]
+        )
+        conn.execute(
+            """
+            UPDATE client_reports
+            SET status = 'completed',
+                is_mock = 0,
+                body_json = ?,
+                executed_at = COALESCE(NULLIF(executed_at, ''), ?)
+            WHERE id = ?
+            """,
+            (
+                '{"label":"Echt trendrapport","chapters":{"samenvatting":"ok"},'
+                '"channels":{},"simulation_without_paid_ai":false}',
+                "2026-10-01T06:00:00+02:00",
+                real_trend["report"]["id"],
+            ),
+        )
         client_rep = prepare_client_report(
             conn,
             client_id,
             period_year=2026,
             period_month=9,
-            linked_trend_report_id=ok["report"]["id"],
+            linked_trend_report_id=real_trend["report"]["id"],
             max_budget_usd=0.10,
         )
         assert client_rep["report"]["input_snapshot"]["research_mode"] == "supplied_data"
