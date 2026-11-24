@@ -147,7 +147,7 @@ def sync_totals(conn, client_id: int) -> dict:
     """Sidebar Synchronisatie counts for one client. Missing comments stay null, never invent 0."""
     client = get_client(conn, client_id)
     if client is None:
-        raise ValueError("This client is not in the list.")
+        raise ValueError("Deze klant staat niet in de lijst. Kies een bestaande klant en probeer opnieuw.")
     posts = list_posts(conn, client_id)
     own_post_ids = {int(p.post_id) for p in posts}
     ig_posts = sum(1 for p in posts if p.platform == "instagram")
@@ -212,7 +212,7 @@ def filter_search_payload(
     """Search posts and comments like Original Filter posts."""
     client = get_client(conn, client_id)
     if client is None:
-        raise ValueError("This client is not in the list.")
+        raise ValueError("Deze klant staat niet in de lijst. Kies een bestaande klant en probeer opnieuw.")
     platforms = platforms or {"instagram", "facebook"}
     match_types = match_types or set(MATCH_TYPES)
     trimmed = (query or "").strip()

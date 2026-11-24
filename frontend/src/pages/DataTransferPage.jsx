@@ -20,7 +20,7 @@ export default function DataTransferPage() {
       const payload = await api("/api/import/preview", { method: "POST", body, raw: true });
       setPreview(payload);
       setFile(selected);
-      setNotice("Validation succeeded. Review the preview before import.");
+      setNotice("Controle geslaagd. Bekijk de voorvertoning voordat je importeert.");
     } catch (exc) {
       setPreview(null);
       setFile(null);
@@ -40,7 +40,7 @@ export default function DataTransferPage() {
       const q = overwrite ? "?overwrite=true" : "?overwrite=false";
       const payload = await api(`/api/import/apply${q}`, { method: "POST", body, raw: true });
       setNotice(
-        `Import completed. Backup: ${payload.backup}. Stats: ${JSON.stringify(payload.result?.stats || {})}`
+        `Import afgerond. Back-up: ${payload.backup}. Samenvatting: ${JSON.stringify(payload.result?.stats || {})}`
       );
       setPreview(null);
       setFile(null);
@@ -58,51 +58,53 @@ export default function DataTransferPage() {
   return (
     <div className="stack">
       <p className="hint">
-        Full dashboard export/import as versionable JSON (without API keys or Meta tokens). Post
-        Excel/CSV import and export live under Social posts → All posts → Import &amp; Export. Before
-        import a database backup is created automatically; on errors it is rolled back.
+        Volledige dashboard-export en -import als JSON (zonder API-sleutels of Meta-tokens).
+        Excel/CSV voor berichten staat bij Socialmediaberichten → Alle berichten → Importeren &amp;
+        exporteren. Voor import maakt HAMSTER automatisch een databaseback-up; bij fouten wordt die
+        teruggezet.
       </p>
 
       <section className="card stack">
-        <h3>Export</h3>
+        <h3>Exporteren</h3>
         <label>
-          Optional: one client ID only
+          Optioneel: alleen één klant-ID
           <input
             value={scopeClient}
             onChange={(e) => setScopeClient(e.target.value)}
-            placeholder="empty = all clients"
+            placeholder="leeg = alle klanten"
           />
         </label>
         <div className="row-actions wrap">
           <a className="primary" href={exportUrl}>
-            Download JSON backup
+            JSON-back-up downloaden
           </a>
           {scopeClient ? (
             <a className="secondary" href={`${API_URL}/api/clients/${scopeClient}/export/posts.csv`}>
-              Download posts CSV (client)
+              Berichten-CSV downloaden (klant)
             </a>
           ) : null}
           {scopeClient ? (
             <a className="secondary" href={`${API_URL}/api/clients/${scopeClient}/logs/export.csv`}>
-              Download content-logs CSV
+              Contentlogboek-CSV downloaden
             </a>
           ) : null}
           {scopeClient ? (
             <a className="secondary" href={`${API_URL}/api/clients/${scopeClient}/activity/export.csv`}>
-              Download activity CSV
+              Activiteiten-CSV downloaden
             </a>
           ) : null}
         </div>
         <p className="hint">
-          Included: client settings (without tokens), strategy, targets, formats/legends, content pillars, hooks,
-          post links, reports, activity/logs. Never: client_meta_secrets or API keys.
+          Inbegrepen: klantinstellingen (zonder tokens), strategie, doelen, formats/legenda,
+          contentpijlers, hooks, berichtkoppelingen, rapporten, activiteit/logboeken. Nooit:
+          client_meta_secrets of API-sleutels.
         </p>
       </section>
 
       <section className="card stack">
-        <h3>Import</h3>
+        <h3>Importeren</h3>
         <label className="secondary file-btn">
-          Choose JSON (preview)
+          JSON kiezen (voorvertoning)
           <input
             type="file"
             accept=".json,application/json"
@@ -116,24 +118,25 @@ export default function DataTransferPage() {
         </label>
         <label className="row-actions">
           <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />
-          Overwrite existing data (explicit choice)
+          Bestaande gegevens overschrijven (bewuste keuze)
         </label>
         {preview ? (
           <>
             <p className="banner">
-              Validation OK · version {preview.validation?.version} · exported {preview.validation?.exported_at || "—"}
+              Controle ok · versie {preview.validation?.version} · geëxporteerd{" "}
+              {preview.validation?.exported_at || "—"}
             </p>
             <pre className="hint" style={{ whiteSpace: "pre-wrap" }}>
               {JSON.stringify(preview.summary, null, 2)}
             </pre>
             <p className="hint">{preview.note}</p>
-            <h4>Sample actions</h4>
+            <h4>Voorbeeldacties</h4>
             <pre className="hint" style={{ whiteSpace: "pre-wrap", maxHeight: 280, overflow: "auto" }}>
               {JSON.stringify(preview.sample_actions, null, 2)}
             </pre>
             <div className="row-actions">
               <button className="primary" type="button" disabled={busy} onClick={runApply}>
-                {busy ? "Working…" : "Run import (after backup)"}
+                {busy ? "Bezig…" : "Import uitvoeren (na back-up)"}
               </button>
               <button
                 className="secondary"
@@ -143,7 +146,7 @@ export default function DataTransferPage() {
                   setFile(null);
                 }}
               >
-                Cancel
+                Annuleren
               </button>
             </div>
           </>

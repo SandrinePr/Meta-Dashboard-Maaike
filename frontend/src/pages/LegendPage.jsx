@@ -17,7 +17,7 @@ export default function LegendPage({ client, onNotice, onError }) {
         hooks: payload.hooks || [],
       });
     } catch (exc) {
-      setLoadError(exc.message || "Failed to load legend.");
+      setLoadError(exc.message || "De legenda kon niet worden geladen.");
       onError(exc.message);
       throw exc;
     } finally {
@@ -32,26 +32,27 @@ export default function LegendPage({ client, onNotice, onError }) {
   return (
     <div className="stack">
       <div className="search-form-header">
-        <h3>Legend</h3>
+        <h3>Legenda</h3>
       </div>
       <p className="hint">
-        Legend for <strong>{client.name}</strong>: formats, content pillars and hooks with explanations. Only
-        this client. Optional example URL per item. Linking to posts happens in Logs.
+        Legenda voor <strong>{client.name}</strong>: contentformats, contentpijlers en hooks met
+        uitleg. Alleen voor deze klant. Optioneel: een voorbeeld-URL per item. Koppelen aan
+        berichten gebeurt bij Socialmediaberichten.
       </p>
       {loadError ? (
         <p className="banner error">
-          Could not load the legend: {loadError}.{" "}
+          De legenda kon niet worden geladen: {loadError}.{" "}
           <button className="secondary" type="button" onClick={() => reload().catch(() => {})}>
-            Reload
+            Opnieuw laden
           </button>
         </p>
       ) : null}
-      {loading && !loadError ? <p className="muted">Loading legend…</p> : null}
+      {loading && !loadError ? <p className="muted">Legenda laden…</p> : null}
       <Catalog
-        title="Content formats"
-        intro="Name + explanation = the format legend. Optional voorbeeld-URL. Choose these later per post in Logs."
-        empty={`No content formats for ${client.name} yet. Add the first one below — this does not affect other clients.`}
-        addLabel="New content format"
+        title="Contentformats"
+        intro="Naam + uitleg = de formatlegenda. Optioneel een voorbeeld-URL. Kies deze later per bericht."
+        empty={`Nog geen contentformats voor ${client.name}. Voeg hieronder de eerste toe — dit raakt andere klanten niet.`}
+        addLabel="Nieuw contentformat"
         items={legend.formats || []}
         onCreate={(body) => api(`/api/clients/${client.id}/formats`, { method: "POST", body })}
         onUpdate={(item, body) => api(`/api/clients/${client.id}/formats/${item.id}`, { method: "PATCH", body })}
@@ -62,10 +63,10 @@ export default function LegendPage({ client, onNotice, onError }) {
         onError={onError}
       />
       <Catalog
-        title="Content pillars"
-        intro="Pillars apply only to this client."
-        empty={`No content pillars for ${client.name} yet. Add one to categorise posts.`}
-        addLabel="New content pillar"
+        title="Contentpijlers"
+        intro="Pijlers gelden alleen voor deze klant."
+        empty={`Nog geen contentpijlers voor ${client.name}. Voeg er een toe om berichten te categoriseren.`}
+        addLabel="Nieuwe contentpijler"
         items={legend.pillars || []}
         onCreate={(body) => api(`/api/clients/${client.id}/pillars`, { method: "POST", body })}
         onUpdate={(item, body) => api(`/api/clients/${client.id}/pillars/${item.id}`, { method: "PATCH", body })}
@@ -77,9 +78,9 @@ export default function LegendPage({ client, onNotice, onError }) {
       />
       <Catalog
         title="Hooks"
-        intro="Hooks as reusable legend items. On a post you can pick a hook or type freely."
-        empty={`No hooks in the legend for ${client.name} yet. Optional: add fixed hooks.`}
-        addLabel="New hook"
+        intro="Hooks als vaste legenda-items. Bij een bericht kies je een hook of typ je vrij."
+        empty={`Nog geen hooks in de legenda voor ${client.name}. Optioneel: voeg vaste hooks toe.`}
+        addLabel="Nieuwe hook"
         items={legend.hooks || []}
         onCreate={(body) => api(`/api/clients/${client.id}/hooks`, { method: "POST", body })}
         onUpdate={(item, body) => api(`/api/clients/${client.id}/hooks/${item.id}`, { method: "PATCH", body })}
@@ -106,7 +107,7 @@ function Catalog({ title, intro, empty, addLabel, items, onCreate, onUpdate, onS
       setName("");
       setExplanation("");
       setExampleUrl("");
-      await onSaved("Saved.");
+      await onSaved("Opgeslagen.");
     } catch (exc) {
       onError(exc.message);
     }
@@ -125,11 +126,11 @@ function Catalog({ title, intro, empty, addLabel, items, onCreate, onUpdate, onS
       <form className="catalog-form" onSubmit={addItem}>
         <strong>{addLabel}</strong>
         <label>
-          Name
+          Naam
           <input value={name} onChange={(event) => setName(event.target.value)} />
         </label>
         <label>
-          Explanation
+          Uitleg
           <textarea value={explanation} onChange={(event) => setExplanation(event.target.value)} />
         </label>
         <label>
@@ -141,7 +142,7 @@ function Catalog({ title, intro, empty, addLabel, items, onCreate, onUpdate, onS
           />
         </label>
         <button className="primary" type="submit">
-          Add
+          Toevoegen
         </button>
       </form>
     </section>
@@ -164,7 +165,7 @@ function ItemForm({ item, onUpdate, onSaved, onError }) {
     onError("");
     try {
       await onUpdate(item, { name, explanation, example_url: exampleUrl });
-      await onSaved("Saved.");
+      await onSaved("Opgeslagen.");
     } catch (exc) {
       onError(exc.message);
     }
@@ -173,11 +174,11 @@ function ItemForm({ item, onUpdate, onSaved, onError }) {
   return (
     <form className="catalog-form" onSubmit={save}>
       <label>
-        Name
+        Naam
         <input value={name} onChange={(event) => setName(event.target.value)} />
       </label>
       <label>
-        Explanation
+        Uitleg
         <textarea value={explanation} onChange={(event) => setExplanation(event.target.value)} />
       </label>
       <label>
@@ -196,7 +197,7 @@ function ItemForm({ item, onUpdate, onSaved, onError }) {
         </p>
       ) : null}
       <button className="secondary" type="submit">
-        Save
+        Opslaan
       </button>
     </form>
   );

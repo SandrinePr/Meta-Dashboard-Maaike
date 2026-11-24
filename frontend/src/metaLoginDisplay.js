@@ -35,14 +35,14 @@ export function metaAttemptBanner({
     return {
       kind: "error",
       text: label
-        ? `Status: Nog niet gekoppeld — ${detail}`
+        ? `Nog niet gekoppeld — ${detail}`
         : detail,
     };
   }
   if (statusLabel) {
     return {
       kind: connected ? "ok" : "error",
-      text: connected ? "Status: Gekoppeld" : "Status: Nog niet gekoppeld",
+      text: connected ? "Gekoppeld" : "Nog niet gekoppeld",
     };
   }
   return null;

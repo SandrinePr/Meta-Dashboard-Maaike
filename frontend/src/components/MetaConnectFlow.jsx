@@ -39,7 +39,7 @@ export default function MetaConnectFlow({
   if (connected && !choosing) {
     return (
       <section className="card stack meta-step">
-        {!compact ? <p className="step-label">Status</p> : null}
+        {!compact ? <p className="step-label">Stand</p> : null}
         <h3>Gekoppeld</h3>
         <p className="status setup-status is-ready">Klaar</p>
         {meta.page_name ? (
@@ -60,7 +60,7 @@ export default function MetaConnectFlow({
         <div className="row-actions">
           {onFetchPosts ? (
             <button className="primary" type="button" onClick={onFetchPosts}>
-              Posts ophalen
+              Berichten ophalen
             </button>
           ) : null}
           <button className="secondary" type="button" disabled={Boolean(busy)} onClick={onRecheck}>

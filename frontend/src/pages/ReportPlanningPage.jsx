@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 
 const FETCH_LABEL = {
-  updated: "Posts/cijfers ok",
+  updated: "Berichten/cijfers ok",
   partial: "Deels beschikbaar",
   failed: "Nog geen bruikbare data",
   pending: "Nog niet bekeken",
@@ -321,7 +321,7 @@ export default function ReportPlanningPage() {
                 <tr>
                   <th>Maand</th>
                   <th>Rapport</th>
-                  <th>Status</th>
+                  <th>Stand</th>
                   <th>Laatste controle ({trendSched.timezone || "Europe/Amsterdam"})</th>
                 </tr>
               </thead>

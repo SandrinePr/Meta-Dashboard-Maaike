@@ -116,7 +116,7 @@ def test_starts_without_meta_or_ai_keys(api: TestClient, monkeypatch: pytest.Mon
     assert meta.status_code == 200
     body = meta.json()
     assert body["connected"] is False
-    assert body["status_label"] == "Not connected"
+    assert body["status_label"] == "Nog niet gekoppeld"
     assert body["ready"] is False
     assert "super-secret-value" not in meta.text
 
@@ -213,7 +213,7 @@ def test_unverified_status_is_not_called_connected(api: TestClient) -> None:
     body = api.get("/api/clients").json()
     client = next(item for item in body["clients"] if item["id"] == created["id"])
     assert client["connected"] is False
-    assert client["status_label"] == "Not connected"
+    assert client["status_label"] == "Nog niet gekoppeld"
     assert "access_token" not in api.get("/api/clients").text
 
 
@@ -282,7 +282,7 @@ def test_meta_login_hides_secrets_and_rejects_a_reused_state(api: TestClient, mo
     listed = api.get("/api/clients").text
     assert "page-token-secret" not in listed
     assert "user-token-secret" not in listed
-    assert "Connected to Pagina (@studio)" in listed
+    assert "Gekoppeld met Pagina (@studio)" in listed
 
     with transaction() as conn:
         token = conn.execute("SELECT page_access_token FROM client_meta_secrets").fetchone()[0]

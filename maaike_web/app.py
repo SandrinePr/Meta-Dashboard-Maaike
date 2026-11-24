@@ -145,7 +145,7 @@ class _OptionalBasicAuth(BaseHTTPMiddleware):
             ):
                 return await call_next(request)
         return Response(
-            content="Authentication required.",
+            content="Authenticatie vereist.",
             status_code=401,
             headers={"WWW-Authenticate": 'Basic realm="HAMSTER"'},
             media_type="text/plain",
@@ -268,9 +268,9 @@ def create_app() -> FastAPI:
     @app.exception_handler(Exception)
     async def unhandled(request: Request, exc: Exception):
         if isinstance(exc, HTTPException):
-            detail = exc.detail if isinstance(exc.detail, str) else "Request failed."
+            detail = exc.detail if isinstance(exc.detail, str) else "De aanvraag is mislukt."
             return JSONResponse(status_code=exc.status_code, content={"detail": detail})
-        return JSONResponse(status_code=500, content={"detail": "Something went wrong."})
+        return JSONResponse(status_code=500, content={"detail": "Er ging iets mis. Probeer het opnieuw of vraag een beheerder."})
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -674,7 +674,7 @@ def create_app() -> FastAPI:
                 (post_id, client_id),
             ).fetchone()
             if owned is None:
-                raise HTTPException(status_code=404, detail="Post not found for this client.")
+                raise HTTPException(status_code=404, detail="Dit bericht hoort niet bij deze klant.")
             return {"post_id": post_id, "assets": list_post_media(conn, client_id, post_id)}
 
     @app.post("/api/clients/{client_id}/posts/{post_id}/media")
@@ -770,7 +770,7 @@ def create_app() -> FastAPI:
             "observations": [
                 {
                     "evidence_ref": "caption/media",
-                    "fact": "Mock observation — no real model output.",
+                    "fact": "Simulatiewaarneming — geen echt modelresultaat.",
                 }
             ],
             "proposed_format_code": payload.get("proposed_format_code")
@@ -781,10 +781,10 @@ def create_app() -> FastAPI:
             "proposed_pillar": payload.get("proposed_pillar") or "Niet vast te stellen",
             "proposed_hook": payload.get("proposed_hook") or "Niet vast te stellen",
             "ai_insight": payload.get("ai_insight")
-            or "Mock insight: storage and UI test only.",
-            "ai_action": payload.get("ai_action") or "Mock action: not production advice.",
+            or "Simulatie-inzicht: alleen opslag- en schermtest.",
+            "ai_action": payload.get("ai_action") or "Simulatie-actie: geen productieadvies.",
             "hypotheses": [],
-            "unassessable": ["No real model analysis in this mock."],
+            "unassessable": ["Geen echte modelanalyse in deze simulatie."],
         }
         usage = payload.get("usage") or {
             "status": "mock_completed",
@@ -1114,7 +1114,7 @@ def create_app() -> FastAPI:
         except ClientInputError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if client is None:
-            raise HTTPException(status_code=400, detail="The client could not be added.")
+            raise HTTPException(status_code=400, detail="De klant kon niet worden toegevoegd.")
         payload = _client_out(client)
         payload["persist"] = persist
         return payload
@@ -1130,7 +1130,7 @@ def create_app() -> FastAPI:
         except ClientInputError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if client is None:
-            raise HTTPException(status_code=404, detail="This client is not in the list.")
+            raise HTTPException(status_code=404, detail="Deze klant staat niet in de lijst.")
         payload = _client_out(client)
         payload["persist"] = persist
         return payload
@@ -1287,7 +1287,7 @@ def create_app() -> FastAPI:
             _require_client(conn, client_id)
             item = post_detail(conn, client_id, post_id)
         if item is None:
-            raise HTTPException(status_code=404, detail="This post does not belong to the selected client.")
+            raise HTTPException(status_code=404, detail="Dit bericht hoort niet bij de geselecteerde klant.")
         return item
 
     @app.get("/api/clients/{client_id}/posts/{post_id}/analysis-panel")
@@ -1669,7 +1669,7 @@ def create_app() -> FastAPI:
             platform_key, permalink
         )
         if not external_id:
-            raise HTTPException(status_code=400, detail="Provide a post URL or external ID.")
+            raise HTTPException(status_code=400, detail="Vul een bericht-URL of extern ID in.")
         published_at = str((body or {}).get("published_at") or datetime.now(tz=timezone.utc).date().isoformat())
         now = datetime.now(tz=timezone.utc).isoformat()
         with transaction() as conn:
@@ -1826,7 +1826,7 @@ def create_app() -> FastAPI:
         try:
             payload = json_mod.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json_mod.JSONDecodeError) as exc:
-            raise HTTPException(status_code=400, detail="Invalid JSON file.") from exc
+            raise HTTPException(status_code=400, detail="Ongeldig JSON-bestand.") from exc
         try:
             with transaction() as conn:
                 return preview_import(conn, payload)
@@ -1844,7 +1844,7 @@ def create_app() -> FastAPI:
         try:
             payload = json_mod.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json_mod.JSONDecodeError) as exc:
-            raise HTTPException(status_code=400, detail="Invalid JSON file.") from exc
+            raise HTTPException(status_code=400, detail="Ongeldig JSON-bestand.") from exc
         try:
             backup_path = create_pre_import_backup()
             with transaction() as conn:
@@ -2170,7 +2170,7 @@ def create_app() -> FastAPI:
         payload = body or {}
         pages = payload.get("pages") or []
         if not isinstance(pages, list) or not pages:
-            raise HTTPException(status_code=400, detail="Provide pages=[{page_name,page_node_id,xml}].")
+            raise HTTPException(status_code=400, detail="Geef pages=[{page_name,page_node_id,xml}] mee.")
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
@@ -2179,7 +2179,7 @@ def create_app() -> FastAPI:
                     client_id,
                     pages,
                     file_key=str(payload.get("file_key") or ""),
-                    note=str(payload.get("note") or "Snapshot import"),
+                    note=str(payload.get("note") or "Snapshot-import"),
                 )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2323,7 +2323,7 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except KeyError as exc:
-            raise HTTPException(status_code=400, detail="Metric value is missing.") from exc
+            raise HTTPException(status_code=400, detail="Meetwaarde ontbreekt.") from exc
 
     @app.get("/api/clients/{client_id}/meta")
     def read_meta(client_id: int, request: Request) -> dict:
@@ -2348,7 +2348,7 @@ def create_app() -> FastAPI:
         if not info.ready or not info.redirect_uri:
             raise HTTPException(
                 status_code=400,
-                detail="Meta login is not configured yet. Ask an admin to check the configuration.",
+                detail="Meta-login is nog niet ingesteld. Vraag een beheerder om de configuratie te controleren.",
             )
         state = arm_login(session_id, client.client_id, info.redirect_uri, popup=popup)
         try:
@@ -2360,8 +2360,8 @@ def create_app() -> FastAPI:
                 "login_url": login_url,
                 "popup": popup,
                 "message": (
-                    "Sign in to Meta in the window that opens. "
-                    "Status becomes Connected only after you pick a page and the check succeeds."
+                    "Log in bij Meta in het venster dat opent. "
+                    "De status wordt Gekoppeld pas nadat je een pagina kiest en de controle slaagt."
                 ),
             }
         )
@@ -2376,11 +2376,11 @@ def create_app() -> FastAPI:
         if pending is None:
             raise HTTPException(
                 status_code=400,
-                detail="This Meta login does not belong to this session. Start connecting again.",
+                detail="Deze Meta-login hoort niet bij deze sessie. Start de koppeling opnieuw.",
             )
         option = selectable_page(pending, body.page_index)
         if option is None:
-            raise HTTPException(status_code=400, detail="Choose a Facebook page with a professional Instagram account.")
+            raise HTTPException(status_code=400, detail="Kies een Facebookpagina met een professioneel Instagram-account.")
         try:
             with transaction() as conn:
                 _require_client(conn, client_id)
@@ -2394,7 +2394,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         clear_pending(session_id)
         response = JSONResponse(
-            {"message": f"Connected to {page_name}.", "connected": True}
+            {"message": f"Gekoppeld met {page_name}.", "connected": True}
         )
         if cookie:
             _set_cookie(response, cookie, settings)
@@ -2427,7 +2427,7 @@ def create_app() -> FastAPI:
             "disconnected": True,
             "message": (
                 f"Disconnected Meta for this client only ({account}). "
-                "Saved posts, strategy, legends and reports were kept."
+                "Opgeslagen berichten, strategie, legenda's en rapporten zijn behouden."
             ),
             "client_id": client_id,
             "client_name": client.name,
@@ -2457,7 +2457,7 @@ def create_app() -> FastAPI:
             return _front_redirect(
                 settings_now,
                 None,
-                "Meta login was cancelled or denied.",
+                "Meta-login is geannuleerd of geweigerd.",
                 popup=popup,
             )
         code = request.query_params.get("code") or ""
@@ -2492,12 +2492,12 @@ def create_app() -> FastAPI:
         @app.get("/{full_path:path}")
         def spa_fallback(full_path: str) -> FileResponse:
             if full_path.startswith("api/"):
-                raise HTTPException(status_code=404, detail="Not found.")
+                raise HTTPException(status_code=404, detail="Niet gevonden.")
             candidate = (_FRONTEND_DIST / full_path).resolve()
             try:
                 candidate.relative_to(_FRONTEND_DIST.resolve())
             except ValueError as exc:
-                raise HTTPException(status_code=404, detail="Not found.") from exc
+                raise HTTPException(status_code=404, detail="Niet gevonden.") from exc
             if candidate.is_file():
                 return FileResponse(candidate)
             return FileResponse(_FRONTEND_DIST / "index.html")
@@ -2513,7 +2513,7 @@ async def _resolve_excel_upload(client_id: int, file: UploadFile | None) -> Path
         if not default.exists() or default.stat().st_size < 1000:
             raise HTTPException(
                 status_code=400,
-                detail="No Excel upload and no local RRO_Social_strategie_overzicht_2026.xlsx found.",
+                detail="Geen Excel-upload en geen lokaal bestand RRO_Social_strategie_overzicht_2026.xlsx gevonden.",
             )
         return default
     dest = imports_dir / f"upload-client-{client_id}-{file.filename}"
@@ -2570,9 +2570,9 @@ def _posts_payload(client_id: int) -> dict:
     if client.last_fetch_detail:
         fetch_message = client.last_fetch_detail
     elif connected:
-        fetch_message = "Connection verified. Fetch posts only loads posts for this client."
+        fetch_message = "Koppeling gecontroleerd. Berichten ophalen laadt alleen berichten van deze klant."
     else:
-        fetch_message = "Fetch posts stays closed until this client is connected and verified."
+        fetch_message = "Berichten ophalen blijft dicht tot deze klant is gekoppeld en gecontroleerd."
 
     rated_posts = []
     for post in posts:
@@ -2622,9 +2622,9 @@ def _posts_payload(client_id: int) -> dict:
         "fetch_status": client.last_fetch_status,
         "fetch_message": fetch_message,
         "empty_message": (
-            f"No posts yet for {client.name}. "
-            "No sample posts were added. "
-            "Fetch posts is available only after the Meta connection for this client is verified."
+            f"Nog geen berichten voor {client.name}. "
+            "Er zijn geen voorbeeldbberichten toegevoegd. "
+            "Berichten ophalen is pas beschikbaar nadat de Meta-koppeling van deze klant is gecontroleerd."
         ),
         "rating_settings": {
             "active": rating_settings.get("active"),
@@ -2689,7 +2689,7 @@ def _remember_failure(client_id: int, exc: MetaConnectError, *, replace_verified
 def _require_client(conn, client_id: int) -> Client:
     client = get_client(conn, client_id)
     if client is None:
-        raise HTTPException(status_code=404, detail="This client is not in the list.")
+        raise HTTPException(status_code=404, detail="Deze klant staat niet in de lijst.")
     return client
 
 
@@ -2705,7 +2705,7 @@ def _add_legend(client_id: int, kind: str, body: LegendBody) -> dict:
             elif kind == "hook":
                 add_hook(conn, client_id, body.name, body.explanation, example_url=url)
             else:
-                raise HTTPException(status_code=400, detail="Unknown legend type.")
+                raise HTTPException(status_code=400, detail="Onbekend legendatype.")
             payload = _legend_out(conn, client_id)
     except (LegendInputError, ClientInputError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2724,7 +2724,7 @@ def _update_legend(client_id: int, kind: str, item_id: int, body: LegendBody) ->
             elif kind == "hook":
                 update_hook(conn, client_id, item_id, body.name, body.explanation, example_url=url)
             else:
-                raise HTTPException(status_code=400, detail="Unknown legend type.")
+                raise HTTPException(status_code=400, detail="Onbekend legendatype.")
             payload = _legend_out(conn, client_id)
     except (LegendInputError, ClientInputError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2775,13 +2775,13 @@ def _meta_out(client: Client, settings: WebSettings) -> dict:
     user_notes: list[str] = []
     if not info.ready:
         user_notes.append(
-            "Meta login is not ready yet. Ask an admin to check the app configuration."
+            "Meta-login is nog niet klaar. Vraag een beheerder om de app-instellingen te controleren."
         )
     elif connected:
-        user_notes.append("You can recheck the connection or reconnect.")
+        user_notes.append("Je kunt de koppeling controleren of opnieuw koppelen.")
     else:
         user_notes.append(
-            "Log in to Meta and choose the Facebook page with the professional Instagram account for this client."
+            "Log in bij Meta en kies de Facebook-pagina met het professionele Instagram-account van deze klant."
         )
         if client.meta_status in {"revoked", "expired", "error"} and (
             client.meta_page_name or client.meta_ig_username
@@ -2791,19 +2791,19 @@ def _meta_out(client: Client, settings: WebSettings) -> dict:
                 last = f"{last} (@{client.meta_ig_username})".strip() if last else f"@{client.meta_ig_username}"
             user_notes.insert(
                 0,
-                f"Last linked account: {last}. Access is no longer valid — reconnect.",
+                f"Laatst gekoppeld account: {last}. De toegang is niet meer geldig — koppel opnieuw.",
             )
     admin_notes = [
-        "Tokens stay server-side in the local database and are not shown.",
-        "That database is not encrypted. Do not host this dashboard on the current TAOL service.",
+        "Tokens blijven server-side in de lokale database en worden niet getoond.",
+        "Die database is niet versleuteld. Host dit dashboard niet op de huidige TAOL-service.",
     ]
     if info.ready and info.uses_configuration:
-        admin_notes.insert(0, "Login uses the configured Meta login configuration.")
+        admin_notes.insert(0, "Login gebruikt de geconfigureerde Meta-loginconfiguratie.")
     elif info.ready:
         scopes = ", ".join(LOGIN_SCOPES)
         admin_notes.insert(
             0,
-            "MAAIKE_META_LOGIN_CONFIG_ID is not set. The button requests these permissions directly: "
+            "MAAIKE_META_LOGIN_CONFIG_ID is niet gezet. De knop vraagt deze rechten direct aan: "
             f"{scopes}.",
         )
     base = _client_out(client)
@@ -2811,12 +2811,12 @@ def _meta_out(client: Client, settings: WebSettings) -> dict:
         {
             "ready": info.ready,
             "missing": [
-                "Meta login is not configured yet. Ask an admin for help."
+                "Meta-login is nog niet ingesteld. Vraag een beheerder om hulp."
             ]
             if info.missing
             else [],
             "notes": user_notes,
-            "reconnect_label": "Reconnect" if connected else "Connect Facebook and Instagram",
+            "reconnect_label": "Opnieuw koppelen" if connected else "Facebook en Instagram koppelen",
             "page_name": client.meta_page_name,
             "ig_username": client.meta_ig_username,
             "admin": {

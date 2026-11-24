@@ -566,8 +566,8 @@ def test_connected_label_requires_a_verified_timestamp() -> None:
         meta_token_expires_at=None,
         meta_last_checked_at=None,
     )
-    assert connection_label(bare) == "Not connected"
-    assert connection_label(checked) == "Connected to Pagina (@studio)"
+    assert connection_label(bare) == "Nog niet gekoppeld"
+    assert connection_label(checked) == "Gekoppeld met Pagina (@studio)"
 
 
 def test_login_url_hides_the_secret_and_missing_config_cannot_connect(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -649,7 +649,7 @@ def test_page_is_stored_only_after_a_matching_check(tmp_path: Path, monkeypatch:
     with transaction() as conn:
         client = get_client(conn, client_id)
         assert client is not None
-        assert connection_label(client) == "Not connected"
+        assert connection_label(client) == "Nog niet gekoppeld"
         assert conn.execute("SELECT COUNT(*) FROM client_meta_secrets").fetchone()[0] == 0
         with pytest.raises(ValueError):
             mark_link_failed(conn, client_id, status="connected", detail="nee")
@@ -667,7 +667,7 @@ def test_page_is_stored_only_after_a_matching_check(tmp_path: Path, monkeypatch:
     with transaction() as conn:
         client = get_client(conn, client_id)
         assert client is not None
-        assert connection_label(client) == "Connected to Pagina (@studio)"
+        assert connection_label(client) == "Gekoppeld met Pagina (@studio)"
         assert "page-token" not in repr(client)
         assert "user-token" not in repr(client)
         record_failed_attempt(
@@ -679,7 +679,7 @@ def test_page_is_stored_only_after_a_matching_check(tmp_path: Path, monkeypatch:
     with transaction() as conn:
         client = get_client(conn, client_id)
         assert client is not None
-        assert connection_label(client) == "Connected to Pagina (@studio)"
+        assert connection_label(client) == "Gekoppeld met Pagina (@studio)"
         record_failed_attempt(
             conn,
             client_id,
@@ -690,7 +690,7 @@ def test_page_is_stored_only_after_a_matching_check(tmp_path: Path, monkeypatch:
         client = get_client(conn, client_id)
         assert client is not None
         assert client.meta_status == "revoked"
-        assert connection_label(client) == "Access revoked"
+        assert connection_label(client) == "Toegang ingetrokken — koppel opnieuw"
         assert conn.execute("SELECT COUNT(*) FROM client_meta_secrets").fetchone()[0] == 0
         assert "page-token" not in (client.meta_status_detail or "")
 

@@ -655,7 +655,7 @@ export default function ComparisonPage({ client, onOpenConnect }) {
                         color: rowNeedsAction ? "#fcd34d" : "#a1baca",
                       }}
                     >
-                      <strong>{rowNeedsAction ? "Benodigde actie: " : "Status: "}</strong>
+                      <strong>{rowNeedsAction ? "Wat je kunt doen: " : "Stand: "}</strong>
                       {row.action_label || "Klik op ‘Opnieuw ophalen’ om berichten te vernieuwen."}
                     </p>
 

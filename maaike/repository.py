@@ -108,7 +108,7 @@ def _table(kind: str) -> str:
     try:
         return _TABLES[kind]
     except KeyError as exc:
-        raise ValueError(f"Unknown legend type: {kind}") from exc
+        raise ValueError(f"Onbekend legendatype: {kind}") from exc
 
 
 def _clean_name(name: str, *, empty_message: str) -> str:
@@ -120,14 +120,14 @@ def _clean_name(name: str, *, empty_message: str) -> str:
             "Choose a different name. The — character means ‘no selection’ in the post overview."
         )
     if len(cleaned) > 120:
-        raise LegendInputError("The name may be at most 120 characters.")
+        raise LegendInputError("De naam mag maximaal 120 tekens zijn.")
     return cleaned
 
 
 def _clean_explanation(explanation: str) -> str:
     cleaned = explanation.strip()
     if len(cleaned) > 5000:
-        raise LegendInputError("The explanation may be at most 5000 characters.")
+        raise LegendInputError("De uitleg mag maximaal 5000 tekens zijn.")
     return cleaned
 
 
@@ -206,7 +206,7 @@ def add_client(conn: sqlite3.Connection, name: str) -> int:
 def rename_client(conn: sqlite3.Connection, client_id: int, name: str) -> None:
     cleaned = _client_name(name)
     if get_client(conn, client_id) is None:
-        raise ClientInputError("This client is no longer in the list.")
+        raise ClientInputError("Deze klant staat niet meer in de lijst.")
     try:
         conn.execute(
             "UPDATE clients SET name = ?, updated_at = ? WHERE id = ?",
@@ -420,18 +420,18 @@ def is_verified_link(client: Client) -> bool:
 
 
 def connection_label(client: Client) -> str:
-    """English UI label. Only a verified link may be described as Connected."""
+    """Dutch UI label. Only a verified link may be described as gekoppeld."""
     if is_verified_link(client):
         page = client.meta_page_name
         if client.meta_ig_username:
-            return f"Connected to {page} (@{client.meta_ig_username})"
-        return f"Connected to {page}"
+            return f"Gekoppeld met {page} (@{client.meta_ig_username})"
+        return f"Gekoppeld met {page}"
     labels = {
-        "expired": "Access expired",
-        "revoked": "Access revoked",
-        "error": "Connection failed",
+        "expired": "Toegang verlopen — koppel opnieuw",
+        "revoked": "Toegang ingetrokken — koppel opnieuw",
+        "error": "Koppeling mislukt — probeer opnieuw",
     }
-    return labels.get(client.meta_status, "Not connected")
+    return labels.get(client.meta_status, "Nog niet gekoppeld")
 
 
 def save_verified_link(
@@ -448,14 +448,14 @@ def save_verified_link(
 ) -> None:
     """Store a link that has already been checked against Meta."""
     if get_client(conn, client_id) is None:
-        raise ClientInputError("This client is no longer in the list.")
+        raise ClientInputError("Deze klant staat niet meer in de lijst.")
     page_id = page_id.strip()
     page_name = page_name.strip()
     ig_user_id = ig_user_id.strip()
     user_token = user_token.strip()
     page_token = page_token.strip()
     if not all((page_id, page_name, ig_user_id, user_token, page_token)):
-        raise ClientInputError("The page or Instagram account was not fully verified.")
+        raise ClientInputError("De pagina of het Instagram-account is niet volledig gecontroleerd.")
     now = _now()
     conn.execute(
         """
@@ -544,14 +544,14 @@ def mark_link_rechecked(
         (page_name.strip(), (ig_username or "").strip() or None, now, now, client_id),
     )
     if cursor.rowcount != 1:
-        raise ClientInputError("There is no verified connection.")
+        raise ClientInputError("Er is geen gecontroleerde koppeling.")
 
 
 def disconnect_meta_link(conn: sqlite3.Connection, client_id: int) -> dict[str, str | None]:
     """Drop Meta tokens for this client only. Keep posts, strategy, legends and reports."""
     client = get_client(conn, client_id)
     if client is None:
-        raise ClientInputError("This client is no longer in the list.")
+        raise ClientInputError("Deze klant staat niet meer in de lijst.")
     page_name = (client.meta_page_name or "").strip() or None
     ig_username = (client.meta_ig_username or "").strip() or None
     mark_link_failed(
@@ -582,7 +582,7 @@ def mark_link_failed(
         raise ValueError("A failed connection must not be stored as connected.")
     client = get_client(conn, client_id)
     if client is None:
-        raise ClientInputError("This client is no longer in the list.")
+        raise ClientInputError("Deze klant staat niet meer in de lijst.")
     now = _now()
     page_name = (client.meta_page_name or "").strip() or None
     ig_username = (client.meta_ig_username or "").strip() or None
@@ -673,7 +673,7 @@ def add_item(
     note = _clean_explanation(explanation)
     url = str(example_url or "").strip()
     if _name_taken(conn, table, client_id, cleaned, exclude_id=None):
-        raise DuplicateLegendName(f"The name '{cleaned}' already exists for this client.")
+        raise DuplicateLegendName(f"De naam '{cleaned}' bestaat al voor deze klant.")
     now = _now()
     try:
         cursor = conn.execute(
@@ -684,7 +684,7 @@ def add_item(
             (client_id, cleaned, note, url, now, now),
         )
     except sqlite3.IntegrityError as exc:
-        raise DuplicateLegendName(f"The name '{cleaned}' already exists for this client.") from exc
+        raise DuplicateLegendName(f"De naam '{cleaned}' bestaat al voor deze klant.") from exc
     return int(cursor.lastrowid)
 
 
@@ -722,7 +722,7 @@ def update_item(
     url = str(example_url or "").strip()
     _require_owned_item(conn, table, client_id, item_id)
     if _name_taken(conn, table, client_id, cleaned, exclude_id=item_id):
-        raise DuplicateLegendName(f"The name '{cleaned}' already exists for this client.")
+        raise DuplicateLegendName(f"De naam '{cleaned}' bestaat al voor deze klant.")
     try:
         conn.execute(
             f"""
@@ -733,7 +733,7 @@ def update_item(
             (cleaned, note, url, _now(), item_id, client_id),
         )
     except sqlite3.IntegrityError as exc:
-        raise DuplicateLegendName(f"The name '{cleaned}' already exists for this client.") from exc
+        raise DuplicateLegendName(f"De naam '{cleaned}' bestaat al voor deze klant.") from exc
 
 
 def update_format(
@@ -939,11 +939,11 @@ def save_editorial(
         (post_id,),
     ).fetchone()
     if post is None or int(post["client_id"]) != client_id:
-        raise LegendInputError("This post does not belong to the selected client.")
+        raise LegendInputError("Dit bericht hoort niet bij de geselecteerde klant.")
     if format_id is not None and _not_owned(conn, "content_formats", client_id, format_id):
-        raise LegendInputError("This content format does not belong to the selected client.")
+        raise LegendInputError("Dit contentformat hoort niet bij de geselecteerde klant.")
     if pillar_id is not None and _not_owned(conn, "content_pillars", client_id, pillar_id):
-        raise LegendInputError("This content pillar does not belong to the selected client.")
+        raise LegendInputError("Deze contentpijler hoort niet bij de geselecteerde klant.")
     now = _now()
     # Ensure optional column exists on older DBs
     cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(post_editorial)").fetchall()}
@@ -1000,7 +1000,7 @@ def upsert_synced_post(
 ) -> int:
     """Insert or update one Meta post. Editorial fields stay untouched."""
     if get_client(conn, client_id) is None:
-        raise ClientInputError("This client is no longer in the list.")
+        raise ClientInputError("Deze klant staat niet meer in de lijst.")
     existing = conn.execute(
         """
         SELECT id FROM posts
@@ -1066,13 +1066,13 @@ def apply_metric(
 ) -> None:
     """Store a metric. A failed or empty follow-up keeps the last measured number."""
     if metric_name not in _METRIC_COLUMNS:
-        raise LegendInputError("Unknown metric.")
+        raise LegendInputError("Onbekende meetwaarde.")
     owner = conn.execute(
         "SELECT client_id FROM posts WHERE id = ?",
         (post_id,),
     ).fetchone()
     if owner is None or int(owner["client_id"]) != client_id:
-        raise LegendInputError("This post does not belong to the selected client.")
+        raise LegendInputError("Dit bericht hoort niet bij de geselecteerde klant.")
     current = conn.execute(
         """
         SELECT value, availability, source_name, measured_at
@@ -1131,7 +1131,7 @@ def save_fetch_result(
     facebook_count: int,
 ) -> None:
     if get_client(conn, client_id) is None:
-        raise ClientInputError("This client is no longer in the list.")
+        raise ClientInputError("Deze klant staat niet meer in de lijst.")
     conn.execute(
         """
         UPDATE clients
@@ -1163,7 +1163,7 @@ def _client_name(name: str) -> str:
 
 def _require_client(conn: sqlite3.Connection, client_id: int) -> None:
     if get_client(conn, client_id) is None:
-        raise ClientInputError("This client is no longer in the list.")
+        raise ClientInputError("Deze klant staat niet meer in de lijst.")
 
 
 def _require_owned_item(
@@ -1177,9 +1177,9 @@ def _require_owned_item(
         (item_id,),
     ).fetchone()
     if row is None:
-        raise LegendInputError("This item is no longer in the legend.")
+        raise LegendInputError("Dit item staat niet meer in de legenda.")
     if int(row["client_id"]) != client_id:
-        raise LegendInputError("This item belongs to another client.")
+        raise LegendInputError("Dit item hoort bij een andere klant.")
 
 
 def _name_taken(

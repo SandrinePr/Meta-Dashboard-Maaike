@@ -19,16 +19,16 @@ export default function OverviewPage({ client, onOpenPosts, onOpenClients }) {
   }, [client.id]);
 
   if (!overview) {
-    return error ? <p className="banner error">{error}</p> : <p className="muted">Loading…</p>;
+    return error ? <p className="banner error">{error}</p> : <p className="muted">Laden…</p>;
   }
 
   return (
     <div className="stack">
-      <p className="hint">Summary for the selected client. No data from other clients.</p>
+      <p className="hint">Samenvatting voor de geselecteerde klant. Geen gegevens van andere klanten.</p>
       <p className="status">{overview.status_label}</p>
       <div className="stat-grid">
         <div className="stat-card">
-          Posts
+          Berichten
           <strong>{overview.post_count}</strong>
         </div>
         <div className="stat-card">
@@ -40,16 +40,16 @@ export default function OverviewPage({ client, onOpenPosts, onOpenClients }) {
           <strong>{overview.facebook_count}</strong>
         </div>
         <div className="stat-card">
-          Last sync
+          Laatste synchronisatie
           <strong style={{ fontSize: "1rem" }}>{overview.synced_at}</strong>
         </div>
       </div>
       <p>
-        <strong>Period:</strong> {overview.period_from} – {overview.period_until}
+        <strong>Periode:</strong> {overview.period_from} – {overview.period_until}
       </p>
       {overview.page_name ? (
         <p>
-          <strong>Facebook page:</strong> {overview.page_name}
+          <strong>Facebookpagina:</strong> {overview.page_name}
           {overview.ig_username ? ` · @${overview.ig_username}` : ""}
         </p>
       ) : null}
@@ -58,7 +58,7 @@ export default function OverviewPage({ client, onOpenPosts, onOpenClients }) {
       {notice ? <p className="banner">{notice}</p> : null}
       <div className="row-actions">
         <button className="primary" type="button" onClick={onOpenPosts}>
-          Go to Posts
+          Naar Berichten
         </button>
         <button
           className="secondary"
@@ -69,18 +69,18 @@ export default function OverviewPage({ client, onOpenPosts, onOpenClients }) {
             setError("");
             api(`/api/clients/${client.id}/posts/fetch`, { method: "POST", body: {} })
               .then((payload) => {
-                setNotice(payload.fetch_message || "Fetch completed.");
+                setNotice(payload.fetch_message || "Ophalen afgerond.");
                 return reload();
               })
               .catch((exc) => setError(exc.message))
               .finally(() => setFetching(false));
           }}
         >
-          {fetching ? "Fetching…" : "Fetch posts"}
+          {fetching ? "Bezig met ophalen…" : "Berichten ophalen"}
         </button>
         {!overview.connected ? (
           <button className="secondary" type="button" onClick={onOpenClients}>
-            Connect Meta
+            Meta koppelen
           </button>
         ) : null}
       </div>

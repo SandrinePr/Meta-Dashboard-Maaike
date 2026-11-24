@@ -112,7 +112,7 @@ function resolveReportBadge(r, presentation = null) {
       label: "Klaar voor controle",
     };
   }
-  return { code: r?.status || "unknown", label: STATUS_LABEL[r?.status] || r?.status || "—" };
+  return { code: r?.status || "onbekend", label: STATUS_LABEL[r?.status] || r?.status || "—" };
 }
 
 function formatReportDate(value) {
@@ -225,7 +225,7 @@ export default function ReportsPage({
   const [sourceTitle, setSourceTitle] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [sourcePublished, setSourcePublished] = useState("");
-  const [sourceExcerpt, setSourceExcerpt] = useState("");
+  const [sourceFragment, setSourceFragment] = useState("");
   const [mockScenario, setMockScenario] = useState("success_with_sources");
   const [preview, setPreview] = useState(null);
 
@@ -356,7 +356,7 @@ export default function ReportsPage({
               disabled={busy}
               onClick={() => downloadReportPdf(client.id, r.id, { setBusy, setError, setNotice })}
             >
-              Download PDF
+              PDF downloaden
             </button>
           ) : null}
         </div>
@@ -385,8 +385,8 @@ export default function ReportsPage({
           setSourceUrl={setSourceUrl}
           sourcePublished={sourcePublished}
           setSourcePublished={setSourcePublished}
-          sourceExcerpt={sourceExcerpt}
-          setSourceExcerpt={setSourceExcerpt}
+          sourceFragment={sourceFragment}
+          setSourceFragment={setSourceFragment}
           mockScenario={mockScenario}
           setMockScenario={setMockScenario}
           maxBudget={maxBudget}
@@ -691,11 +691,11 @@ function MetricTotalsTable({ metrics, title }) {
         <table>
           <thead>
             <tr>
-              <th>Metric</th>
-              <th>Total (known)</th>
-              <th>Average (known)</th>
-              <th>Known</th>
-              <th>Missing</th>
+              <th>Meetwaarde</th>
+              <th>Totaal (bekend)</th>
+              <th>Gemiddelde (bekend)</th>
+              <th>Bekend</th>
+              <th>Ontbreekt</th>
             </tr>
           </thead>
           <tbody>
@@ -743,7 +743,7 @@ function GroupTable({ title, groups, compareRows, unclassified }) {
       <h4>{title}</h4>
       {unclassified?.count ? (
         <p className="banner error">
-          Not yet classified: {unclassified.count} post(s)
+          Nog niet ingedeeld: {unclassified.count} post(s)
           {unclassified.posts?.length ? (
             <span className="hint">
               {" "}
@@ -756,18 +756,18 @@ function GroupTable({ title, groups, compareRows, unclassified }) {
           ) : null}
         </p>
       ) : (
-        <p className="hint">All posts in this group are classified.</p>
+        <p className="hint">Alle berichten in deze groep zijn ingedeeld.</p>
       )}
       <div className="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Posts</th>
-              <th>Total reach</th>
-              <th>Avg. reach</th>
-              <th>Reach known / missing</th>
-              <th>vs previous (reach sum)</th>
+              <th>Naam</th>
+              <th>Berichten</th>
+              <th>Totaal bereik</th>
+              <th>Gem. bereik</th>
+              <th>Bereik bekend / ontbreekt</th>
+              <th>vs vorige (som bereik)</th>
             </tr>
           </thead>
           <tbody>
@@ -777,7 +777,7 @@ function GroupTable({ title, groups, compareRows, unclassified }) {
                 <tr key={g.name} className={g.is_unclassified ? "is-warning" : undefined}>
                   <td>
                     {g.name}
-                    {g.is_unclassified ? " · unclassified" : ""}
+                    {g.is_unclassified ? " · niet ingedeeld" : ""}
                   </td>
                   <td>{g.post_count}</td>
                   <td>{fmtNum(g.reach_sum ?? g.totals?.reach)}</td>
@@ -810,27 +810,27 @@ function AnalysisCoverageCard({ coverage }) {
 
   return (
     <section className="card stack" aria-label="Data coverage before execute">
-      <h4>Before Execute — data coverage</h4>
+      <h4>Voor uitvoeren — databeschikbaarheid</h4>
       <p className="hint">{coverage.execute_note}</p>
       <ul className="plain-list">
         <li>
-          Analysis period:{" "}
+          Analyseperiode:{" "}
           <strong>{analysis.label || `${analysis.start || "—"} → ${analysis.end || "—"}`}</strong>
         </li>
         <li>
-          Comparison period:{" "}
+          Vergelijkingsperiode:{" "}
           <strong>
             {comparison.label || `${comparison.start || "—"} → ${comparison.end || "—"}`}
           </strong>
         </li>
         <li>
-          Posts in analysis: <strong>{coverage.posts_in_analysis ?? 0}</strong>
+          Berichten in analyse: <strong>{coverage.posts_in_analysis ?? 0}</strong>
           {platforms.length
             ? ` (${platforms.map(([name, count]) => `${name} ${count}`).join(" · ")})`
             : ""}
         </li>
         <li>
-          Posts in comparison: <strong>{coverage.posts_in_comparison ?? 0}</strong>
+          Berichten in vergelijking: <strong>{coverage.posts_in_comparison ?? 0}</strong>
           {prevPlatforms.length
             ? ` (${prevPlatforms.map(([name, count]) => `${name} ${count}`).join(" · ")})`
             : ""}
@@ -844,7 +844,7 @@ function AnalysisCoverageCard({ coverage }) {
       </ul>
       {(coverage.missing_layers || []).length ? (
         <>
-          <h5 style={{ margin: 0 }}>Missing / incomplete for this run</h5>
+          <h5 style={{ margin: 0 }}>Ontbrekend / onvolledig voor deze run</h5>
           <ul className="plain-list">
             {coverage.missing_layers.map((item) => (
               <li key={item}>{item}</li>
@@ -853,25 +853,25 @@ function AnalysisCoverageCard({ coverage }) {
         </>
       ) : null}
       <p className={sync.coverage_uncertain ? "banner warn-soft" : "banner"}>
-        <strong>Meta sync coverage:</strong>{" "}
+        <strong>Dekking Meta-ophaling:</strong>{" "}
         {sync.coverage_proven_complete
-          ? "Marked complete."
-          : "Not proven complete for this analysis window."}{" "}
+          ? "Als compleet gemarkeerd."
+          : "Nog niet bewezen compleet voor dit analysevenster."}{" "}
         {sync.coverage_note}
       </p>
       {sync.last_at ? (
         <p className="hint">
-          Last Synchronise Meta: {sync.last_status || "—"} · {sync.last_at}
+          Laatste Meta-ophaling: {sync.last_status || "—"} · {sync.last_at}
           {sync.last_fetch_instagram != null || sync.last_fetch_facebook != null
             ? ` · IG ${sync.last_fetch_instagram ?? "—"} / FB ${sync.last_fetch_facebook ?? "—"}`
             : ""}
         </p>
       ) : (
-        <p className="hint">No Synchronise Meta run recorded yet.</p>
+        <p className="hint">Er is nog geen Meta-ophaling geregistreerd.</p>
       )}
       <p className="hint">{coverage.linkedin_note}</p>
       <p className="hint">
-        <strong>If coverage is uncertain:</strong> {sync.action}
+        <strong>Als de dekking onzeker is:</strong> {sync.action}
       </p>
       <p className="hint">
         Where Maaike can check: {(coverage.where_maaike_can_verify || []).join(" · ")}
@@ -894,18 +894,18 @@ function ClientReportInspectView({ data }) {
 
       <AnalysisCoverageCard coverage={data.data_coverage} />
 
-      <h4>Periods</h4>
+      <h4>Perioden</h4>
       <ul className="plain-list">
         <li>
-          Primary: <strong>{period.label || `${period.start} to ${period.end}`}</strong> (
+          Primair: <strong>{period.label || `${period.start} to ${period.end}`}</strong> (
           {period.length_days} days
           {period.mode === "calendar_month"
             ? ` · report month ${period.year}-${String(period.month).padStart(2, "0")}`
-            : " · custom period"}
+            : " · eigen periode"}
           )
         </li>
         <li>
-          Comparison: <strong>{period.compare_label || `${period.previous_start} to ${period.previous_end}`}</strong>{" "}
+          Vergelijking: <strong>{period.compare_label || `${period.previous_start} to ${period.previous_end}`}</strong>{" "}
           ({period.compare_length_days} days ·{" "}
           {period.compare_mode === "previous_equal_length"
             ? `default: previous ${period.compare_length_days || period.length_days || "?"} days (not the previous calendar month)`
@@ -914,7 +914,7 @@ function ClientReportInspectView({ data }) {
         </li>
       </ul>
 
-      <MetricTotalsTable metrics={metrics} title="Posts — totals & averages (current period)" />
+      <MetricTotalsTable metrics={metrics} title="Berichten — totalen & gemiddelden (huidige periode)" />
       {metrics.by_platform && Object.keys(metrics.by_platform).length ? (
         <p className="banner">
           Platforms in this report:{" "}
@@ -926,21 +926,21 @@ function ClientReportInspectView({ data }) {
         </p>
       ) : null}
 
-      <h4>Change vs comparison period ({comparison.metric || "reach"})</h4>
+      <h4>Verschil t.o.v. vergelijkingsperiode ({comparison.metric || "reach"})</h4>
       <p className="hint">{comparison.note}</p>
       <div className="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Measure</th>
-              <th>Now</th>
-              <th>Previous</th>
-              <th>Difference</th>
+              <th>Meetwaarde</th>
+              <th>Nu</th>
+              <th>Vorige</th>
+              <th>Verschil</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>Post count</td>
+              <td>Aantal berichten</td>
               <td>{fmtNum(comparison.current_post_count)}</td>
               <td>{fmtNum(comparison.previous_post_count)}</td>
               <td>
@@ -974,7 +974,7 @@ function ClientReportInspectView({ data }) {
         unclassified={metrics.unclassified?.format}
       />
       <GroupTable
-        title="Content pillars"
+        title="Contentpijlers"
         groups={metrics.by_pillar}
         compareRows={comparison.by_pillar}
         unclassified={metrics.unclassified?.pillar}
@@ -998,7 +998,7 @@ function ClientReportInspectView({ data }) {
 
       {(data.missing || []).length ? (
         <>
-          <h4>Missing / attention</h4>
+          <h4>Ontbreekt / aandacht</h4>
           <ul className="plain-list">
             {data.missing.map((m) => (
               <li key={m}>{m}</li>
@@ -1013,51 +1013,51 @@ function ClientReportInspectView({ data }) {
         <table>
           <tbody>
             <tr>
-              <th>Strategy present</th>
+              <th>Strategie aanwezig</th>
               <td>
                 {(strategy.start_answers && Object.keys(strategy.start_answers).length) ||
                 (strategy.strategy_fields && Object.keys(strategy.strategy_fields).length)
                   ? `yes · ${Object.keys(strategy.start_answers || {}).length} start answers · ${
                       (strategy.targets || []).length
                     } targets`
-                  : "mostly empty"}
+                  : "grotendeels leeg"}
               </td>
             </tr>
             <tr>
-              <th>Format legend</th>
+              <th>Formatlegenda</th>
               <td>
                 {(legend.formats || []).length} formats · {(legend.pillars || []).length} pillars ·{" "}
                 {(legend.hooks || []).length} hooks
               </td>
             </tr>
             <tr>
-              <th>Post data</th>
+              <th>Berichtgegevens</th>
               <td>{fmtNum(prompt.post_data?.count)} posts in period (details in aggregation above)</td>
             </tr>
             <tr>
-              <th>Periods</th>
+              <th>Perioden</th>
               <td>
                 {period.label} vs {period.compare_label}
               </td>
             </tr>
             <tr>
-              <th>Trend report</th>
+              <th>Trendrapport</th>
               <td>
                 {data.linked_trend
                   ? `#${data.linked_trend.id} v${data.linked_trend.version} · ${
                       STATUS_LABEL[data.linked_trend.status] || data.linked_trend.status
                     }${
                       data.linked_trend.is_mock
-                        ? " · MOCK sample"
+                        ? " · MOCK-voorbeeld"
                         : data.linked_trend.status === "prepared" && !data.linked_trend.body_present
-                          ? " · no sources/run yet (empty preparation)"
+                          ? " · nog geen bronnen/run (lege voorbereiding)"
                           : ""
                     }`
-                  : "not linked"}
+                  : "niet gekoppeld"}
               </td>
             </tr>
             <tr>
-              <th>AI analysis</th>
+              <th>AI-analyse</th>
               <td>
                 {(() => {
                   const attached =
@@ -1071,7 +1071,7 @@ function ClientReportInspectView({ data }) {
                   if (prompt.ai_analysis_status && prompt.ai_analysis_status !== "not_executed") {
                     return prompt.ai_analysis_status;
                   }
-                  return "no completed post analyses attached";
+                  return "geen voltooide berichtanalyses gekoppeld";
                 })()}
               </td>
             </tr>
@@ -1080,7 +1080,7 @@ function ClientReportInspectView({ data }) {
       </div>
       {(legend.formats || []).length ? (
         <details>
-          <summary className="hint">Show format legend</summary>
+          <summary className="hint">Formatlegenda tonen</summary>
           <ul className="plain-list">
             {legend.formats.map((f) => (
               <li key={f.id}>
@@ -1093,7 +1093,7 @@ function ClientReportInspectView({ data }) {
       ) : null}
       {strategy.start_answers && Object.keys(strategy.start_answers).length ? (
         <details>
-          <summary className="hint">Show strategy start answers</summary>
+          <summary className="hint">Startantwoorden strategie tonen</summary>
           <pre className="hint" style={{ whiteSpace: "pre-wrap" }}>
             {JSON.stringify(strategy.start_answers, null, 2)}
           </pre>
@@ -1568,8 +1568,8 @@ function ReportPanelAdmin({
   setSourceUrl,
   sourcePublished,
   setSourcePublished,
-  sourceExcerpt,
-  setSourceExcerpt,
+  sourceFragment,
+  setSourceFragment,
   clientId,
   onClose,
 }) {
@@ -1588,7 +1588,7 @@ function ReportPanelAdmin({
       <p className="hint">Technische controles en dumps. Dit opent geen AI-aanroep.</p>
       {review.execution_key ? (
         <p className="hint">
-          Execution key: <code>{review.execution_key}</code>
+          Uitvoersleutel: <code>{review.execution_key}</code>
         </p>
       ) : null}
 
@@ -1605,16 +1605,16 @@ function ReportPanelAdmin({
             api(`/api/clients/${clientId}/reports/${report.id}/execution-preview${q}`)
               .then((payload) => {
                 setPreview(payload);
-                setNotice("Execution preview loaded (no paid call).");
+                setNotice("Uitvoervoorvertoning geladen (geen betaalde aanroep).");
               })
               .catch((exc) => setError(exc.message))
               .finally(() => setBusy(false));
           }}
         >
-          Show execution preview
+          Uitvoervoorvertoning tonen
         </button>
         <label>
-          Mock scenario
+          Testscenario
           <select value={mockScenario} onChange={(e) => setMockScenario(e.target.value)}>
             {MOCK_SCENARIOS.map((s) => (
               <option key={s.value} value={s.value}>
@@ -1637,13 +1637,13 @@ function ReportPanelAdmin({
               .then(async (payload) => {
                 setDetail(payload);
                 await reloadList();
-                setNotice(`Mock scenario “${mockScenario}” saved (no paid request).`);
+                setNotice(`Testscenario “${mockScenario}” saved (no paid request).`);
               })
               .catch((exc) => setError(exc.message))
               .finally(() => setBusy(false));
           }}
         >
-          Run mock
+          Testscenario uitvoeren
         </button>
         <button
           className="secondary"
@@ -1659,42 +1659,42 @@ function ReportPanelAdmin({
                 max_budget_usd: maxBudget === "" ? null : Number(maxBudget),
               },
             })
-              .then(() => setNotice("Unexpected: dry-run should have blocked."))
-              .catch((exc) => setNotice(`Paid execute blocked (expected): ${exc.message}`))
+              .then(() => setNotice("Onverwacht: de droogtest had moeten blokkeren."))
+              .catch((exc) => setNotice(`Betaalde uitvoering geblokkeerd (verwacht): ${exc.message}`))
               .finally(() => setBusy(false));
           }}
         >
-          Execute (dry-run — blocks paid)
+          Uitvoeren (droogtest — blokkeert betaalde run)
         </button>
       </div>
 
       {preview ? (
         <div className="stack">
-          <h4>Execution preview (no paid call)</h4>
+          <h4>Uitvoervoorvertoning (geen betaalde aanroep)</h4>
           <AnalysisCoverageCard coverage={preview.data_coverage} />
           <ul className="plain-list">
-            <li>Paid call: {String(preview.paid_call)}</li>
+            <li>Betaalde aanroep: {String(preview.paid_call)}</li>
             <li>
               Budget gate: {preview.within_budget ? "within" : "over"} (max{" "}
               {preview.max_budget_usd != null ? `USD ${preview.max_budget_usd}` : "—"})
             </li>
             <li>
-              Prompt chars: {preview.prompt_package?.system_chars ?? preview.data_to_provider?.system_instruction_chars ?? "—"}
+              Prompttekens: {preview.prompt_package?.system_chars ?? preview.data_to_provider?.system_instruction_chars ?? "—"}
             </li>
             <li>
-              Sources read:{" "}
+              Bronnen gelezen:{" "}
               {(preview.sources_read || []).filter((s) => s.counted_as_read_source).length}/
               {(preview.sources_read || []).length}
             </li>
-            <li>Search enabled: {String(preview.enable_google_search)}</li>
+            <li>Zoeken aan: {String(preview.enable_google_search)}</li>
           </ul>
           {preview.prompt_package?.missing_source_layers?.length ? (
             <p className="hint">
-              Missing source layers: {preview.prompt_package.missing_source_layers.join(", ")}
+              Ontbrekende bronlagen: {preview.prompt_package.missing_source_layers.join(", ")}
             </p>
           ) : null}
           <details>
-            <summary>Full preview JSON</summary>
+            <summary>Volledige voorvertoning-JSON</summary>
             <pre className="hint" style={{ whiteSpace: "pre-wrap" }}>
               {JSON.stringify(preview, null, 2)}
             </pre>
@@ -1702,21 +1702,21 @@ function ReportPanelAdmin({
         </div>
       ) : null}
 
-      <h4>Cost estimate</h4>
+      <h4>Kostenschatting</h4>
       <ul className="plain-list">
         <li>
           Provider/model: {estimate.provider || "—"} / {estimate.exact_model || report.model || "—"}
         </li>
-        <li>Token estimate: {money(estimate.estimated_cost_usd)}</li>
+        <li>Tokenschatting: {money(estimate.estimated_cost_usd)}</li>
         <li>
-          Combined high:{" "}
-          {estimate.combined_high_usd != null ? `USD ${estimate.combined_high_usd}` : "unknown"}
+          Gecombineerd hoog:{" "}
+          {estimate.combined_high_usd != null ? `USD ${estimate.combined_high_usd}` : "onbekend"}
         </li>
       </ul>
 
       {report.report_type === "trend" && report.status === "prepared" && snap.research_mode !== "internet" ? (
         <div className="stack">
-          <h4>Add source</h4>
+          <h4>Bron toevoegen</h4>
           <label>
             Title
             <input value={sourceTitle} onChange={(e) => setSourceTitle(e.target.value)} />
@@ -1726,7 +1726,7 @@ function ReportPanelAdmin({
             <input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} />
           </label>
           <label>
-            Publication date
+            Publicatiedatum
             <input
               value={sourcePublished}
               onChange={(e) => setSourcePublished(e.target.value)}
@@ -1734,8 +1734,8 @@ function ReportPanelAdmin({
             />
           </label>
           <label>
-            Excerpt
-            <textarea rows={3} value={sourceExcerpt} onChange={(e) => setSourceExcerpt(e.target.value)} />
+            Fragment
+            <textarea rows={3} value={sourceFragment} onChange={(e) => setSourceFragment(e.target.value)} />
           </label>
           <button
             className="secondary"
@@ -1753,7 +1753,7 @@ function ReportPanelAdmin({
                       title: sourceTitle,
                       url: sourceUrl,
                       published_at: sourcePublished,
-                      excerpt: sourceExcerpt,
+                      excerpt: sourceFragment,
                     },
                   ],
                 },
@@ -1764,19 +1764,19 @@ function ReportPanelAdmin({
                   setSourceTitle("");
                   setSourceUrl("");
                   setSourcePublished("");
-                  setSourceExcerpt("");
+                  setSourceFragment("");
                   const summary = payload?.report?.input_snapshot?.source_read_summary;
                   setNotice(
                     summary
-                      ? `Source saved via HTTP fetch (no AI). Read ${summary.read}/${summary.total}.`
-                      : "Source saved via HTTP fetch (no AI)."
+                      ? `Bron opgeslagen via HTTP-ophaling (geen AI). Gelezen ${summary.read}/${summary.total}.`
+                      : "Bron opgeslagen via HTTP-ophaling (geen AI)."
                   );
                 })
                 .catch((exc) => setError(exc.message))
                 .finally(() => setBusy(false));
             }}
           >
-            Save + fetch source (no AI)
+            Opslaan + bron ophalen (geen AI)
           </button>
         </div>
       ) : null}
@@ -1787,7 +1787,7 @@ function ReportPanelAdmin({
             ai_analysis_banner:
               presentation?.ai_analysis_banner?.label_en ||
               snap.ai_analysis_banner ||
-              "No completed post AI analyses attached for this period yet.",
+              "Er zijn nog geen voltooide bericht-AI-analyses gekoppeld voor deze periode.",
             period: snap.period,
             metrics: snap.metrics,
             comparison: snap.comparison,
@@ -1832,8 +1832,8 @@ function ReportDetail({
   setSourceUrl,
   sourcePublished,
   setSourcePublished,
-  sourceExcerpt,
-  setSourceExcerpt,
+  sourceFragment,
+  setSourceFragment,
   mockScenario,
   setMockScenario,
   maxBudget,
@@ -2107,7 +2107,7 @@ function ReportDetail({
                   downloadReportPdf(clientId, report.id, { setBusy, setError, setNotice })
                 }
               >
-                Download PDF
+                PDF downloaden
               </button>
             ) : null}
             <button className="secondary" type="button" onClick={tryClose}>
@@ -2247,8 +2247,8 @@ function ReportDetail({
           setSourceUrl={setSourceUrl}
           sourcePublished={sourcePublished}
           setSourcePublished={setSourcePublished}
-          sourceExcerpt={sourceExcerpt}
-          setSourceExcerpt={setSourceExcerpt}
+          sourceFragment={sourceFragment}
+          setSourceFragment={setSourceFragment}
           clientId={clientId}
           onClose={() => setPanel(null)}
         />

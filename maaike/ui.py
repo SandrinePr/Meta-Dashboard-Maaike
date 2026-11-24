@@ -523,7 +523,7 @@ def _confirm_page(client_id: int, pending: PendingLogin, option: PageOption) -> 
         st.rerun()
         return
     _clear_login_memory()
-    st.session_state.maaike_notice = f"Connected to {page_name}."
+    st.session_state.maaike_notice = f"Gekoppeld met {page_name}."
     st.rerun()
 
 

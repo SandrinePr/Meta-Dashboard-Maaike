@@ -12,48 +12,48 @@ REVIEW_STATUSES = frozenset(
     {"", "awaiting_review", "in_review", "final_draft", "approved"}
 )
 REVIEW_STATUS_LABELS = {
-    "": "No review",
-    "awaiting_review": "Awaiting review",
+    "": "Nog geen review",
+    "awaiting_review": "Wacht op review",
     "in_review": "In review",
-    "final_draft": "Final draft",
-    "approved": "Approved",
+    "final_draft": "Eindconcept",
+    "approved": "Goedgekeurd",
 }
 
 CLIENT_ANSWER_LABELS = {
-    "beter": "What went better?",
-    "slechter": "What went worse?",
-    "verklaring": "Explanation",
-    "herhalen": "What to repeat?",
-    "stoppen": "What to stop?",
-    "testen": "What to test?",
+    "beter": "Wat ging beter?",
+    "slechter": "Wat ging slechter?",
+    "verklaring": "Uitleg",
+    "herhalen": "Wat herhalen?",
+    "stoppen": "Wat stoppen?",
+    "testen": "Wat testen?",
 }
 
 CLIENT_CHAPTER_LABELS = {
     "input_brainstorm": "Input brainstorm / planning",
-    "per_kanaal": "Per channel",
-    "seo_serp": "SEO and SERP",
-    "concurrenten": "Competitors and best practices",
-    "hooks_formats_testen": "Hooks and formats to test",
-    "laten_liggen_aanscherpen": "Leave or refine",
+    "per_kanaal": "Per kanaal",
+    "seo_serp": "SEO en SERP",
+    "concurrenten": "Concurrenten en best practices",
+    "hooks_formats_testen": "Hooks en formats om te testen",
+    "laten_liggen_aanscherpen": "Laten liggen of aanscherpen",
 }
 
 CLIENT_ACTION_PLAN_LABELS = {
-    "planning_note": "Action plan: planning note",
-    "hoofdfocus": "Action plan: main focus",
-    "waarom_nu": "Action plan: why now",
-    "actions": "Action plan: concrete actions",
-    "stop_or_test_decisions": "Action plan: stop or test",
-    "watch_outs": "Action plan: watch-outs",
+    "planning_note": "Actieplan: planningstoelichting",
+    "hoofdfocus": "Actieplan: hoofdfocus",
+    "waarom_nu": "Actieplan: waarom nu",
+    "actions": "Actieplan: concrete acties",
+    "stop_or_test_decisions": "Actieplan: stoppen of testen",
+    "watch_outs": "Actieplan: aandachtspunten",
 }
 
 TREND_CHAPTER_LABELS = {
-    "positionering": "Positioning",
-    "managementsamenvatting": "Management summary",
-    "belangrijkste_trends": "Key trends",
-    "platform_verschuivingen": "Platform shifts",
-    "contentkansen": "Content opportunities",
-    "zoekclusters": "Search clusters",
-    "conclusie": "Conclusion",
+    "positionering": "Positionering",
+    "managementsamenvatting": "Managementsamenvatting",
+    "belangrijkste_trends": "Belangrijkste trends",
+    "platform_verschuivingen": "Platformverschuivingen",
+    "contentkansen": "Contentkansen",
+    "zoekclusters": "Zoekclusters",
+    "conclusie": "Conclusie",
 }
 
 
@@ -471,7 +471,7 @@ def review_summary_for_list(conn, client_id: int, report_row) -> dict[str, Any]:
         return {
             "execution_key": key,
             "review_status": "",
-            "review_status_label": "No AI run",
+            "review_status_label": "Nog geen AI-run",
             "is_approved": False,
             "reviewer_name": "",
             "can_review": False,
@@ -481,7 +481,7 @@ def review_summary_for_list(conn, client_id: int, report_row) -> dict[str, Any]:
         return {
             "execution_key": key,
             "review_status": "",
-            "review_status_label": "Analysis unusable",
+            "review_status_label": "Analyse niet bruikbaar",
             "is_approved": False,
             "reviewer_name": "",
             "can_review": False,
@@ -635,7 +635,7 @@ def save_report_review(conn, client_id: int, report_id: int, body: dict[str, Any
     items = _merge_items(seeded, stamped)
     for item in items:
         if item["decision"] not in ITEM_DECISIONS:
-            raise ValueError(f"Invalid decision for {item['key']}.")
+            raise ValueError(f"Ongeldige beslissing voor {item['key']}.")
 
     # Concept text is always assembled from saved edits + unchanged AI sections (no AI call).
     # Feedback is stored separately and never becomes report text automatically.
@@ -684,9 +684,9 @@ def save_report_review(conn, client_id: int, report_id: int, body: dict[str, Any
 
     if approve:
         if not reviewer_name:
-            raise ValueError("Enter the reviewer name before approval.")
+            raise ValueError("Vul de naam van de controleur in vóór goedkeuring.")
         if not final_version_text.strip():
-            raise ValueError("Nothing to approve: the report has no readable sections.")
+            raise ValueError("Niets om goed te keuren: het rapport heeft geen leesbare secties.")
         # Content warnings must be consciously handled before approval.
         from maaike.client_report_view import default_review_attention_points
 

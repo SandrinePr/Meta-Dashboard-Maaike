@@ -436,10 +436,10 @@ export default function PostsPage({
               />
             </label>
             <a className="secondary" href={exportUrl("xlsx")}>
-              Download Excel
+              Excel downloaden
             </a>
             <a className="secondary" href={exportUrl("csv")}>
-              Download CSV
+              CSV downloaden
             </a>
           </div>
         </section>
@@ -766,7 +766,7 @@ export default function PostsPage({
 
 const MATCH_TYPE_LABELS = {
   comment: "Reacties",
-  tag: "Tags (@)",
+  tag: "Vermeldingen (@)",
   hashtag: "Hashtags (#)",
   caption: "Berichttekst",
 };
@@ -967,7 +967,7 @@ function ActivityPanel({ client }) {
           Alleen foutmeldingen
         </label>
         <a className="secondary" href={exportHref}>
-          Download logboek (CSV)
+          Logboek downloaden (CSV)
         </a>
       </div>
       {error ? <p className="banner error">{error}</p> : null}
@@ -978,7 +978,7 @@ function ActivityPanel({ client }) {
               <th>Datum en tijd</th>
               <th>Klant</th>
               <th>Onderdeel</th>
-              <th>Status</th>
+              <th>Stand</th>
               <th>Technische details</th>
             </tr>
           </thead>

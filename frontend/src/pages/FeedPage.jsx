@@ -120,25 +120,25 @@ export default function FeedPage({ client, focusPostId, onOpenLogs, onClearFocus
   return (
     <div className="stack">
       <p className="hint">
-        Search locally in synchronised Instagram and Facebook posts for this client. Logs remains the
-        strategy table for the same posts.
+        Zoek lokaal in de opgehaalde Instagram- en Facebookberichten van deze klant. Berichten blijft de
+        strategietabel voor dezelfde posts.
       </p>
 
       <form className="stack" onSubmit={runSearch}>
         <div className="search-form-header">
-          <h3>Search</h3>
+          <h3>Zoeken</h3>
         </div>
         <label>
-          Search term
+          Zoekterm
           <input
             value={draftQuery}
             onChange={(event) => setDraftQuery(event.target.value)}
-            placeholder="Type at least 3 characters..."
+            placeholder="Typ minimaal 3 tekens…"
           />
         </label>
         <div className="filters">
           <div>
-            <span className="sidebar-title">Platforms</span>
+            <span className="sidebar-title">Platformen</span>
             <div className="filter-chips">
               <Chip label="Instagram" on={instagram} onToggle={() => setInstagram((v) => !v)} />
               <Chip label="Facebook" on={facebook} onToggle={() => setFacebook((v) => !v)} />
@@ -147,13 +147,13 @@ export default function FeedPage({ client, focusPostId, onOpenLogs, onClearFocus
           <div>
             <span className="sidebar-title">Type</span>
             <div className="filter-chips">
-              <Chip label="Captions" on={matchCaptions} onToggle={() => setMatchCaptions((v) => !v)} />
+              <Chip label="Bijschriften" on={matchCaptions} onToggle={() => setMatchCaptions((v) => !v)} />
               <Chip label="Hashtags" on={matchHashtags} onToggle={() => setMatchHashtags((v) => !v)} />
               <Chip label="Tags" on={matchTags} onToggle={() => setMatchTags((v) => !v)} />
             </div>
           </div>
           <label>
-            Dates
+            Datums
             <div className="row-actions">
               <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
               <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
@@ -184,7 +184,7 @@ export default function FeedPage({ client, focusPostId, onOpenLogs, onClearFocus
           </label>
           <div className="row-actions" style={{ alignItems: "end" }}>
             <button className="primary" type="submit">
-              Search
+              Zoeken
             </button>
           </div>
         </div>
@@ -192,9 +192,9 @@ export default function FeedPage({ client, focusPostId, onOpenLogs, onClearFocus
 
       {error ? <p className="banner error">{error}</p> : null}
       {payload?.query_too_short ? (
-        <p className="banner">Type at least {payload.min_query_length || 3} characters to search.</p>
+        <p className="banner">Typ minimaal {payload.min_query_length || 3} tekens om te zoeken.</p>
       ) : null}
-      {loading && !payload ? <p className="muted">Loading…</p> : null}
+      {loading && !payload ? <p className="muted">Laden…</p> : null}
 
       {detail ? (
         <PostDetail
@@ -210,19 +210,19 @@ export default function FeedPage({ client, focusPostId, onOpenLogs, onClearFocus
           <div className="rro-results-header">
             <h2>
               {query
-                ? `Results (${payload.posts.length}${payload.total ? ` of ${payload.total}` : ""})`
-                : `Latest posts (${payload.posts.length})`}
+                ? `Resultaten (${payload.posts.length}${payload.total ? ` van ${payload.total}` : ""})`
+                : `Laatste berichten (${payload.posts.length})`}
             </h2>
           </div>
           {totals ? (
             <div className="rro-results-totals">
-              Total engagement: {totals}
+              Totale engagement: {totals}
               <div className="hint">
-                <strong>n/a</strong> = not yet fetched from Meta (not the same as 0).
+                <strong>n/a</strong> = nog niet opgehaald bij Meta (niet hetzelfde als 0).
               </div>
             </div>
           ) : null}
-          {!payload.posts.length ? <p className="banner">{payload.empty_message || "No results found in the local database."}</p> : null}
+          {!payload.posts.length ? <p className="banner">{payload.empty_message || "Geen resultaten in de lokale database."}</p> : null}
           <div className="results-list">
             {payload.posts.map((post) => (
               <ResultCard
@@ -237,7 +237,7 @@ export default function FeedPage({ client, focusPostId, onOpenLogs, onClearFocus
           </div>
           {payload.has_more ? (
             <button className="secondary" type="button" disabled={loadingMore} onClick={() => load(false)}>
-              {loadingMore ? "Loading…" : `Load more (${payload.posts.length} of ${payload.total})`}
+              {loadingMore ? "Laden…" : `Meer laden (${payload.posts.length} van ${payload.total})`}
             </button>
           ) : null}
         </>

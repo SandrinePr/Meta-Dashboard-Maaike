@@ -33,7 +33,7 @@ export default function AiSettingsPage({ onOpenPrompts }) {
   }, [clientId]);
 
   if (error && !status) return <p className="banner error">{error}</p>;
-  if (!status) return <p className="muted">Loading…</p>;
+  if (!status) return <p className="muted">Laden…</p>;
 
   const gemini = status.gemini || {};
   const claude = status.claude || {};
@@ -43,7 +43,7 @@ export default function AiSettingsPage({ onOpenPrompts }) {
   return (
     <div className="stack">
       <p className="hint">
-        AI Connections: Claude voor postfeedback; Gemini voor klantrapport en trendrapport.
+        AI-koppelingen: Claude voor postfeedback; Gemini voor klantrapport en trendrapport.
         Bewerkbare prompts hieronder. Deze pagina start geen AI-aanvraag. Key values worden niet getoond.
       </p>
 
@@ -109,8 +109,8 @@ export default function AiSettingsPage({ onOpenPrompts }) {
         <h3>Gemini API (rapporten)</h3>
         <p className={gemini.configured ? "banner" : "banner error"}>
           {gemini.configured
-            ? `Connected · model ${gemini.model} · host ${gemini.base_host || "—"}`
-            : "Not fully configured (AI_BASE_URL / AI_API_KEY / AI_MODEL)."}
+            ? `Gekoppeld · model ${gemini.model} · host ${gemini.base_host || "—"}`
+            : "Nog niet volledig ingesteld (AI_BASE_URL / AI_API_KEY / AI_MODEL). Vraag een beheerder om de serverinstellingen te controleren."}
         </p>
         {(gemini.used_for || []).length ? (
           <ul className="plain-list">
@@ -123,22 +123,22 @@ export default function AiSettingsPage({ onOpenPrompts }) {
           <table>
             <thead>
               <tr>
-                <th>Setting</th>
-                <th>Status</th>
+                <th>Instelling</th>
+                <th>Stand</th>
               </tr>
             </thead>
             <tbody>
               <tr>
                 <td>AI_BASE_URL</td>
-                <td>{status.has_base_url ? `present (${status.base_host || "—"})` : "missing"}</td>
+                <td>{status.has_base_url ? `aanwezig (${status.base_host || "—"})` : "ontbreekt"}</td>
               </tr>
               <tr>
                 <td>AI_API_KEY</td>
-                <td>{status.has_api_key ? "present" : "missing"}</td>
+                <td>{status.has_api_key ? "aanwezig" : "ontbreekt"}</td>
               </tr>
               <tr>
                 <td>AI_MODEL</td>
-                <td>{status.model || "missing"}</td>
+                <td>{status.model || "ontbreekt"}</td>
               </tr>
             </tbody>
           </table>
@@ -149,29 +149,29 @@ export default function AiSettingsPage({ onOpenPrompts }) {
         <h3>Claude API (postfeedback)</h3>
         <p className={claude.configured ? "banner" : "banner error"}>
           {claude.configured
-            ? `Connected · model ${claude.model} · host ${claude.base_host}`
+            ? `Gekoppeld · model ${claude.model} · host ${claude.base_host}`
             : `Vereist voor postfeedback. Zet ${claude.missing_setting || "CLAUDE_API_KEY"} server-side (${claude.env_file_hint || "Render env / .env"}). Gemini-rapporten werken zonder Claude.`}
         </p>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Setting</th>
-                <th>Status</th>
+                <th>Instelling</th>
+                <th>Stand</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td>Active key variable</td>
+                <td>Actieve sleutelvariabele</td>
                 <td>
                   {claude.key_variable
-                    ? `${claude.key_variable} (${claude.key_source === "dotenv" ? ".env file" : claude.key_source === "process" ? "process environment" : "unknown"})`
-                    : "none"}
+                    ? `${claude.key_variable} (${claude.key_source === "dotenv" ? ".env-bestand" : claude.key_source === "process" ? "procesomgeving" : "onbekend"})`
+                    : "geen"}
                 </td>
               </tr>
               <tr>
                 <td>CLAUDE_API_KEY / ANTHROPIC_API_KEY</td>
-                <td>{claude.has_api_key ? "present" : "missing"}</td>
+                <td>{claude.has_api_key ? "aanwezig" : "ontbreekt"}</td>
               </tr>
               <tr>
                 <td>CLAUDE_MODEL</td>
@@ -188,16 +188,16 @@ export default function AiSettingsPage({ onOpenPrompts }) {
       </section>
 
       <section className="card stack">
-        <h3>Maaike analysis prompts</h3>
+        <h3>Maaike-analyseprompts</h3>
         <p className={prompts.ready ? "banner" : "banner error"}>
           {prompts.ready
-            ? `Prompt version ${prompts.prompt_version} loaded${prompts.root ? ` · ${prompts.root}` : ""}.`
-            : `Missing files: ${(prompts.missing_files || []).join(", ") || "unknown"}`}
+            ? `Promptversie ${prompts.prompt_version} geladen${prompts.root ? ` · ${prompts.root}` : ""}.`
+            : `Ontbrekende bestanden: ${(prompts.missing_files || []).join(", ") || "onbekend"}`}
         </p>
         <ul className="plain-list">
           {Object.entries(prompts.files || {}).map(([name, meta]) => (
             <li key={name}>
-              {name}: {meta.loaded ? `${meta.chars} characters` : "MISSING"}
+              {name}: {meta.loaded ? `${meta.chars} tekens` : "ONTBREEKT"}
             </li>
           ))}
         </ul>
@@ -215,22 +215,22 @@ export default function AiSettingsPage({ onOpenPrompts }) {
         </p>
         {onOpenPrompts ? (
           <button className="primary" type="button" onClick={onOpenPrompts}>
-            Open prompts
+            Prompts openen
           </button>
         ) : (
-          <p className="hint">Ga naar Settings → Prompts.</p>
+          <p className="hint">Ga naar Instellingen → Prompts.</p>
         )}
       </section>
 
       <section className="card stack">
-        <h3>Single Claude post analysis</h3>
+        <h3>Losse Claude-berichtanalyse</h3>
         <p className="hint">
-          Uses exact Social Agent files + real post data. No automatic retries. The result is
-          saved and can be reopened.
+          Gebruikt de Social Agent-bestanden plus echte berichtgegevens. Geen automatische
+          herhalingen. Het resultaat wordt opgeslagen en kun je opnieuw openen.
         </p>
         <div className="row-actions wrap">
           <label>
-            Client
+            Klant
             <select value={clientId} onChange={(e) => setClientId(e.target.value)}>
               {clients.map((c) => (
                 <option key={c.id} value={String(c.id)}>
@@ -240,8 +240,8 @@ export default function AiSettingsPage({ onOpenPrompts }) {
             </select>
           </label>
           <label>
-            Post ID
-            <input value={postId} onChange={(e) => setPostId(e.target.value)} placeholder="e.g. 901" />
+            Bericht-ID
+            <input value={postId} onChange={(e) => setPostId(e.target.value)} placeholder="bijv. 901" />
           </label>
           <button
             className="primary"
@@ -255,11 +255,11 @@ export default function AiSettingsPage({ onOpenPrompts }) {
                 .then(async (payload) => {
                   setOpenAnalysis(payload.analysis);
                   if (payload.analysis?.status === "completed") {
-                    setNotice(`Analysis saved #${payload.analysis?.id}`);
+                    setNotice(`Analyse opgeslagen #${payload.analysis?.id}`);
                   } else {
                     setError(
                       payload.analysis?.error_text ||
-                        `Analysis #${payload.analysis?.id} failed (${payload.analysis?.status}).`,
+                        `Analyse #${payload.analysis?.id} is mislukt (${payload.analysis?.status}). Controleer de Claude-sleutel of kies een ander bericht.`,
                     );
                   }
                   const list = await api(`/api/clients/${clientId}/ai-analyses`);
@@ -269,19 +269,19 @@ export default function AiSettingsPage({ onOpenPrompts }) {
                 .finally(() => setBusy(false));
             }}
           >
-            {busy ? "Working…" : "Run Claude analysis"}
+            {busy ? "Bezig…" : "Claude-analyse starten"}
           </button>
         </div>
-        <h4>Saved analyses</h4>
+        <h4>Opgeslagen analyses</h4>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
                 <th>ID</th>
-                <th>Post</th>
-                <th>Status</th>
+                <th>Bericht</th>
+                <th>Stand</th>
                 <th>Model</th>
-                <th>Rating</th>
+                <th>Beoordeling</th>
                 <th></th>
               </tr>
             </thead>
@@ -303,7 +303,7 @@ export default function AiSettingsPage({ onOpenPrompts }) {
                           .catch((exc) => setError(exc.message));
                       }}
                     >
-                      Open
+                      Openen
                     </button>
                   </td>
                 </tr>
@@ -311,7 +311,7 @@ export default function AiSettingsPage({ onOpenPrompts }) {
             </tbody>
           </table>
         </div>
-        {!analyses.length ? <p className="hint">No saved Claude analyses for this client yet.</p> : null}
+        {!analyses.length ? <p className="hint">Nog geen opgeslagen Claude-analyses voor deze klant.</p> : null}
         {openAnalysis ? (
           <pre className="hint" style={{ whiteSpace: "pre-wrap" }}>
             {JSON.stringify(

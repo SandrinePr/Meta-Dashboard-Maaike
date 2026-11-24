@@ -33,7 +33,10 @@ export async function api(path, { method = "GET", body, raw = false } = {}) {
     }
   }
   if (!response.ok) {
-    const detail = payload && typeof payload.detail === "string" ? payload.detail : "Request failed.";
+    const detail =
+      payload && typeof payload.detail === "string"
+        ? payload.detail
+        : "De aanvraag is mislukt. Controleer je internetverbinding en probeer het opnieuw.";
     throw new Error(detail);
   }
   return payload;

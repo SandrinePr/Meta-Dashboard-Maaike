@@ -4,15 +4,15 @@ import { api } from "../api.js";
 // Human feedback + Logs adopt live below each AI trial post.
 
 function money(range) {
-  if (!range) return "unknown";
+  if (!range) return "onbekend";
   const low = range.low;
   const high = range.high;
-  if (low == null && high == null) return "unknown";
-  return `USD ${low} – ${high} (estimate)`;
+  if (low == null && high == null) return "onbekend";
+  return `USD ${low} – ${high} (raming)`;
 }
 
 function displayCost(value, known) {
-  if (!known || value == null) return "unknown";
+  if (!known || value == null) return "onbekend";
   return String(value);
 }
 
@@ -34,7 +34,7 @@ export default function AiTrialPage({ client }) {
   }, [client.id]);
 
   if (!data) {
-    return error ? <p className="banner error">{error}</p> : <p className="muted">Loading…</p>;
+    return error ? <p className="banner error">{error}</p> : <p className="muted">Laden…</p>;
   }
 
   const trial = data.trial;
@@ -46,32 +46,32 @@ export default function AiTrialPage({ client }) {
   return (
     <div className="stack">
       <p className="hint">
-        AI trial for post analysis. This page does <strong>not</strong> start a paid AI request on open or
-        reload. Saved results stay separated per client. Format proposals are not automatically
-        accepted.
+        AI-proefrun voor berichtanalyse. Deze pagina start <strong>geen</strong> betaalde AI-aanvraag bij openen of
+        vernieuwen. Opgeslagen resultaten blijven per klant gescheiden. Formatvoorstellen worden niet automatisch
+        overgenomen.
       </p>
 
       <section className="card stack">
-        <h3>Provider & model (no Claude label)</h3>
+        <h3>Provider & model (geen Claude-label)</h3>
         <p className="banner">
           Provider: <strong>{provider}</strong>
           <br />
-          Exact model ID: <strong>{modelId}</strong>
+          Exact model-ID: <strong>{modelId}</strong>
           <br />
           {capability.is_claude
-            ? "Note: this looks like Claude — do not present it as Gemini."
+            ? "Let op: dit lijkt op Claude — presenteer het niet als Gemini."
             : capability.is_gemini
-              ? "This is a Gemini result path. Do not call it a Claude result."
+              ? "Dit is een Gemini-resultaatpad. Noem het geen Claude-resultaat."
               : capability.label_warning}
         </p>
         <p className="hint">
-          Docs:{" "}
+          Documentatie:{" "}
           <a href={capability.official_model_docs} target="_blank" rel="noreferrer">
             model
           </a>
           {" · "}
           <a href={capability.official_pricing} target="_blank" rel="noreferrer">
-            pricing
+            prijzen
           </a>
         </p>
         <ul className="plain-list">
@@ -82,15 +82,15 @@ export default function AiTrialPage({ client }) {
       </section>
 
       <section className="card stack">
-        <h3>Instructions included (real files)</h3>
+        <h3>Meegeleverde instructies (echte bestanden)</h3>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Purpose</th>
-                <th>Source</th>
+                <th>Doel</th>
+                <th>Bron</th>
                 <th>Status</th>
-                <th>Characters</th>
+                <th>Tekens</th>
               </tr>
             </thead>
             <tbody>
@@ -106,13 +106,13 @@ export default function AiTrialPage({ client }) {
           </table>
         </div>
         <p className="hint">
-          For the analysis request: Performance analysis + Role + Quality standard. Trend/client report/clusters
-          are not run. Excel rating/insight/action are <strong>not</strong> in the AI input.
+          Voor de analyseaanvraag: Prestatieanalyse + Rol + Kwaliteitsnorm. Trend-/klantrapport/clusters
+          worden niet uitgevoerd. Excel-beoordeling/inzicht/actie zitten <strong>niet</strong> in de AI-input.
         </p>
       </section>
 
       <section className="card stack">
-        <h3>Prepare trial</h3>
+        <h3>Proefrun voorbereiden</h3>
         <div className="row-actions">
           <button
             className="primary"
@@ -124,47 +124,47 @@ export default function AiTrialPage({ client }) {
               api(`/api/clients/${client.id}/ai-trial/prepare`, { method: "POST", body: {} })
                 .then((payload) => {
                   setData(payload);
-                  setNotice("Trial prepared (media + input preview). No AI request executed.");
+                  setNotice("Proefrun voorbereid (media + invoervoorbeeld). Geen AI-aanvraag uitgevoerd.");
                 })
                 .catch((exc) => setError(exc.message))
                 .finally(() => setBusy(false));
             }}
           >
-            Prepare trial (again)
+            Proefrun opnieuw voorbereiden
           </button>
         </div>
         {trial ? (
           <p className="banner">
-            Status: <strong>{trial.status}</strong> · prompt {trial.prompt_version} · prepared{" "}
+            Status: <strong>{trial.status}</strong> · prompt {trial.prompt_version} · voorbereid{" "}
             {trial.prepared_at}
-            {trial.executed_at ? ` · result ${trial.executed_at}` : ""}
+            {trial.executed_at ? ` · resultaat ${trial.executed_at}` : ""}
           </p>
         ) : (
-          <p className="hint">No trial for this client yet.</p>
+          <p className="hint">Nog geen proefrun voor deze klant.</p>
         )}
       </section>
 
       {trial ? (
         <>
           <section className="card stack">
-            <h3>Cost estimate (not actual cost)</h3>
+            <h3>Kostenraming (geen werkelijke kosten)</h3>
             <p>
-              Rate {estimate?.rate?.model}: {estimate?.rate?.currency} {estimate?.rate?.input_per_1m}/1M input ·{" "}
-              {estimate?.rate?.output_per_1m}/1M output · rate date {estimate?.rate?.rate_date}
+              Tarief {estimate?.rate?.model}: {estimate?.rate?.currency} {estimate?.rate?.input_per_1m}/1M input ·{" "}
+              {estimate?.rate?.output_per_1m}/1M output · tariefdatum {estimate?.rate?.rate_date}
             </p>
             <p>
-              Trial estimate: <strong>{money(estimate?.trial_estimated_usd)}</strong>
+              Raming proefrun: <strong>{money(estimate?.trial_estimated_usd)}</strong>
             </p>
             <p className="hint">{estimate?.display_rule}</p>
-            <p className="hint">Failed requests can still incur cost; missing usage ≠ 0.</p>
+            <p className="hint">Mislukte aanvragen kunnen toch kosten geven; ontbrekende usage is niet hetzelfde als 0.</p>
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Post</th>
+                    <th>Bericht</th>
                     <th>Status</th>
                     <th>Tokens</th>
-                    <th>Actual cost</th>
+                    <th>Werkelijke kosten</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -174,7 +174,7 @@ export default function AiTrialPage({ client }) {
                       <td>{ev.status}</td>
                       <td>
                         {ev.total_tokens == null
-                          ? "unknown"
+                          ? "onbekend"
                           : `${ev.prompt_tokens}/${ev.completion_tokens}/${ev.total_tokens}`}
                       </td>
                       <td>{displayCost(ev.actual_cost, ev.cost_known)}</td>
@@ -197,15 +197,15 @@ export default function AiTrialPage({ client }) {
                 </a>
               </p>
 
-              <h4>Available content before execution</h4>
+              <h4>Beschikbare content vóór uitvoering</h4>
               <p>
-                Coverage: <strong>{post.media_prep?.coverage || post.media_access?.prepared?.coverage || "—"}</strong>
+                Dekking: <strong>{post.media_prep?.coverage || post.media_access?.prepared?.coverage || "—"}</strong>
               </p>
               <ul className="plain-list">
                 <li>
-                  Images for model: {(post.media_prep?.images_for_model || []).length} · full video:{" "}
-                  {post.media_prep?.full_video_to_model ? "yes" : "no"} · audio:{" "}
-                  {post.media_prep?.audio_to_model ? "yes" : "no"}
+                  Afbeeldingen voor model: {(post.media_prep?.images_for_model || []).length} · volledige video:{" "}
+                  {post.media_prep?.full_video_to_model ? "ja" : "nee"} · audio:{" "}
+                  {post.media_prep?.audio_to_model ? "ja" : "nee"}
                 </li>
                 {(post.media_prep?.images_for_model || []).map((img) => (
                   <li key={`${img.path}-${img.role}`}>
@@ -214,23 +214,23 @@ export default function AiTrialPage({ client }) {
                   </li>
                 ))}
                 {(post.media_prep?.missing || []).map((m) => (
-                  <li key={m}>Missing: {m}</li>
+                  <li key={m}>Ontbreekt: {m}</li>
                 ))}
                 {(post.media_prep?.limitations || post.media_access?.prepared?.limitations || []).map((lim) => (
                   <li key={lim}>{lim}</li>
                 ))}
               </ul>
 
-              <h4>Format rules for this content type</h4>
+              <h4>Formatregels voor dit contenttype</h4>
               <p className="hint">{post.input_preview?.format_pack?.instruction}</p>
               <p className="hint">
-                Eligible codes:{" "}
+                Toegestane codes:{" "}
                 {(post.input_preview?.format_pack?.eligible_formats || []).map((f) => f.code).join(", ") ||
-                  "(none — expect ‘Geen passend bestaand format’ / ‘Niet vast te stellen’)"}
+                  "(geen — verwacht ‘Geen passend bestaand format’ / ‘Niet vast te stellen’)"}
               </p>
 
               <details>
-                <summary>Input preview (system excerpt + user)</summary>
+                <summary>Invoervoorbeeld (systeemfragment + gebruiker)</summary>
                 <pre className="hint" style={{ whiteSpace: "pre-wrap" }}>
                   {post.input_preview?.system_excerpt || ""}
                 </pre>
@@ -238,11 +238,11 @@ export default function AiTrialPage({ client }) {
                   {post.input_preview?.user_full || ""}
                 </pre>
                 <p className="hint">
-                  Excel in request: {post.input_preview?.excel_assessment_included ? "yes" : "no"}
+                  Excel in aanvraag: {post.input_preview?.excel_assessment_included ? "ja" : "nee"}
                 </p>
               </details>
 
-              <h4>AI proposal (separate from Excel; not automatically accepted)</h4>
+              <h4>AI-voorstel (apart van Excel; niet automatisch overgenomen)</h4>
               {post.live_ai_result ? (
                 <div className="stack">
                   <p className="banner">
@@ -251,20 +251,20 @@ export default function AiTrialPage({ client }) {
                     <br />
                     Tokens:{" "}
                     {post.live_ai_result.usage?.prompt_tokens == null
-                      ? "unknown"
+                      ? "onbekend"
                       : `${post.live_ai_result.usage.prompt_tokens} / ${post.live_ai_result.usage.completion_tokens} / ${post.live_ai_result.usage.total_tokens}`}
                     {" · "}
-                    Cost:{" "}
+                    Kosten:{" "}
                     {post.live_ai_result.cost_known
                       ? `USD ${post.live_ai_result.actual_cost_usd}`
-                      : "unknown"}
+                      : "onbekend"}
                     <br />
-                    Images sent: {(post.live_ai_result.images_sent || []).length}
+                    Verstuurde afbeeldingen: {(post.live_ai_result.images_sent || []).length}
                   </p>
                   <p className="hint">
-                    Limitations:{" "}
+                    Beperkingen:{" "}
                     {(post.live_ai_result.limitations || []).join(" · ") ||
-                      "(no extra limitation recorded)"}
+                      "(geen extra beperking vastgelegd)"}
                   </p>
                   <p>
                     <strong>Format:</strong> {post.ai_format_code || "—"}
@@ -272,18 +272,18 @@ export default function AiTrialPage({ client }) {
                   </p>
                   <p className="hint">{post.ai_format_rationale || ""}</p>
                   <p>
-                    <strong>Pillar:</strong> {post.ai_pillar || "—"}
+                    <strong>Pijler:</strong> {post.ai_pillar || "—"}
                   </p>
                   <p>
                     <strong>Hook:</strong> {post.ai_hook || "—"}
                   </p>
                   <p>
-                    <strong>Insight:</strong> {post.ai_insight || "—"}
+                    <strong>Inzicht:</strong> {post.ai_insight || "—"}
                   </p>
                   <p>
-                    <strong>Action:</strong> {post.ai_action || "—"}
+                    <strong>Actie:</strong> {post.ai_action || "—"}
                   </p>
-                  <h4>Observations</h4>
+                  <h4>Waarnemingen</h4>
                   <ul className="plain-list">
                     {(post.ai_observations || []).map((obs, idx) => (
                       <li key={`${obs.evidence_ref}-${idx}`}>
@@ -293,7 +293,7 @@ export default function AiTrialPage({ client }) {
                   </ul>
                   {(post.live_ai_result.result?.unassessable || []).length ? (
                     <>
-                      <h4>Not assessed / uncertain</h4>
+                      <h4>Niet beoordeeld / onzeker</h4>
                       <ul className="plain-list">
                         {post.live_ai_result.result.unassessable.map((item) => (
                           <li key={item}>{item}</li>
@@ -303,7 +303,7 @@ export default function AiTrialPage({ client }) {
                   ) : null}
                   {(post.live_ai_result.result?.hypotheses || []).length ? (
                     <>
-                      <h4>Hypotheses (not facts)</h4>
+                      <h4>Hypothesen (geen feiten)</h4>
                       <ul className="plain-list">
                         {post.live_ai_result.result.hypotheses.map((item) => (
                           <li key={item}>{item}</li>
@@ -321,7 +321,7 @@ export default function AiTrialPage({ client }) {
                     {
                       status: post.status,
                       observations: post.ai_observations,
-                      format: post.ai_format_code || "(still empty)",
+                      format: post.ai_format_code || "(nog leeg)",
                       uncertainty: post.ai_format_uncertainty || "(open)",
                       pillar: post.ai_pillar || "(open)",
                       hook: post.ai_hook || "(open)",
@@ -352,21 +352,21 @@ export default function AiTrialPage({ client }) {
                           proposed_format_code: imageDefault,
                           format_rationale:
                             post.role === "image"
-                              ? "Mock: C-codes do not automatically apply to a single image."
-                              : "Mock: no paid analysis; incomplete media remains uncertain.",
+                              ? "Simulatie: C-codes gelden niet automatisch voor één afbeelding."
+                              : "Simulatie: geen betaalde analyse; onvolledige media blijft onzeker.",
                         },
                       })
                         .then((payload) => {
                           setData(payload);
                           setNotice(
-                            `Mock result saved for post ${post.post_id} (no paid AI request).`
+                            `Simulatieresultaat opgeslagen voor bericht ${post.post_id} (geen betaalde AI-aanvraag).`
                           );
                         })
                         .catch((exc) => setError(exc.message))
                         .finally(() => setBusy(false));
                     }}
                   >
-                    Save mock result (no paid call)
+                    Simulatieresultaat opslaan (geen betaalde aanvraag)
                   </button>
                 ) : null}
                 <button
@@ -380,33 +380,33 @@ export default function AiTrialPage({ client }) {
                       .then((payload) => {
                         setData(payload);
                         setNotice(
-                          `Proposal for post ${post.post_id} accepted without overwriting Excel.`
+                          `Voorstel voor bericht ${post.post_id} geaccepteerd zonder Excel te overschrijven.`
                         );
                       })
                       .catch((exc) => setError(exc.message));
                   }}
                 >
-                  Accept proposal (manual, without historical overwrite)
+                  Voorstel accepteren (handmatig, zonder historische overschrijving)
                 </button>
               </div>
               {post.accepted_proposal_json ? (
-                <p className="hint">Accepted: {JSON.stringify(post.accepted_proposal_json)}</p>
+                <p className="hint">Geaccepteerd: {JSON.stringify(post.accepted_proposal_json)}</p>
               ) : (
-                <p className="hint">Not manually accepted yet.</p>
+                <p className="hint">Nog niet handmatig geaccepteerd.</p>
               )}
 
-              <h4>Caption (reviewed)</h4>
+              <h4>Bijschrift (nagekeken)</h4>
               <pre className="hint" style={{ whiteSpace: "pre-wrap" }}>
-                {post.caption_preview || "(empty)"}
+                {post.caption_preview || "(leeg)"}
               </pre>
 
-              <h4>Excel analysis (separate historical source)</h4>
+              <h4>Excel-analyse (aparte historische bron)</h4>
               <p className="hint">
                 {post.excel_assessment?.source_label || "—"} · {post.excel_assessment?.rating_text || "—"}
               </p>
               <p className="hint">{post.excel_assessment?.insight_text || ""}</p>
               <p className="hint">{post.excel_assessment?.action_text || ""}</p>
-              <p className="hint">Excel is not overwritten by AI or feedback.</p>
+              <p className="hint">Excel wordt niet overschreven door AI of feedback.</p>
 
               <HumanFeedbackBlock
                 clientId={client.id}
@@ -429,11 +429,11 @@ export default function AiTrialPage({ client }) {
 }
 
 const POST_ITEM_DECISIONS = [
-  { value: "", label: "(no choice)" },
-  { value: "accept", label: "Accept" },
-  { value: "correct", label: "Correct" },
-  { value: "reject", label: "Reject" },
-  { value: "add", label: "Add" },
+  { value: "", label: "(geen keuze)" },
+  { value: "accept", label: "Accepteren" },
+  { value: "correct", label: "Corrigeren" },
+  { value: "reject", label: "Afwijzen" },
+  { value: "add", label: "Toevoegen" },
 ];
 
 function HumanFeedbackBlock({ clientId, post, busy, setBusy, setData, setError, setNotice }) {
@@ -492,8 +492,8 @@ function HumanFeedbackBlock({ clientId, post, busy, setBusy, setData, setError, 
         setData(payload);
         setNotice(
           extra.confirm_final_verdict
-            ? `Approved for post ${post.post_id} by ${reviewerName}.`
-            : `Feedback saved for post ${post.post_id} (execution ${post.execution_key || "—" }).`
+            ? `Goedgekeurd voor bericht ${post.post_id} door ${reviewerName}.`
+            : `Feedback opgeslagen voor bericht ${post.post_id} (uitvoering ${post.execution_key || "—" }).`
         );
       })
       .catch((exc) => setError(exc.message))
@@ -510,13 +510,13 @@ function HumanFeedbackBlock({ clientId, post, busy, setBusy, setData, setError, 
 
   return (
     <div className="stack">
-      <h4>Human review</h4>
+      <h4>Menselijke controle</h4>
       <p className="hint">
-        Route: AI draft → review → final version → Approved. Execution:{" "}
+        Route: AI-concept → controle → eindversie → Goedgekeurd. Uitvoering:{" "}
         <code>{post.execution_key || "—"}</code>
-        {fb.review_status_label ? ` · ${fb.is_approved ? "Approved" : fb.review_status_label}` : ""}
+        {fb.review_status_label ? ` · ${fb.is_approved ? "Goedgekeurd" : fb.review_status_label}` : ""}
       </p>
-      <p className="banner">{post.joint_verdict || "AI analysis only; not human-reviewed"}</p>
+      <p className="banner">{post.joint_verdict || "Alleen AI-analyse; nog niet door iemand gecontroleerd"}</p>
 
       <label className="row-actions">
         <input
@@ -524,7 +524,7 @@ function HumanFeedbackBlock({ clientId, post, busy, setBusy, setData, setError, 
           checked={showAiOriginal}
           onChange={(e) => setShowAiOriginal(e.target.checked)}
         />
-        Show AI original
+        Toon AI-origineel
       </label>
       {showAiOriginal ? (
         <pre className="hint" style={{ whiteSpace: "pre-wrap" }}>
@@ -533,32 +533,32 @@ function HumanFeedbackBlock({ clientId, post, busy, setBusy, setData, setError, 
       ) : null}
 
       <label>
-        Usability
+        Bruikbaarheid
         <select value={usability} onChange={(e) => setUsability(e.target.value)}>
-          <option value="">(not chosen)</option>
-          <option value="usable">Usable</option>
-          <option value="partial">Partially usable</option>
-          <option value="not_usable">Not usable</option>
+          <option value="">(niet gekozen)</option>
+          <option value="usable">Bruikbaar</option>
+          <option value="partial">Deels bruikbaar</option>
+          <option value="not_usable">Niet bruikbaar</option>
         </select>
       </label>
       <label>
-        Notes
+        Notities
         <textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
       </label>
       <label>
-        Corrected format
+        Gecorrigeerd format
         <input value={correctedFormat} onChange={(e) => setCorrectedFormat(e.target.value)} placeholder={post.ai_format_code || ""} />
       </label>
       <label>
-        Corrected content pillar
+        Gecorrigeerde contentpijler
         <input value={correctedPillar} onChange={(e) => setCorrectedPillar(e.target.value)} placeholder={post.ai_pillar || ""} />
       </label>
       <label>
-        Corrected hook
+        Gecorrigeerde hook
         <input value={correctedHook} onChange={(e) => setCorrectedHook(e.target.value)} placeholder={post.ai_hook || ""} />
       </label>
 
-      <h4>Per conclusion / advice</h4>
+      <h4>Per conclusie / advies</h4>
       {(items || []).map((item, idx) => (
         <div className="stack" key={item.key || idx} style={{ borderTop: "1px solid #ddd", paddingTop: "0.75rem" }}>
           <p>
@@ -566,7 +566,7 @@ function HumanFeedbackBlock({ clientId, post, busy, setBusy, setData, setError, 
           </p>
           {item.ai_text ? <p className="hint">AI: {item.ai_text}</p> : null}
           <label>
-            Decision
+            Beslissing
             <select
               value={item.decision || ""}
               onChange={(e) => updateItem(idx, { decision: e.target.value })}
@@ -580,7 +580,7 @@ function HumanFeedbackBlock({ clientId, post, busy, setBusy, setData, setError, 
           </label>
           {item.decision === "correct" || item.decision === "add" || item.key === "addition" ? (
             <label>
-              Staff text
+              Medewerkerstekst
               <textarea
                 rows={2}
                 value={item.human_text || ""}
@@ -592,24 +592,24 @@ function HumanFeedbackBlock({ clientId, post, busy, setBusy, setData, setError, 
       ))}
 
       <button className="secondary" type="button" disabled={busy} onClick={() => saveFeedback()}>
-        Save feedback
+        Feedback opslaan
       </button>
 
-      <h4>Final version &amp; approval</h4>
+      <h4>Eindversie &amp; goedkeuring</h4>
       <p className="hint">
-        Without human feedback the status remains “AI analysis only; not human-reviewed”.
-        “Approved” only after explicit confirmation with reviewer name.
+        Zonder menselijke feedback blijft de status “Alleen AI-analyse; nog niet door iemand gecontroleerd”.
+        “Goedgekeurd” alleen na expliciete bevestiging met naam van de controleur.
       </p>
       <label>
-        Reviewer
+        Controleur
         <input
           value={reviewerName}
           onChange={(e) => setReviewerName(e.target.value)}
-          placeholder="Staff name"
+          placeholder="Naam medewerker"
         />
       </label>
       <label>
-        Combined final version
+        Gecombineerde eindversie
         <textarea
           rows={5}
           value={finalVersion}
@@ -617,12 +617,12 @@ function HumanFeedbackBlock({ clientId, post, busy, setBusy, setData, setError, 
             setFinalVersion(e.target.value);
             setFinalVerdict(e.target.value);
           }}
-          placeholder="Combine usable AI points and your own additions"
+          placeholder="Combineer bruikbare AI-punten met je eigen aanvullingen"
         />
       </label>
       <div className="row-actions wrap">
         <button className="secondary" type="button" disabled={busy} onClick={() => saveFeedback()}>
-          Save draft
+          Concept opslaan
         </button>
         <button
           className="secondary"
@@ -630,7 +630,7 @@ function HumanFeedbackBlock({ clientId, post, busy, setBusy, setData, setError, 
           disabled={busy}
           onClick={() => saveFeedback({ compose_final_from_items: true })}
         >
-          Compose final version from choices
+          Eindversie samenstellen uit keuzes
         </button>
         <button
           className="primary"
@@ -638,18 +638,18 @@ function HumanFeedbackBlock({ clientId, post, busy, setBusy, setData, setError, 
           disabled={busy || fb.is_approved}
           onClick={() => saveFeedback({ confirm_final_verdict: true })}
         >
-          Explicitly approve
+          Expliciet goedkeuren
         </button>
       </div>
       {fb.final_verdict_confirmed || fb.is_approved ? (
         <p className="banner">
-          Approved{fb.reviewer_name ? ` by ${fb.reviewer_name}` : ""}
-          {fb.final_verdict_confirmed_at ? ` on ${fb.final_verdict_confirmed_at}` : ""}.
+          Goedgekeurd{fb.reviewer_name ? ` door ${fb.reviewer_name}` : ""}
+          {fb.final_verdict_confirmed_at ? ` op ${fb.final_verdict_confirmed_at}` : ""}.
         </p>
       ) : null}
 
-      <h4>Adopt into Logs</h4>
-      <p className="hint">Choose fields deliberately. Excel rating/insight/action remain untouched.</p>
+      <h4>Overnemen in Berichten</h4>
+      <p className="hint">Kies velden bewust. Excel-beoordeling/inzicht/actie blijven onaangeroerd.</p>
       <button
         className="secondary"
         type="button"
@@ -668,7 +668,7 @@ function HumanFeedbackBlock({ clientId, post, busy, setBusy, setData, setError, 
             .finally(() => setBusy(false));
         }}
       >
-        Show current vs proposed values
+        Toon huidige vs voorgestelde waarden
       </button>
       {adoptPreview ? (
         <div className="stack">
@@ -685,7 +685,7 @@ function HumanFeedbackBlock({ clientId, post, busy, setBusy, setData, setError, 
                 }}
               />
               <span>
-                <strong>{field.field}</strong>: now “{field.current || "—"}” → proposed “{field.proposed || "—"}”
+                <strong>{field.field}</strong>: nu “{field.current || "—"}” → voorstel “{field.proposed || "—"}”
                 {field.note ? ` (${field.note})` : ""}
               </span>
             </label>
@@ -710,7 +710,7 @@ function HumanFeedbackBlock({ clientId, post, busy, setBusy, setData, setError, 
                   }
                   setAdoptPreview(payload.preview_after || null);
                   setNotice(
-                    `Adopted into Logs for post ${post.post_id}: ${
+                    `Overgenomen in Berichten voor bericht ${post.post_id}: ${
                       (payload.applied || []).map((a) => a.field).join(", ") || "—"
                     }`
                   );
@@ -719,7 +719,7 @@ function HumanFeedbackBlock({ clientId, post, busy, setBusy, setData, setError, 
                 .finally(() => setBusy(false));
             }}
           >
-            Confirm adopt into Logs
+            Bevestig overnemen in Berichten
           </button>
         </div>
       ) : null}

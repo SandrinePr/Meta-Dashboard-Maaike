@@ -599,7 +599,7 @@ export default function StrategyPage({ client, initialTab = "specialist" }) {
               type="button"
               onClick={() => {
                 if (!String(targetDraft.metric_name || "").trim()) {
-                  setError("Vul een metric in voor het doel.");
+                  setError("Vul een meetwaarde in voor het doel, bijvoorbeeld bereik of engagement.");
                   return;
                 }
                 api(`/api/clients/${client.id}/targets`, {
