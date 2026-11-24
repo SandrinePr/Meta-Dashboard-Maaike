@@ -111,9 +111,11 @@ export default function MetaConnectFlow({
                 <span className="account-avatar" aria-hidden="true">
                   {(page.page_name || "?").slice(0, 1).toUpperCase()}
                 </span>
-                <span>
-                  <strong>{page.page_name}</strong>
-                  <span className="muted">{page.ig_username ? `@${page.ig_username}` : "Instagram-account"}</span>
+                <span className="account-card-text">
+                  <strong className="account-card-name">{page.page_name}</strong>
+                  <span className="muted account-card-handle">
+                    {page.ig_username ? `@${page.ig_username}` : "Instagram-account"}
+                  </span>
                 </span>
               </label>
             ))}
