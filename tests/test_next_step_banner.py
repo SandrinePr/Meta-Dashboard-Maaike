@@ -6,12 +6,24 @@ Fallback: mirror the priority rules in Python so CI without Node still guards th
 from __future__ import annotations
 
 
-def build_next_step(*, role: str, client_name: str, channel: dict | None, strategy: dict | None):
+def build_next_step(
+    *,
+    role: str,
+    client_name: str,
+    channel: dict | None,
+    strategy: dict | None,
+    status_loading: bool = True,
+    status_error: str | None = None,
+):
     """Python mirror of frontend/src/nextStep.js buildNextStep priority."""
     name = (client_name or "deze klant").strip() or "deze klant"
     editable = role in {"admin", "editor"}
+    if not channel and status_error:
+        return {"action": "posts", "tone": "warn"}
     if not channel:
-        return {"action": None, "tone": "neutral"}
+        if status_loading:
+            return {"action": None, "tone": "neutral"}
+        return {"action": "posts", "tone": "warn"}
     if channel.get("state") == "connect_required":
         return {"action": "setup" if editable else "posts", "tone": "warn"}
     if channel.get("state") == "fetch_first_posts":
@@ -62,3 +74,16 @@ def test_ready_client_points_to_results():
         strategy={"missing_required": [], "review_status": "definitief"},
     )
     assert step["action"] == "results"
+
+
+def test_status_error_does_not_hang_on_loading():
+    step = build_next_step(
+        role="viewer",
+        client_name="Red Rock",
+        channel=None,
+        strategy=None,
+        status_loading=False,
+        status_error="403",
+    )
+    assert step["action"] == "posts"
+    assert step["tone"] == "warn"

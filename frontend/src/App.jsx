@@ -42,11 +42,19 @@ const SOCIAL_TABS = new Set(["all_posts", "performance"]);
 function navPagesForRole(role) {
   const pages = [...DAILY_NAV];
   if (role === "viewer") return pages;
+  // Point 4: editors need a clear entry to client setup + settings.
+  pages.push(["client_setup", "Klant inrichten"]);
   pages.push(["settings", "Instellingen"]);
   if (role === "admin") {
     pages.push(["tech_admin", "Technisch beheer"]);
   }
   return pages;
+}
+
+function roleLabel(session) {
+  const role = session?.role;
+  if (!role) return "Rol laden…";
+  return session?.labels?.[role] || role;
 }
 
 // Capture deep-link query once at module load so React StrictMode remounts still
@@ -224,6 +232,8 @@ export default function App() {
   const [clients, setClients] = useState([]);
   const [clientId, setClientId] = useState(null);
   const [session, setSession] = useState(null);
+  const [totalsLoading, setTotalsLoading] = useState(false);
+  const [totalsError, setTotalsError] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -250,17 +260,34 @@ export default function App() {
 
   // Do not auto-pick the first client: after delete / empty state the overview must stay open.
   const selected = clients.find((item) => item.id === clientId) || null;
-  const role = session?.role || "admin";
-  const navPages = navPagesForRole(role);
+  // Until /api/session returns, treat as least privilege (no write affordances).
+  const role = session?.role || "viewer";
+  const canEdit = Boolean(session?.can_edit_clients);
+  const canTechAdmin = Boolean(session?.can_tech_admin);
+  const isAdmin = role === "admin";
+  const isEditor = role === "editor" || isAdmin;
+  const navPages = session ? navPagesForRole(role) : [...DAILY_NAV];
 
   const loadTotals = useCallback(async (id) => {
     if (!id) {
       setTotals(null);
+      setTotalsLoading(false);
+      setTotalsError("");
       return null;
     }
-    const payload = await api(`/api/clients/${id}/sync-totals`);
-    setTotals(payload);
-    return payload;
+    setTotalsLoading(true);
+    setTotalsError("");
+    try {
+      const payload = await api(`/api/clients/${id}/sync-totals`);
+      setTotals(payload);
+      return payload;
+    } catch (exc) {
+      setTotals(null);
+      setTotalsError(exc.message || "Status laden mislukt.");
+      throw exc;
+    } finally {
+      setTotalsLoading(false);
+    }
   }, []);
 
   const handleMetaOauthReturn = useCallback(
@@ -345,11 +372,15 @@ export default function App() {
   useEffect(() => {
     if (!session) return;
     if (page === "tech_admin" && session.role !== "admin") {
-      setPage("settings");
+      setPage(session.role === "editor" ? "settings" : "social_posts");
       setSettingsTab("home");
-      setNotice("Technisch beheer is alleen voor beheerders. Je bent doorgestuurd naar Instellingen.");
+      setNotice(
+        session.role === "editor"
+          ? "Technisch beheer is alleen voor beheerders. Je bent doorgestuurd naar Instellingen."
+          : "Technisch beheer is alleen voor beheerders.",
+      );
     }
-    if (page === "settings" && session.role === "viewer") {
+    if ((page === "settings" || page === "client_setup") && session.role === "viewer") {
       setPage("social_posts");
     }
     // Point 4: editors set up goals/strategy/competitors/client prompts in Klant inrichten.
@@ -383,11 +414,15 @@ export default function App() {
   useEffect(() => {
     if (!selected) {
       setTotals(null);
+      setTotalsLoading(false);
+      setTotalsError("");
       return undefined;
     }
     let cancelled = false;
     const activeClientId = selected.id;
     setTotals(null);
+    setTotalsLoading(true);
+    setTotalsError("");
     setLastSyncMessage("");
     api(`/api/clients/${activeClientId}/sync-totals`)
       .then((payload) => {
@@ -396,9 +431,16 @@ export default function App() {
           return;
         }
         setTotals(payload);
+        setTotalsError("");
       })
       .catch((exc) => {
-        if (!cancelled) setError(exc.message);
+        if (!cancelled) {
+          setTotals(null);
+          setTotalsError(exc.message || "Status laden mislukt.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setTotalsLoading(false);
       });
     return () => {
       cancelled = true;
@@ -419,10 +461,16 @@ export default function App() {
     setError("");
     setLastSyncMessage("");
     setTotals(null);
+    setTotalsLoading(Boolean(id));
+    setTotalsError("");
     setMenuOpen(false);
   }
 
   function openPage(next, postId = null) {
+    if (next === "client_setup") {
+      openClientSetup(selected);
+      return;
+    }
     if (next === "results") {
       setSocialTab("performance");
     } else if (next === "social_posts" && socialTab === "performance" && postId == null) {
@@ -542,6 +590,18 @@ export default function App() {
       </button>
       <aside className={menuOpen ? "sidebar is-open" : "sidebar"}>
         <h2 className="app-brand">{APP_NAME}</h2>
+        <div
+          className="role-badge"
+          role="status"
+          aria-live="polite"
+          title={session?.note_nl || ""}
+        >
+          <span className="role-badge-label">Actieve rol</span>
+          <strong className="role-badge-value">{roleLabel(session)}</strong>
+          {session?.username ? (
+            <span className="role-badge-user">{session.username}</span>
+          ) : null}
+        </div>
 
         <div className="client-picker">
           <div className="client-picker-row">
@@ -562,7 +622,7 @@ export default function App() {
             ) : (
               <p className="muted">Nog geen klanten aangemaakt.</p>
             )}
-            {role === "admin" || role === "editor" ? (
+            {canEdit ? (
               <button
                 className="icon-btn add-client-icon"
                 type="button"
@@ -616,17 +676,23 @@ export default function App() {
             </div>
           ) : null}
           {lastSyncMessage ? <p className="hint">{lastSyncMessage}</p> : null}
-          <button
-            className="primary"
-            type="button"
-            style={{ width: "100%" }}
-            disabled={!selected || !fetchAvailable || syncing}
-            onClick={syncMeta}
-          >
-            {syncing ? "Berichten ophalen…" : "Berichten ophalen"}
-          </button>
-          {selected && !fetchAvailable ? (
-            <p className="hint">Koppel eerst Facebook en Instagram voor deze klant.</p>
+          {canEdit ? (
+            <>
+              <button
+                className="primary"
+                type="button"
+                style={{ width: "100%" }}
+                disabled={!selected || !fetchAvailable || syncing}
+                onClick={syncMeta}
+              >
+                {syncing ? "Berichten ophalen…" : "Berichten ophalen"}
+              </button>
+              {selected && !fetchAvailable ? (
+                <p className="hint">Koppel eerst Facebook en Instagram voor deze klant.</p>
+              ) : null}
+            </>
+          ) : selected ? (
+            <p className="hint">Alleen lezen: berichten ophalen mag een editor of beheerder.</p>
           ) : null}
         </div>
 
@@ -650,16 +716,6 @@ export default function App() {
             );
           })}
         </nav>
-        {selected && (role === "admin" || role === "editor") ? (
-          <button
-            className="secondary"
-            type="button"
-            style={{ width: "100%", marginTop: "0.75rem" }}
-            onClick={() => openClientSetup(selected)}
-          >
-            Klant inrichten
-          </button>
-        ) : null}
       </aside>
 
       <main className="main">
@@ -684,9 +740,11 @@ export default function App() {
                   ? totals.channel_status || null
                   : null
               }
+              channelLoading={totalsLoading}
+              channelError={totalsError || null}
               syncing={syncing}
               onOpenSetup={() => openClientSetup(selected)}
-              onFetchPosts={syncMeta}
+              onFetchPosts={canEdit ? syncMeta : undefined}
               onOpenResults={openResults}
               onOpenPosts={() => {
                 setSocialTab("all_posts");
@@ -696,7 +754,7 @@ export default function App() {
             />
           ) : null}
 
-          {page === "client_setup" ? (
+          {page === "client_setup" && canEdit ? (
             <ClientSetupPage
               key={setupIsNew ? "setup-new" : selected ? `setup-${selected.id}` : "setup-none"}
               client={setupIsNew ? null : selected}
@@ -734,8 +792,8 @@ export default function App() {
               onOpenClient={openClientDashboard}
               onEditClient={openClientSetup}
               onAddClient={openAddClient}
-              canDelete={Boolean(session?.can_delete_clients ?? role === "admin")}
-              canEdit={Boolean(session?.can_edit_clients ?? role !== "viewer")}
+              canDelete={Boolean(session?.can_delete_clients)}
+              canEdit={canEdit}
               onDeletedSelected={() => {
                 chooseClient(null);
                 setPage("client_settings");
@@ -749,13 +807,13 @@ export default function App() {
             <div className="stack">
               <p className="banner">
                 Er is geen klant geselecteerd. Open <strong>Alle klanten</strong> via het tandwiel
-                {role === "admin" || role === "editor" ? " of voeg een nieuwe klant toe" : ""}.
+                {canEdit ? " of voeg een nieuwe klant toe" : ""}.
               </p>
               <div className="row-actions">
                 <button className="primary" type="button" onClick={openClientsOverview}>
                   Alle klanten
                 </button>
-                {role === "admin" || role === "editor" ? (
+                {canEdit ? (
                   <button className="secondary" type="button" onClick={openAddClient}>
                     Nieuwe klant toevoegen
                   </button>
@@ -764,7 +822,7 @@ export default function App() {
             </div>
           ) : null}
 
-          {page === "strategy" && selected && role === "admin" ? (
+          {page === "strategy" && selected && isAdmin ? (
             <StrategyPage
               key={`strategy-${selected.id}`}
               client={selected}
@@ -775,39 +833,51 @@ export default function App() {
             <ReportsAnalysisPage
               key={`hub-${selected.id}`}
               client={selected}
-              onOpenStrategy={() => {
-                if (role === "editor") openClientSetup(selected);
-                else if (role === "admin") {
-                  setStrategyTab("specialist");
-                  openPage("strategy");
-                }
-              }}
-              onOpenFigmaPlanning={() => {
-                if (role === "editor") openClientSetup(selected);
-                else if (role === "admin") {
-                  setStrategyTab("figma");
-                  openPage("strategy");
-                }
-              }}
+              role={role}
+              canEdit={canEdit}
+              canTechAdmin={canTechAdmin}
+              onOpenStrategy={
+                canEdit
+                  ? () => {
+                      if (role === "editor") openClientSetup(selected);
+                      else if (isAdmin) {
+                        setStrategyTab("specialist");
+                        openPage("strategy");
+                      }
+                    }
+                  : undefined
+              }
+              onOpenFigmaPlanning={
+                canEdit
+                  ? () => {
+                      if (role === "editor") openClientSetup(selected);
+                      else if (isAdmin) {
+                        setStrategyTab("figma");
+                        openPage("strategy");
+                      }
+                    }
+                  : undefined
+              }
               onOpenSocialPosts={() => {
                 setSocialTab("all_posts");
                 openPage("social_posts");
               }}
-              onOpenSettings={(tab = "planning") => {
-                if (role === "admin") {
-                  setTechTab(TECH_TABS.has(tab) ? tab : tab === "ai" ? "status" : "planning");
-                  openPage("tech_admin");
-                } else {
-                  setSettingsTab("home");
-                  openPage("settings");
-                }
-              }}
+              onOpenSettings={
+                canTechAdmin
+                  ? (tab = "planning") => {
+                      setTechTab(TECH_TABS.has(tab) ? tab : tab === "ai" ? "status" : "planning");
+                      openPage("tech_admin");
+                    }
+                  : undefined
+              }
             />
           ) : null}
           {(page === "social_posts" || page === "results") && selected ? (
             <SocialPostsPage
               key={`social-${selected.id}`}
               client={selected}
+              role={role}
+              canEdit={canEdit}
               initialTab={page === "results" ? "performance" : socialTab}
               focusPostId={focusPostId}
               onClearFocus={() => setFocusPostId(null)}
@@ -816,11 +886,15 @@ export default function App() {
                 setPage(tab === "performance" ? "results" : "social_posts");
               }}
               onOpenPost={openSocialPost}
-              onOpenConnect={() => openClientSetup(selected)}
-              onOpenCompetitors={() => {
-                if (role === "editor") openClientSetup(selected);
-                else openPage("comparison");
-              }}
+              onOpenConnect={canEdit ? () => openClientSetup(selected) : undefined}
+              onOpenCompetitors={
+                canEdit
+                  ? () => {
+                      if (role === "editor") openClientSetup(selected);
+                      else openPage("comparison");
+                    }
+                  : undefined
+              }
               onSynced={async () => {
                 await loadClients();
                 await loadTotals(selected.id);
@@ -829,14 +903,14 @@ export default function App() {
               onPeriodChange={setSocialPeriod}
             />
           ) : null}
-          {page === "comparison" && selected && role === "admin" ? (
+          {page === "comparison" && selected && isAdmin ? (
             <ComparisonPage
               key={`cmp-${selected.id}`}
               client={selected}
               onOpenConnect={() => openClientSetup(selected)}
             />
           ) : null}
-          {page === "settings" ? (
+          {page === "settings" && isEditor ? (
             <SettingsHubPage
               client={selected}
               session={session}
@@ -852,7 +926,7 @@ export default function App() {
               }}
             />
           ) : null}
-          {page === "tech_admin" && role === "admin" ? (
+          {page === "tech_admin" && isAdmin ? (
             <TechAdminPage
               client={selected}
               initialTab={techTab}

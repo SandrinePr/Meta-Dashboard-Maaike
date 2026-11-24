@@ -207,6 +207,9 @@ const MOCK_SCENARIOS = [
 
 export default function ReportsPage({
   client,
+  role = "viewer",
+  canEdit = false,
+  canTechAdmin = false,
   onOpenStrategy,
   onOpenFigmaPlanning,
   onOpenSocialPosts,
@@ -392,7 +395,7 @@ export default function ReportsPage({
           maxBudget={maxBudget}
           preview={preview}
           setPreview={setPreview}
-          onOpenSettings={onOpenSettings}
+          onOpenSettings={canTechAdmin ? onOpenSettings : undefined}
           onClose={closeOpenReport}
         />
       ) : null}
@@ -412,14 +415,16 @@ export default function ReportsPage({
                 </p>
               </div>
               <div className="row-actions wrap">
-                <button
-                  className="secondary"
-                  type="button"
-                  onClick={() => setShowBuilder((v) => !v)}
-                >
-                  {showBuilder ? "Verberg rapportmaker" : "Nieuw rapport maken"}
-                </button>
-                {onOpenSettings ? (
+                {canEdit ? (
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() => setShowBuilder((v) => !v)}
+                  >
+                    {showBuilder ? "Verberg rapportmaker" : "Nieuw rapport maken"}
+                  </button>
+                ) : null}
+                {canTechAdmin && onOpenSettings ? (
                   <button
                     className="secondary"
                     type="button"
@@ -500,7 +505,7 @@ export default function ReportsPage({
             </div>
           </section>
 
-          {showBuilder ? (
+          {canEdit && showBuilder ? (
             <NewAnalysisWizard
               key={`wizard-${client.id}`}
               client={client}
@@ -510,7 +515,7 @@ export default function ReportsPage({
               onOpenStrategy={onOpenStrategy}
               onOpenFigmaPlanning={onOpenFigmaPlanning}
               onOpenSocialPosts={onOpenSocialPosts}
-              onOpenSettings={onOpenSettings}
+              onOpenSettings={canTechAdmin ? onOpenSettings : undefined}
               onCreated={async (reportId, meta) => {
                 await reloadList();
                 if (reportId) {
@@ -524,6 +529,12 @@ export default function ReportsPage({
               }}
             />
           ) : null}
+          {!canEdit ? (
+            <p className="hint">
+              Je bekijkt rapporten als {role === "viewer" ? "gewone gebruiker" : "lezer"}. Nieuwe
+              rapporten maken of beheerinstellingen openen mag een editor of beheerder.
+            </p>
+          ) : null}
 
           {/* Opgeslagen klantrapporten */}
           <section className="card stack">
@@ -534,7 +545,7 @@ export default function ReportsPage({
                   Blijven bewaard in het dashboard, ook na verversen of opnieuw inloggen.
                 </p>
               </div>
-              {!showBuilder ? (
+              {canEdit && !showBuilder ? (
                 <button
                   className="primary"
                   type="button"
@@ -594,7 +605,7 @@ export default function ReportsPage({
                   gekoppeld aan elk klantrapport van dezelfde maand.
                 </p>
               </div>
-              {!showBuilder ? (
+              {canEdit && !showBuilder ? (
                 <button
                   className="secondary"
                   type="button"

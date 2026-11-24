@@ -23,6 +23,8 @@ export function canEditClient(role) {
  *     next_step?: string,
  *     review_status?: string,
  *   } | null,
+ *   statusLoading?: boolean,
+ *   statusError?: string | null,
  * }} input
  */
 export function buildNextStep(input = {}) {
@@ -31,14 +33,36 @@ export function buildNextStep(input = {}) {
   const channel = input.channelStatus || null;
   const strategy = input.strategy || null;
   const editable = canEditClient(role);
+  const statusLoading = input.statusLoading !== false && !input.statusError;
+  const statusError = input.statusError || null;
+
+  if (!channel && statusError) {
+    return {
+      title: `Status voor ${name} niet beschikbaar`,
+      body:
+        "De stand van zaken kon niet worden opgehaald. Vernieuw de pagina of open Socialmediaberichten om te kijken wat er al staat.",
+      action: "posts",
+      label: "Naar Socialmediaberichten",
+      tone: "warn",
+    };
+  }
 
   if (!channel) {
+    if (statusLoading) {
+      return {
+        title: `Status voor ${name} laden…`,
+        body: "Even geduld terwijl HAMSTER de stand van zaken ophaalt.",
+        action: null,
+        label: "",
+        tone: "neutral",
+      };
+    }
     return {
-      title: `Status voor ${name} laden…`,
-      body: "Even geduld terwijl HAMSTER de stand van zaken ophaalt.",
-      action: null,
-      label: "",
-      tone: "neutral",
+      title: `Status voor ${name} niet beschikbaar`,
+      body: "Er is geen actuele status. Open Socialmediaberichten of kies een andere klant.",
+      action: "posts",
+      label: "Naar Socialmediaberichten",
+      tone: "warn",
     };
   }
 

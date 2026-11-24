@@ -52,6 +52,8 @@ function formatIsoDateNl(iso) {
 
 export default function SocialPostsPage({
   client,
+  role = "viewer",
+  canEdit = false,
   initialTab = "all_posts",
   focusPostId,
   onClearFocus,
@@ -84,28 +86,42 @@ export default function SocialPostsPage({
   const [weeklyNotice, setWeeklyNotice] = useState("");
 
   const loadChannelAndWeekly = useCallback(async (targetClientId, guard = () => true) => {
-    const [totalsRes, weeklyRes] = await Promise.all([
-      api(`/api/clients/${targetClientId}/sync-totals`),
-      api(`/api/clients/${targetClientId}/logs/weekly-plan`),
-    ]);
+    // Load channel status first so a weekly-plan failure cannot leave the UI on “laden…”.
+    let totalsRes = null;
+    try {
+      totalsRes = await api(`/api/clients/${targetClientId}/sync-totals`);
+    } catch (exc) {
+      if (!guard()) return;
+      setChannelStatus(null);
+      throw exc;
+    }
     if (!guard()) return;
     if (totalsRes?.client_id != null && Number(totalsRes.client_id) !== Number(targetClientId)) {
       return;
     }
     setChannelStatus(totalsRes?.channel_status || null);
-    const plan = weeklyRes?.weekly_plan || null;
-    setLogsWeekly(plan);
-    setWeeklyDraft(
-      plan
-        ? {
-            enabled: Boolean(plan.enabled),
-            weekday: Number(plan.weekday ?? 0),
-            time: plan.time || "09:00",
-            responsible_name: plan.responsible_name || "",
-            note: plan.note || "",
-          }
-        : null,
-    );
+
+    try {
+      const weeklyRes = await api(`/api/clients/${targetClientId}/logs/weekly-plan`);
+      if (!guard()) return;
+      const plan = weeklyRes?.weekly_plan || null;
+      setLogsWeekly(plan);
+      setWeeklyDraft(
+        plan
+          ? {
+              enabled: Boolean(plan.enabled),
+              weekday: Number(plan.weekday ?? 0),
+              time: plan.time || "09:00",
+              responsible_name: plan.responsible_name || "",
+              note: plan.note || "",
+            }
+          : null,
+      );
+    } catch {
+      if (!guard()) return;
+      setLogsWeekly(null);
+      setWeeklyDraft(null);
+    }
   }, []);
 
   useEffect(() => {
@@ -313,10 +329,18 @@ export default function SocialPostsPage({
           gap: "0.85rem",
         }}
       >
-        {!channelStatus ? (
+        {!channelStatus && !topError ? (
           <p className="muted" style={{ margin: 0 }}>
             Status voor {client.name} laden…
           </p>
+        ) : !channelStatus && topError ? (
+          <div className="stack" style={{ gap: "0.35rem" }}>
+            <strong style={{ fontSize: "1.05rem" }}>Status voor {client.name} niet beschikbaar</strong>
+            <p style={{ margin: 0 }}>
+              De koppelingsstatus kon niet worden geladen. Vernieuw de pagina of vraag een editor om
+              hulp.
+            </p>
+          </div>
         ) : (
           <>
             <div
@@ -325,35 +349,45 @@ export default function SocialPostsPage({
             >
               <div className="stack" style={{ gap: "0.3rem", maxWidth: "44rem" }}>
                 <strong style={{ fontSize: "1.12rem" }}>{channelStatus.headline}</strong>
-                <p style={{ margin: 0 }}>{channelStatus.next_action}</p>
+                <p style={{ margin: 0 }}>
+                  {canEdit
+                    ? channelStatus.next_action
+                    : channelStatus.state === "connect_required"
+                      ? `Voor ${client.name} is Facebook/Instagram nog niet gekoppeld. Een editor regelt dat via Klant inrichten.`
+                      : channelStatus.state === "fetch_first_posts"
+                        ? `Voor ${client.name} staan nog geen berichten klaar. Vraag een editor om berichten op te halen.`
+                        : channelStatus.next_action}
+                </p>
               </div>
-              <div className="row-actions wrap">
-                {channelStatus.action_key === "connect_accounts" ? (
-                  <button
-                    className="primary"
-                    type="button"
-                    onClick={() => onOpenConnect?.()}
-                  >
-                    {channelStatus.action_label || "Accounts koppelen"}
-                  </button>
-                ) : (
-                  <button
-                    className="primary"
-                    type="button"
-                    disabled={fetchingTop}
-                    onClick={runPrimaryFetch}
-                  >
-                    {fetchingTop
-                      ? "Berichten ophalen…"
-                      : channelStatus.action_label || "Berichten ophalen"}
-                  </button>
-                )}
-                {channelStatus.connected ? (
-                  <button className="secondary" type="button" onClick={() => onOpenConnect?.()}>
-                    Koppeling bekijken
-                  </button>
-                ) : null}
-              </div>
+              {canEdit ? (
+                <div className="row-actions wrap">
+                  {channelStatus.action_key === "connect_accounts" ? (
+                    <button
+                      className="primary"
+                      type="button"
+                      onClick={() => onOpenConnect?.()}
+                    >
+                      {channelStatus.action_label || "Accounts koppelen"}
+                    </button>
+                  ) : (
+                    <button
+                      className="primary"
+                      type="button"
+                      disabled={fetchingTop}
+                      onClick={runPrimaryFetch}
+                    >
+                      {fetchingTop
+                        ? "Berichten ophalen…"
+                        : channelStatus.action_label || "Berichten ophalen"}
+                    </button>
+                  )}
+                  {channelStatus.connected && onOpenConnect ? (
+                    <button className="secondary" type="button" onClick={() => onOpenConnect()}>
+                      Koppeling bekijken
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
 
             <div
@@ -481,23 +515,30 @@ export default function SocialPostsPage({
                   ) : null}
                 </p>
               </div>
-              <div className="row-actions wrap">
-                <button
-                  className="primary"
-                  type="button"
-                  disabled={completingWeekly || !logsWeekly}
-                  onClick={handleCompleteWeeklyCheck}
-                >
-                  {completingWeekly ? "Bezig met afronden…" : "Wekelijkse controle afronden"}
-                </button>
-                <button
-                  className="secondary"
-                  type="button"
-                  onClick={() => setWeeklySettingsOpen((open) => !open)}
-                >
-                  {weeklySettingsOpen ? "Instellingen sluiten" : "Planning & verantwoordelijke"}
-                </button>
-              </div>
+              {canEdit ? (
+                <div className="row-actions wrap">
+                  <button
+                    className="primary"
+                    type="button"
+                    disabled={completingWeekly || !logsWeekly}
+                    onClick={handleCompleteWeeklyCheck}
+                  >
+                    {completingWeekly ? "Bezig met afronden…" : "Wekelijkse controle afronden"}
+                  </button>
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() => setWeeklySettingsOpen((open) => !open)}
+                  >
+                    {weeklySettingsOpen ? "Instellingen sluiten" : "Planning & verantwoordelijke"}
+                  </button>
+                </div>
+              ) : (
+                <p className="hint" style={{ margin: 0 }}>
+                  Alleen lezen ({role === "viewer" ? "gewone gebruiker" : role}): afronden mag een
+                  editor.
+                </p>
+              )}
             </div>
 
             {weeklyError ? <p className="banner error" style={{ margin: 0 }}>{weeklyError}</p> : null}
@@ -647,7 +688,7 @@ export default function SocialPostsPage({
               </div>
             </div>
 
-            {weeklySettingsOpen ? (
+            {canEdit && weeklySettingsOpen ? (
               <form
                 className="stack"
                 style={{

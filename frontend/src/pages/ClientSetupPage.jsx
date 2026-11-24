@@ -146,7 +146,8 @@ export default function ClientSetupPage({
   onFinished,
   onFetchPosts,
 }) {
-  const [step, setStep] = useState(isNew || !client ? 1 : 1);
+  // Existing clients open on inrichting (prompts/doelen/links/concurrenten), not the name step.
+  const [step, setStep] = useState(isNew || !client ? 1 : 3);
   const [name, setName] = useState(client?.name || "");
   const [clientId, setClientId] = useState(client?.id || null);
   const [busy, setBusy] = useState("");
