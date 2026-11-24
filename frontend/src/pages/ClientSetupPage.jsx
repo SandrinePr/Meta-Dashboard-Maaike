@@ -8,9 +8,18 @@ import { useMetaLogin } from "../useMetaLogin.js";
 const STEPS = [
   { id: 1, title: "Klantnaam", short: "Naam" },
   { id: 2, title: "Facebook en Instagram", short: "Koppelen" },
-  { id: 3, title: "Inhoud en links", short: "Inhoud" },
+  { id: 3, title: "Inrichting per klant", short: "Inrichting" },
   { id: 4, title: "Controleren", short: "Afronden" },
 ];
+
+/** Strategy answers that feed AI as this client's prompt context. */
+const CLIENT_PROMPT_KEYS = new Set([
+  "tone_of_voice",
+  "bedrijfsomschrijving",
+  "onderscheidend_vermogen",
+  "gewenste_socialresultaten",
+  "platforms",
+]);
 
 function statusClass(kind) {
   if (kind === "ready") return "setup-status is-ready";
@@ -429,15 +438,15 @@ export default function ClientSetupPage({
       },
       {
         key: "strategy",
-        label: "Strategie (verplichte vragen)",
+        label: "Klantprompts & strategie",
         required: true,
         kind: strategyReady ? "ready" : "todo",
         status: strategyReady ? "Klaar" : "Nog invullen",
         detail: strategyReady
-          ? "Verplichte strategievragen zijn ingevuld."
+          ? "Verplichte klantprompts en strategievragen zijn ingevuld."
           : `${missingRequired.length || requiredQuestions.length} verplichte vraag(en) open`,
-        editor: "Jij beantwoordt de verplichte vragen over de klant.",
-        hamster: "HAMSTER toont de vragenlijst en bewaart concepten tussentijds.",
+        editor: "Jij vult de context in die bij deze klant hoort (o.a. tone of voice).",
+        hamster: "HAMSTER bewaart dit als klantcontext voor AI — niet als algemene prompt.",
       },
       {
         key: "targets",
@@ -1056,8 +1065,9 @@ export default function ClientSetupPage({
               : "Nieuwe klant toevoegen"}
           </h3>
           <p className="hint">
-            Werk stap voor stap. Je kunt later terugkomen om gegevens aan te passen. Alleen selecteren
-            in de zijbalk is nog geen socialmedia-koppeling.
+            Dit is de <strong>enige plek</strong> voor de inrichting per klant: doelen, strategie,
+            links, concurrenten en de prompts die bij deze klant horen. Alleen selecteren in de
+            zijbalk is nog geen socialmedia-koppeling. Algemene prompts blijven bij Technisch beheer.
           </p>
         </div>
       </div>
@@ -1217,48 +1227,132 @@ export default function ClientSetupPage({
       {step === 3 ? (
         <section className="stack">
           <div className="card stack">
-            <h3>3. Doelen, strategie, links en concurrenten</h3>
+            <h3>3. Inrichting voor {name || client?.name || "deze klant"}</h3>
             <p className="hint">
-              Vul in wat je nu weet. Wijzigingen worden automatisch bewaard. Optionele velden (Canva,
-              Figma, doelen, concurrenten) mag je overslaan; die blokkeren afronden niet.
+              Hier regel je alles wat bij <strong>deze klant</strong> hoort: doelen, strategie,
+              links, concurrenten en klantprompts. Wijzigingen worden automatisch bewaard.
+              Optionele velden (Canva, Figma, doelen, concurrenten) mag je overslaan; die
+              blokkeren afronden niet.
+            </p>
+            <p className="banner">
+              <strong>Klantprompts</strong> hieronder gelden alleen voor{" "}
+              <strong>{name || client?.name || "deze klant"}</strong>. Algemene AI-prompts
+              (voor alle klanten) staan bij <strong>Technisch beheer</strong> en horen niet hier.
             </p>
           </div>
 
-          <section className="card stack">
+          <section className="card stack" id="setup-client-prompts">
             <div className="setup-block-head">
-              <h4>Strategie</h4>
+              <h4>
+                Klantprompts{" "}
+                <span className="badge badge-active">
+                  Alleen {name || client?.name || "deze klant"}
+                </span>
+              </h4>
               <StatusPill
-                kind={missingRequired.length ? "todo" : "ready"}
-                label={missingRequired.length ? "Nog invullen" : "Klaar"}
+                kind={
+                  questions
+                    .filter((q) => CLIENT_PROMPT_KEYS.has(q.key) && q.required_for_complete)
+                    .some((q) => missingRequired.includes(q.key))
+                    ? "todo"
+                    : "ready"
+                }
+                label={
+                  questions
+                    .filter((q) => CLIENT_PROMPT_KEYS.has(q.key) && q.required_for_complete)
+                    .some((q) => missingRequired.includes(q.key))
+                    ? "Nog invullen"
+                    : "Klaar"
+                }
               />
             </div>
             <p className="hint">
-              Verplichte vragen moeten ingevuld zijn om de inrichting af te ronden. Optionele vragen
-              mag je overslaan. Ook een gedeeltelijk concept wordt automatisch bewaard.
+              Tone of voice en kernbeschrijvingen die HAMSTER meeneemt als context bij AI voor
+              deze klant. Dit is geen systeemprompt — die blijven centraal bij Technisch beheer.
             </p>
-            {questions.map((question) => {
-              const required = Boolean(question.required_for_complete);
-              const open = missingRequired.includes(question.key);
-              return (
-                <label key={question.key}>
-                  {question.label}{" "}
-                  {required ? <span className="required-mark">verplicht</span> : <span className="muted">optioneel</span>}
-                  {open ? <span className="setup-inline-todo"> · Nog invullen</span> : null}
-                  <textarea
-                    rows={3}
-                    value={answers[question.key] || ""}
-                    onChange={(e) => setAnswer(question.key, e.target.value)}
-                    onBlur={() => {
-                      flushAutosave().catch(() => {});
-                    }}
-                    placeholder={question.short_question || ""}
-                  />
-                </label>
-              );
-            })}
+            {questions
+              .filter((question) => CLIENT_PROMPT_KEYS.has(question.key))
+              .map((question) => {
+                const required = Boolean(question.required_for_complete);
+                const open = missingRequired.includes(question.key);
+                return (
+                  <label key={question.key}>
+                    {question.label}{" "}
+                    {required ? (
+                      <span className="required-mark">verplicht</span>
+                    ) : (
+                      <span className="muted">optioneel</span>
+                    )}
+                    {open ? <span className="setup-inline-todo"> · Nog invullen</span> : null}
+                    <textarea
+                      rows={3}
+                      value={answers[question.key] || ""}
+                      onChange={(e) => setAnswer(question.key, e.target.value)}
+                      onBlur={() => {
+                        flushAutosave().catch(() => {});
+                      }}
+                      placeholder={question.short_question || ""}
+                    />
+                  </label>
+                );
+              })}
           </section>
 
-          <section className="card stack">
+          <section className="card stack" id="setup-strategy">
+            <div className="setup-block-head">
+              <h4>Overige strategievragen</h4>
+              <StatusPill
+                kind={
+                  questions
+                    .filter((q) => !CLIENT_PROMPT_KEYS.has(q.key) && q.required_for_complete)
+                    .some((q) => missingRequired.includes(q.key))
+                    ? "todo"
+                    : missingRequired.length
+                      ? "todo"
+                      : "ready"
+                }
+                label={
+                  questions
+                    .filter((q) => !CLIENT_PROMPT_KEYS.has(q.key) && q.required_for_complete)
+                    .some((q) => missingRequired.includes(q.key))
+                    ? "Nog invullen"
+                    : "Klaar"
+                }
+              />
+            </div>
+            <p className="hint">
+              Verplichte vragen moeten ingevuld zijn om de inrichting af te ronden. Optionele
+              vragen mag je overslaan. Ook een gedeeltelijk concept wordt automatisch bewaard.
+            </p>
+            {questions
+              .filter((question) => !CLIENT_PROMPT_KEYS.has(question.key))
+              .map((question) => {
+                const required = Boolean(question.required_for_complete);
+                const open = missingRequired.includes(question.key);
+                return (
+                  <label key={question.key}>
+                    {question.label}{" "}
+                    {required ? (
+                      <span className="required-mark">verplicht</span>
+                    ) : (
+                      <span className="muted">optioneel</span>
+                    )}
+                    {open ? <span className="setup-inline-todo"> · Nog invullen</span> : null}
+                    <textarea
+                      rows={3}
+                      value={answers[question.key] || ""}
+                      onChange={(e) => setAnswer(question.key, e.target.value)}
+                      onBlur={() => {
+                        flushAutosave().catch(() => {});
+                      }}
+                      placeholder={question.short_question || ""}
+                    />
+                  </label>
+                );
+              })}
+          </section>
+
+          <section className="card stack" id="setup-targets">
             <div className="setup-block-head">
               <h4>Doelen</h4>
               <StatusPill
@@ -1449,7 +1543,7 @@ export default function ClientSetupPage({
             </label>
           </section>
 
-          <section className="card stack">
+          <section className="card stack" id="setup-competitors">
             <div className="setup-block-head">
               <h4>Concurrenten</h4>
               <StatusPill

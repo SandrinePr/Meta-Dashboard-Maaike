@@ -236,6 +236,57 @@ h3 {
   color: #ffd7d7;
 }
 
+.next-step-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 1rem;
+  padding: 0.9rem 1rem;
+  border-radius: $radius-sm;
+  border: 1px solid $border;
+  background: rgba(242, 240, 236, 0.06);
+}
+
+.next-step-banner.is-warn {
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(245, 158, 11, 0.14);
+}
+
+.next-step-banner.is-info {
+  border-color: rgba(96, 165, 250, 0.45);
+  background: rgba(59, 130, 246, 0.14);
+}
+
+.next-step-banner.is-ok {
+  border-color: rgba(52, 211, 153, 0.45);
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.next-step-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-width: 44rem;
+}
+
+.next-step-kicker {
+  margin: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.next-step-title {
+  font-size: 1.05rem;
+}
+
+.next-step-body {
+  margin: 0;
+}
+
 .stack {
   display: flex;
   flex-direction: column;

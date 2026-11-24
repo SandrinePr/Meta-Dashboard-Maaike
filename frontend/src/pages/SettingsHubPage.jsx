@@ -48,9 +48,11 @@ export default function SettingsHubPage({
   return (
     <div className="stack">
       <p className="banner">
-        <strong>Wie hoort hier?</strong> Jet en Mo (editors) regelen hier de legenda en openen{" "}
-        <strong>Klant inrichten</strong> om Facebook/Instagram te koppelen. Technisch beheer
-        (API’s, prompts, back-up) staat apart voor beheerders.
+        <strong>Wie hoort hier?</strong> Jet en Mo (editors) openen{" "}
+        <strong>Klant inrichten</strong> voor doelen, strategie, links, concurrenten en
+        klantprompts, en beheren hier de legenda. Dagelijks werk staat links: Socialmediaberichten,
+        Resultaten en Rapporten. Technisch beheer (algemene prompts, API’s, back-up) blijft voor
+        beheerders.
       </p>
       {!session?.role_enforced ? <p className="hint">{session?.note_nl}</p> : null}
 
@@ -110,16 +112,16 @@ export default function SettingsHubPage({
             <h3 style={{ marginTop: 0 }}>Wat je op elk scherm doet</h3>
             <ul className="plain-list" style={{ lineHeight: 1.55 }}>
               <li>
-                <strong>Klant inrichten</strong> — naam, Facebook/Instagram koppelen, strategie en
-                concurrenten voor één klant.
+                <strong>Klant inrichten</strong> — één plek voor naam, Meta-koppeling, doelen,
+                strategie, links, concurrenten en de prompts die bij die klant horen.
               </li>
               <li>
                 <strong>Legenda</strong> — formats, pijlers en hooks die je bij Socialmediaberichten
                 invult.
               </li>
               <li>
-                <strong>Doelen &amp; Strategie / Berichten / Concurrenten / Rapporten</strong> —
-                dagelijks werk in het menu links (niet hier).
+                <strong>Socialmediaberichten / Resultaten / Rapporten</strong> — dagelijks werk in
+                het menu links (niet hier).
               </li>
               {isAdmin ? (
                 <li>

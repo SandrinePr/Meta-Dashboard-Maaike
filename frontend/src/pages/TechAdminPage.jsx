@@ -15,7 +15,7 @@ const TABS = [
 
 const TAB_HINTS = {
   status: "Bekijk of AI, Meta en back-up goed staan en lees hoe rapporten technisch werken.",
-  prompts: "Pas de centrale AI-prompts aan. Dit geldt voor alle klanten.",
+  prompts: "Centrale AI-prompts voor alle klanten. Klantprompts horen bij Klant inrichten.",
   planning: "Plan klantrapporten en het maandelijkse trendrapport voor alle klanten.",
   backup: "Exporteer of herstel een volledige JSON-back-up van het dashboard.",
   trial: "Draai een technische proef op losse berichten. Openen start geen betaalde aanroep.",

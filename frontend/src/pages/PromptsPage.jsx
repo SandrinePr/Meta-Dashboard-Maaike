@@ -47,8 +47,9 @@ export default function PromptsPage({ onNotice, onError }) {
   return (
     <div className="stack prompts-page">
       <p className="hint">
-        Centrale prompts voor <strong>alle klanten</strong>. Strategie, tone of voice en cijfers
-        blijven klantspecifieke context bij elke analyse of rapport. {data.note}
+        Centrale prompts voor <strong>alle klanten</strong>. Klantprompts (tone of voice en
+        strategiecontext) regel je per klant in <strong>Klant inrichten</strong>; die blijven
+        klantspecifieke context bij elke analyse of rapport. {data.note}
       </p>
       {(data.conflicts || []).length ? (
         <div className="banner warn-soft">

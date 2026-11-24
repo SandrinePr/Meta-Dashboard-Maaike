@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.js";
+import NextStepBanner from "./components/NextStepBanner.jsx";
 import { subscribeMetaOauth } from "./oauthBridge.js";
 import ClientsPage from "./pages/ClientsPage.jsx";
 import ClientSetupPage from "./pages/ClientSetupPage.jsx";
@@ -12,12 +13,11 @@ import StrategyPage from "./pages/StrategyPage.jsx";
 
 const APP_NAME = "Bruine Beer";
 
-const NAV_PAGES_BASE = [
-  ["strategy", "Doelen & Strategie"],
-  ["reports_analysis", "Rapporten"],
-  ["comparison", "Concurrenten"],
+/** Daily work for Jet/Mo after choosing a client (Maaike point 5). */
+const DAILY_NAV = [
   ["social_posts", "Socialmediaberichten"],
-  ["settings", "Instellingen"],
+  ["results", "Resultaten"],
+  ["reports_analysis", "Rapporten"],
 ];
 
 const TITLES = {
@@ -25,11 +25,14 @@ const TITLES = {
   reports_analysis: "Rapporten",
   comparison: "Concurrenten",
   social_posts: "Socialmediaberichten",
+  results: "Resultaten",
   settings: "Instellingen",
   tech_admin: "Technisch beheer",
   client_settings: "Alle klanten",
   client_setup: "Klant inrichten",
 };
+
+const DAILY_PAGES = new Set(["social_posts", "results", "reports_analysis"]);
 
 const REPORTS_TABS = new Set(["reports"]);
 const SETTINGS_TABS = new Set(["home", "legend", "ai", "prompts", "planning", "backup"]);
@@ -37,12 +40,11 @@ const TECH_TABS = new Set(["status", "prompts", "planning", "backup", "trial"]);
 const SOCIAL_TABS = new Set(["all_posts", "performance"]);
 
 function navPagesForRole(role) {
-  const pages = [...NAV_PAGES_BASE];
+  const pages = [...DAILY_NAV];
+  if (role === "viewer") return pages;
+  pages.push(["settings", "Instellingen"]);
   if (role === "admin") {
     pages.push(["tech_admin", "Technisch beheer"]);
-  }
-  if (role === "viewer") {
-    return pages.filter(([id]) => id !== "settings");
   }
   return pages;
 }
@@ -70,9 +72,9 @@ function resolveRoute(requestedPage) {
       socialTab: "all_posts",
     };
   }
-  if (raw === "performance") {
+  if (raw === "performance" || raw === "results" || raw === "resultaten") {
     return {
-      page: "social_posts",
+      page: "results",
       reportsTab: "reports",
       settingsTab: "home",
       techTab: "status",
@@ -170,9 +172,19 @@ function resolveRoute(requestedPage) {
       socialTab: "all_posts",
     };
   }
-  if (raw === "comparison" || raw === "strategy" || raw === "social_posts") {
+  if (raw === "comparison" || raw === "strategy") {
+    // Editors land in Klant inrichten (point 4); admin may still open these pages.
     return {
       page: raw,
+      reportsTab: "reports",
+      settingsTab: "home",
+      techTab: "status",
+      socialTab: "all_posts",
+    };
+  }
+  if (raw === "social_posts") {
+    return {
+      page: "social_posts",
       reportsTab: "reports",
       settingsTab: "home",
       techTab: "status",
@@ -340,6 +352,17 @@ export default function App() {
     if (page === "settings" && session.role === "viewer") {
       setPage("social_posts");
     }
+    // Point 4: editors set up goals/strategy/competitors/client prompts in Klant inrichten.
+    if (
+      (page === "strategy" || page === "comparison") &&
+      session.role === "editor"
+    ) {
+      setSetupIsNew(false);
+      setPage("client_setup");
+      setNotice(
+        "Doelen, strategie, concurrenten en klantprompts regel je in Klant inrichten.",
+      );
+    }
   }, [session, page]);
 
   useEffect(() => {
@@ -400,6 +423,11 @@ export default function App() {
   }
 
   function openPage(next, postId = null) {
+    if (next === "results") {
+      setSocialTab("performance");
+    } else if (next === "social_posts" && socialTab === "performance" && postId == null) {
+      setSocialTab("all_posts");
+    }
     setPage(next);
     setFocusPostId(postId);
     setMenuOpen(false);
@@ -408,6 +436,11 @@ export default function App() {
   function openSocialPost(postId) {
     setSocialTab("all_posts");
     openPage("social_posts", postId);
+  }
+
+  function openResults() {
+    setSocialTab("performance");
+    openPage("results");
   }
 
   function clearMetaAttemptError() {
@@ -600,16 +633,22 @@ export default function App() {
         <hr className="sidebar-rule" />
 
         <nav className="nav">
-          {navPages.map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              className={page === id ? "nav-button is-active" : "nav-button"}
-              onClick={() => openPage(id)}
-            >
-              {label}
-            </button>
-          ))}
+          {navPages.map(([id, label]) => {
+            const active =
+              page === id ||
+              (id === "social_posts" && page === "social_posts") ||
+              (id === "results" && page === "results");
+            return (
+              <button
+                key={id}
+                type="button"
+                className={active ? "nav-button is-active" : "nav-button"}
+                onClick={() => openPage(id)}
+              >
+                {label}
+              </button>
+            );
+          })}
         </nav>
         {selected && (role === "admin" || role === "editor") ? (
           <button
@@ -634,6 +673,28 @@ export default function App() {
           </div>
           {notice ? <p className="banner">{notice}</p> : null}
           {error ? <p className="banner error">{error}</p> : null}
+
+          {selected && DAILY_PAGES.has(page) ? (
+            <NextStepBanner
+              key={`next-${selected.id}`}
+              client={selected}
+              role={role}
+              channelStatus={
+                totals && Number(totals.client_id) === Number(selected.id)
+                  ? totals.channel_status || null
+                  : null
+              }
+              syncing={syncing}
+              onOpenSetup={() => openClientSetup(selected)}
+              onFetchPosts={syncMeta}
+              onOpenResults={openResults}
+              onOpenPosts={() => {
+                setSocialTab("all_posts");
+                openPage("social_posts");
+              }}
+              onOpenReports={() => openPage("reports_analysis")}
+            />
+          ) : null}
 
           {page === "client_setup" ? (
             <ClientSetupPage
@@ -687,21 +748,23 @@ export default function App() {
           {!selected && page !== "settings" && page !== "tech_admin" && page !== "client_settings" && page !== "client_setup" ? (
             <div className="stack">
               <p className="banner">
-                Er is geen klant geselecteerd. Open <strong>Alle klanten</strong> via het tandwiel of
-                voeg een nieuwe klant toe.
+                Er is geen klant geselecteerd. Open <strong>Alle klanten</strong> via het tandwiel
+                {role === "admin" || role === "editor" ? " of voeg een nieuwe klant toe" : ""}.
               </p>
               <div className="row-actions">
                 <button className="primary" type="button" onClick={openClientsOverview}>
                   Alle klanten
                 </button>
-                <button className="secondary" type="button" onClick={openAddClient}>
-                  Nieuwe klant toevoegen
-                </button>
+                {role === "admin" || role === "editor" ? (
+                  <button className="secondary" type="button" onClick={openAddClient}>
+                    Nieuwe klant toevoegen
+                  </button>
+                ) : null}
               </div>
             </div>
           ) : null}
 
-          {page === "strategy" && selected ? (
+          {page === "strategy" && selected && role === "admin" ? (
             <StrategyPage
               key={`strategy-${selected.id}`}
               client={selected}
@@ -713,12 +776,18 @@ export default function App() {
               key={`hub-${selected.id}`}
               client={selected}
               onOpenStrategy={() => {
-                setStrategyTab("specialist");
-                openPage("strategy");
+                if (role === "editor") openClientSetup(selected);
+                else if (role === "admin") {
+                  setStrategyTab("specialist");
+                  openPage("strategy");
+                }
               }}
               onOpenFigmaPlanning={() => {
-                setStrategyTab("figma");
-                openPage("strategy");
+                if (role === "editor") openClientSetup(selected);
+                else if (role === "admin") {
+                  setStrategyTab("figma");
+                  openPage("strategy");
+                }
               }}
               onOpenSocialPosts={() => {
                 setSocialTab("all_posts");
@@ -735,17 +804,23 @@ export default function App() {
               }}
             />
           ) : null}
-          {page === "social_posts" && selected ? (
+          {(page === "social_posts" || page === "results") && selected ? (
             <SocialPostsPage
               key={`social-${selected.id}`}
               client={selected}
-              initialTab={socialTab}
+              initialTab={page === "results" ? "performance" : socialTab}
               focusPostId={focusPostId}
               onClearFocus={() => setFocusPostId(null)}
-              onTabChange={setSocialTab}
+              onTabChange={(tab) => {
+                setSocialTab(tab);
+                setPage(tab === "performance" ? "results" : "social_posts");
+              }}
               onOpenPost={openSocialPost}
               onOpenConnect={() => openClientSetup(selected)}
-              onOpenCompetitors={() => openPage("comparison")}
+              onOpenCompetitors={() => {
+                if (role === "editor") openClientSetup(selected);
+                else openPage("comparison");
+              }}
               onSynced={async () => {
                 await loadClients();
                 await loadTotals(selected.id);
@@ -754,7 +829,7 @@ export default function App() {
               onPeriodChange={setSocialPeriod}
             />
           ) : null}
-          {page === "comparison" && selected ? (
+          {page === "comparison" && selected && role === "admin" ? (
             <ComparisonPage
               key={`cmp-${selected.id}`}
               client={selected}
