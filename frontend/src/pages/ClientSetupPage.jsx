@@ -485,7 +485,8 @@ export default function ClientSetupPage({
           ? figma.connection.file_name || figma.connection.file_key
           : figmaUrl.trim() || figmaKey.trim() || "Geen Figma-koppeling. Optioneel — blokkeert afronden niet.",
         editor: "Jij plakt de Figma-link of file key (optioneel).",
-        hamster: "HAMSTER bewaart de Figma-koppeling. Strategievragen worden hier niet automatisch ingevuld.",
+        hamster:
+          "HAMSTER bewaart de Figma-koppeling. Je kunt voorstellen ophalen voor lege velden uit tekst/planning in Figma.",
       },
       {
         key: "competitors",
@@ -934,17 +935,56 @@ export default function ClientSetupPage({
     }
   }
 
-  function explainCanvaLinkImport() {
-    setCanvaImportHint(
-      "Canva-linkimport ontbreekt: het ontwerp zelf wordt niet uitgelezen. Exporteer de strategie als PDF uit Canva en kies hieronder ‘Voorstellen ophalen via PDF’.",
-    );
+  async function previewCanvaProposals() {
+    if (!activeId) return;
+    const url = String(canvaDraftRef.current || canvaUrl || "").trim();
+    setBusy("canva-import");
+    setLocalError("");
     setImportNote("");
+    setCanvaImportHint("");
     try {
-      document.getElementById("setup-pdf-import")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    } catch {
-      /* ignore */
+      await flushAutosave().catch(() => {});
+      if (!url) {
+        setCanvaImportHint(
+          "Plak eerst een Canva-link. Directe linkimport staat nog open: exporteer intussen als PDF en gebruik ‘Voorstellen ophalen via PDF’.",
+        );
+        document.getElementById("setup-pdf-import")?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+        pdfInputRef.current?.focus?.();
+        return;
+      }
+      const preview = await api(`/api/clients/${activeId}/strategy/import/canva-preview`, {
+        method: "POST",
+        body: { url },
+      });
+      // Canva designs are not scraped — keep link, offer PDF path.
+      setImportPreview(null);
+      setCanvaImportHint(
+        preview.note ||
+          "Deze Canva-link kan niet worden uitgelezen. Directe linkimport staat nog open. Gebruik hieronder de PDF-import of vul handmatig in.",
+      );
+      setImportNote(
+        "Canva-link bewaard als bron. Voor veldvoorstellen: exporteer de strategie als tekst-PDF en kies ‘Voorstellen ophalen via PDF’.",
+      );
+      try {
+        document.getElementById("setup-pdf-import")?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      } catch {
+        /* ignore */
+      }
+      pdfInputRef.current?.focus?.();
+    } catch (exc) {
+      setLocalError(exc.message || dutchSaveError(exc));
+      setCanvaImportHint(
+        "Canva-link kon niet worden gevalideerd. Directe linkimport staat nog open — gebruik PDF-import of handmatige invoer.",
+      );
+    } finally {
+      setBusy("");
     }
-    pdfInputRef.current?.focus?.();
   }
 
   function setProposalAnswer(key, value) {
@@ -1535,7 +1575,8 @@ export default function ClientSetupPage({
             </div>
             <p className="hint">
               Optioneel — blokkeert afronden niet. De link wordt bewaard als bron. Canva-ontwerpinhoud
-              wordt via de link <strong>niet</strong> uitgelezen.
+              wordt via de link <strong>niet</strong> uitgelezen; directe linkimport staat nog open.
+              Gebruik dan PDF-export hieronder.
             </p>
             <label>
               Canva-URL
@@ -1556,12 +1597,12 @@ export default function ClientSetupPage({
             <button
               className="secondary"
               type="button"
-              disabled={!activeId}
-              onClick={explainCanvaLinkImport}
+              disabled={!activeId || busy === "canva-import"}
+              onClick={previewCanvaProposals}
             >
-              Voorstellen ophalen uit Canva
+              {busy === "canva-import" ? "Canva controleren…" : "Voorstellen ophalen uit Canva"}
             </button>
-            {canvaImportHint ? <p className="banner">{canvaImportHint}</p> : null}
+            {canvaImportHint ? <p className="banner warn-soft">{canvaImportHint}</p> : null}
           </section>
 
           <section className="card stack" id="setup-pdf-import">
@@ -1601,6 +1642,22 @@ export default function ClientSetupPage({
                     ? ` · gevonden: ${(importPreview.filled_keys || []).join(", ")}`
                     : " · geen veldvoorstellen"}
                 </p>
+                {(importPreview.filled_keys || []).length ? (
+                  <ul className="plain-list">
+                    {(importPreview.filled_keys || []).map((key) => (
+                      <li key={`pdf-src-${key}`}>
+                        {key}
+                        <span className="hint">
+                          {" "}
+                          · bron:{" "}
+                          {(importPreview.proposed?.field_sources || {})[key] ||
+                            importPreview.source_kind ||
+                            "PDF"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
                 {(importPreview.missing || []).length ? (
                   <p className="banner warn-soft">
                     Niet inleesbaar / niet gevonden: {(importPreview.missing || []).slice(0, 8).join(" · ")}
@@ -1690,10 +1747,29 @@ export default function ClientSetupPage({
               <div className="stack">
                 <p className="banner">
                   Bron: Figma
+                  {importPreview.source_url ? ` · ${importPreview.source_url}` : ""}
                   {(importPreview.filled_keys || []).length
                     ? ` · gevonden: ${(importPreview.filled_keys || []).join(", ")}`
                     : " · geen veldvoorstellen"}
                 </p>
+                {(importPreview.filled_keys || []).length ? (
+                  <ul className="plain-list">
+                    {(importPreview.filled_keys || []).map((key) => (
+                      <li key={`figma-src-${key}`}>
+                        {key}
+                        <span className="hint">
+                          {" "}
+                          · bron:{" "}
+                          {(importPreview.proposed?.field_sources || {})[key] || "Figma"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="hint">
+                    Geen strategie-informatie gevonden. Handmatige invoer blijft beschikbaar.
+                  </p>
+                )}
                 <div className="row-actions">
                   <button
                     className="primary"

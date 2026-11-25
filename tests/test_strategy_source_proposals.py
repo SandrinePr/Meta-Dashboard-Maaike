@@ -166,6 +166,7 @@ def test_canva_link_does_not_extract_content(strategy_http):
     assert body.get("link_import_available") is False
     assert body["proposed"]["start_answers"] == {}
     assert "PDF" in body["note"]
+    assert "nog open" in body["note"].lower() or "openstaat" in body["note"].lower()
 
 
 def test_figma_usable_source_proposes_only_found_fields(strategy_http):

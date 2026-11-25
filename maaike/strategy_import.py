@@ -106,8 +106,9 @@ def preview_canva_link(url: str) -> dict[str, Any]:
         "content_extracted": False,
         "link_import_available": False,
         "note": (
-            "Canva-linkimport ontbreekt: het ontwerp zelf wordt niet uitgelezen. "
-            "Exporteer de strategie als PDF en gebruik ‘Voorstellen ophalen via PDF’."
+            "Deze Canva-link kan niet worden uitgelezen. Directe linkimport staat nog open. "
+            "Exporteer de strategie als PDF en gebruik ‘Voorstellen ophalen via PDF’, "
+            "of vul handmatig in."
         ),
         "proposed": {
             "start_answers": {},
@@ -117,7 +118,7 @@ def preview_canva_link(url: str) -> dict[str, Any]:
         },
         "missing": [q["label"] for q in START_QUESTIONS],
         "open_questions": [
-            "Exporteer de Canva-strategie als PDF om velden automatisch te vullen, of vul handmatig aan."
+            "Directe Canva-linkimport staat nog open. Exporteer intussen als PDF of vul handmatig aan."
         ],
         "filled_keys": [],
     }
