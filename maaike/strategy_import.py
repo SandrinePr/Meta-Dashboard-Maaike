@@ -63,20 +63,73 @@ def _split_sections(text: str) -> dict[str, str]:
     return {k: "\n".join(v).strip() for k, v in sections.items() if v}
 
 
-def _map_sections_to_fields(sections: dict[str, str]) -> dict[str, dict[str, str]]:
+# Creative-brief scaffolding in Figma planning files — not strategy answers.
+_CREATIVE_BRIEF_NOISE = re.compile(
+    r"(?i)content\s*format|contentpijler|hook\s*/\s*tekst|beeldmateriaal\s*omschrijving|"
+    r"inspiratie\s*/\s*voorbeeld|wat moet de gebruiker|caption\s*bij|insta\s*-\s*(post|reel)|"
+    r"hier in te vullen|niet van toepassing|nvt\b"
+)
+
+
+def _is_creative_brief_noise(heading: str, body: str) -> bool:
+    blob = f"{heading}\n{body}"
+    hits = len(_CREATIVE_BRIEF_NOISE.findall(blob))
+    return hits >= 2 or bool(_CREATIVE_BRIEF_NOISE.search(heading or ""))
+
+
+def _trim_creative_tail(body: str) -> str:
+    """Keep strategy prose; stop once creative-brief scaffolding starts."""
+    lines: list[str] = []
+    for ln in (body or "").splitlines():
+        if _CREATIVE_BRIEF_NOISE.search(ln):
+            break
+        lines.append(ln)
+    return "\n".join(lines).strip()
+
+
+def _heading_is_field_label(heading: str, pattern: str) -> bool:
+    """True when the heading is essentially the field label, not a caption fragment."""
+    h = (heading or "").strip()
+    if not h or len(h) > 48:
+        return False
+    match = re.search(pattern, h)
+    if not match:
+        return False
+    remainder = (h[: match.start()] + h[match.end() :]).strip(" \t:-–—|/&,.")
+    return len(remainder) <= 12
+
+
+def _map_sections_to_fields(
+    sections: dict[str, str],
+    *,
+    heading_only: bool = False,
+    allow_preamble_fallback: bool = True,
+) -> dict[str, dict[str, str]]:
     start: dict[str, str] = {}
     fields: dict[str, str] = {}
     for heading, body in sections.items():
-        blob = f"{heading}\n{body}"
+        if heading == "_preamble":
+            continue
+        clean_body = _trim_creative_tail(body) if heading_only else (body or "").strip()
+        if not clean_body:
+            continue
+        if _is_creative_brief_noise(heading, clean_body):
+            continue
         for bucket, key, pattern in _FIELD_PATTERNS:
-            if re.search(pattern, heading) or re.search(pattern, body[:200]):
+            if heading_only:
+                heading_hit = _heading_is_field_label(heading, pattern)
+                body_hit = False
+            else:
+                heading_hit = bool(re.search(pattern, heading))
+                body_hit = bool(re.search(pattern, clean_body[:200]))
+            if heading_hit or body_hit:
                 target = start if bucket == "start_answers" else fields
-                if key not in target and body.strip():
-                    target[key] = body.strip()[:4000]
-    # Fallback: put preamble into bedrijfsomschrijving if empty
-    if "_preamble" in sections and "bedrijfsomschrijving" not in start:
+                if key not in target:
+                    target[key] = clean_body[:4000]
+    # Fallback: put preamble into bedrijfsomschrijving if empty (PDF strategy docs).
+    if allow_preamble_fallback and "_preamble" in sections and "bedrijfsomschrijving" not in start:
         pre = sections["_preamble"].strip()
-        if len(pre) > 40:
+        if len(pre) > 40 and not _is_creative_brief_noise("_preamble", pre):
             start["bedrijfsomschrijving"] = pre[:4000]
     return {"start_answers": start, "strategy_fields": fields}
 
@@ -166,11 +219,20 @@ def preview_figma_strategy(
 
     text = collect_all_text_from_figma_document(doc)
     sections = _split_sections(text) if text else {}
-    mapped = _map_sections_to_fields(sections) if sections else {"start_answers": {}, "strategy_fields": {}}
+    # Figma creatives are noisy: only map clear strategy headings, never brief scaffolding.
+    mapped = (
+        _map_sections_to_fields(
+            sections,
+            heading_only=True,
+            allow_preamble_fallback=False,
+        )
+        if sections
+        else {"start_answers": {}, "strategy_fields": {}}
+    )
     start = dict(mapped["start_answers"])
     fields = dict(mapped["strategy_fields"])
     field_sources: dict[str, str] = {
-        key: "Figma-tekst (koppen/secties in het bestand)"
+        key: "Figma-tekst (strategie-kop in het bestand)"
         for key in list(start.keys()) + list(fields.keys())
     }
 

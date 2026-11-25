@@ -227,9 +227,75 @@ def test_figma_creatives_only_no_audience_or_goals(strategy_http):
     assert "doelgroep" not in fields
     assert "korte_termijn_doelen" not in fields
     assert "lange_termijn_doelen" not in fields
+    assert "website" not in answers
+    assert "beschikbaar_beeld" not in answers
+    assert "sectoren" not in answers
     assert "contentkeuzes" in fields
     assert "Behind the scenes" in fields["contentkeuzes"]
     assert answers.get("platforms") == "Instagram"
+
+
+def test_figma_caption_noise_does_not_become_website(strategy_http):
+    """Live creatives often have caption fragments like 'Branding, Website en' — not strategy."""
+    from maaike.db import transaction
+    from maaike.strategy_import import preview_figma_strategy
+
+    http, client_id = strategy_http
+    noisy = {
+        "document": {
+            "id": "0:0",
+            "type": "DOCUMENT",
+            "children": [
+                {
+                    "id": "1:1",
+                    "type": "CANVAS",
+                    "name": "Feed",
+                    "children": [
+                        {
+                            "id": "1:2",
+                            "type": "TEXT",
+                            "characters": "Branding, Website en",
+                        },
+                        {
+                            "id": "1:3",
+                            "type": "TEXT",
+                            "characters": "Social media beheer voor merken.",
+                        },
+                        {
+                            "id": "1:4",
+                            "type": "TEXT",
+                            "characters": "Beeldmateriaal omschrijving: sfeerbeelden showroom",
+                        },
+                        {
+                            "id": "2:2",
+                            "type": "SECTION",
+                            "name": "Post B1",
+                            "children": [
+                                {
+                                    "id": "2:3",
+                                    "type": "TEXT",
+                                    "characters": (
+                                        "INSTA - POST Content format: R07 "
+                                        "Contentpijler: Cases "
+                                        "Wat moet de gebruiker doen / onthouden na het zien van de post? x"
+                                    ),
+                                },
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+    }
+    with transaction() as conn:
+        preview = preview_figma_strategy(conn, client_id, document=noisy)
+    answers = preview["proposed"]["start_answers"]
+    fields = preview["proposed"]["strategy_fields"]
+    assert "website" not in answers
+    assert "beschikbaar_beeld" not in answers
+    assert "doelgroep" not in fields
+    assert "contentkeuzes" in fields
+    assert "Cases" in fields["contentkeuzes"]
 
 
 def test_figma_no_access_returns_error(strategy_http, monkeypatch):
