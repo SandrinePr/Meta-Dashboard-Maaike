@@ -13,6 +13,7 @@ export default function NextStepBanner({
   channelLoading: parentLoading = false,
   channelError: parentError = null,
   syncing = false,
+  currentPage = "",
   onOpenSetup,
   onFetchPosts,
   onOpenResults,
@@ -132,9 +133,15 @@ export default function NextStepBanner({
     else if (step.action === "reports") onOpenReports?.();
   }
 
+  const alreadyThere =
+    (step.action === "posts" && currentPage === "social_posts") ||
+    (step.action === "results" && currentPage === "results") ||
+    (step.action === "reports" && currentPage === "reports_analysis");
+
   const showAction =
     step.action &&
     step.label &&
+    !alreadyThere &&
     !(step.action === "fetch" && role === "viewer") &&
     !(step.action === "setup" && role === "viewer");
 

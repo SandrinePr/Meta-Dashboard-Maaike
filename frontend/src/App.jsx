@@ -736,6 +736,7 @@ export default function App() {
               channelLoading={totalsLoading && !pageChannelStatus}
               channelError={totalsError || null}
               syncing={syncing}
+              currentPage={page}
               onOpenSetup={() => openClientSetup(selected)}
               onFetchPosts={canEdit ? syncMeta : undefined}
               onOpenResults={openResults}
