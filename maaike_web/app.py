@@ -1970,11 +1970,15 @@ def create_app() -> FastAPI:
 
     @app.post("/api/clients/{client_id}/strategy/import/canva-preview")
     def strategy_canva_preview(client_id: int, body: dict) -> dict:
+        """Propose empty-field strategy fills from a Canva design via Connect export (no paid AI)."""
+        from maaike.canva_connect import CanvaAccessError
         from maaike.strategy_import import preview_canva_link
 
         _ = client_id
         try:
             return preview_canva_link(str((body or {}).get("url") or ""))
+        except CanvaAccessError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -154,8 +154,9 @@ def strategy_http(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         yield http, client_id
 
 
-def test_canva_link_does_not_extract_content(strategy_http):
+def test_canva_without_token_keeps_pdf_route(strategy_http, monkeypatch):
     http, client_id = strategy_http
+    monkeypatch.delenv("CANVA_ACCESS_TOKEN", raising=False)
     res = http.post(
         f"/api/clients/{client_id}/strategy/import/canva-preview",
         json={"url": "https://www.canva.com/design/DAFexample/view"},
@@ -165,8 +166,77 @@ def test_canva_link_does_not_extract_content(strategy_http):
     assert body["content_extracted"] is False
     assert body.get("link_import_available") is False
     assert body["proposed"]["start_answers"] == {}
-    assert "PDF" in body["note"]
-    assert "nog open" in body["note"].lower() or "openstaat" in body["note"].lower()
+    assert "design:content:read" in body["note"]
+    assert "PDF" in body["note"] or any("PDF" in q for q in body.get("open_questions") or [])
+
+
+def test_canva_connect_export_proposes_strategy_fields(strategy_http, monkeypatch):
+    """Usable Canva design with strategy text → same review path as PDF (no paid AI)."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    import io
+
+    from maaike.strategy_import import preview_canva_link
+
+    buf = io.BytesIO()
+    pdf = canvas.Canvas(buf, pagesize=A4)
+    pdf.drawString(72, 750, "Tone of voice")
+    pdf.drawString(72, 730, "Warm, deskundig en kort.")
+    pdf.drawString(72, 700, "Doelgroep")
+    pdf.drawString(72, 680, "MKB in Midden-Nederland.")
+    pdf.save()
+    monkeypatch.setenv("CANVA_ACCESS_TOKEN", "test-token")
+
+    def _boom(*_a, **_k):
+        raise AssertionError("live Canva export should not run in this test")
+
+    monkeypatch.setattr("maaike.canva_connect.export_design_pdf_bytes", _boom)
+    preview = preview_canva_link(
+        "https://www.canva.com/design/DAFstrategyLive/view",
+        pdf_bytes=buf.getvalue(),
+        access_token="test-token",
+    )
+    assert preview["content_extracted"] is True
+    assert preview["source_kind"] == "canva"
+    assert "tone_of_voice" in preview["proposed"]["start_answers"]
+    assert "doelgroep" in preview["proposed"]["strategy_fields"]
+    assert "Canva Connect" in preview["proposed"]["field_sources"]["tone_of_voice"]
+
+    http, client_id = strategy_http
+    staged = http.post(
+        f"/api/clients/{client_id}/strategy/import/apply",
+        json={
+            "proposed": preview["proposed"],
+            "preserve_manual": True,
+            "stage_only": True,
+            "source_kind": "canva",
+        },
+    )
+    assert staged.status_code == 200
+    pending = staged.json()["pending_proposal"]
+    assert pending["start_answers"]["tone_of_voice"]
+    assert "website" not in pending["start_answers"]
+
+
+def test_canva_no_access_returns_forbidden(strategy_http, monkeypatch):
+    from maaike.canva_connect import CanvaAccessError
+
+    http, client_id = strategy_http
+    monkeypatch.setenv("CANVA_ACCESS_TOKEN", "test-token")
+
+    def _denied(design_id: str, **_kwargs):
+        raise CanvaAccessError(
+            "Canva weigerde toegang tot dit ontwerp (HTTP 403). "
+            f"Design-id: {design_id}."
+        )
+
+    monkeypatch.setattr("maaike.canva_connect.export_design_pdf_bytes", _denied)
+    res = http.post(
+        f"/api/clients/{client_id}/strategy/import/canva-preview",
+        json={"url": "https://www.canva.com/design/DAFNoAccess/view"},
+    )
+    assert res.status_code == 403
+    assert "403" in res.json()["detail"] or "toegang" in res.json()["detail"].lower()
 
 
 def test_figma_usable_source_proposes_only_found_fields(strategy_http):

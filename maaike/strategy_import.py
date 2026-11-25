@@ -183,7 +183,27 @@ def extract_pdf_text(file_bytes: bytes) -> str:
     return "\n".join(parts).strip()
 
 
-def preview_canva_link(url: str) -> dict[str, Any]:
+def preview_canva_link(
+    url: str,
+    *,
+    pdf_bytes: bytes | None = None,
+    access_token: str | None = None,
+) -> dict[str, Any]:
+    """Preview strategy proposals from a Canva design URL.
+
+    When Canva Connect credentials are available (CANVA_ACCESS_TOKEN or access_token),
+    exports the design as PDF via the official API and maps text like PDF-import.
+    Without access, returns a clear requirements note and keeps the PDF-upload path.
+    """
+    from maaike.canva_connect import (
+        ACCESS_REQUIREMENTS_NL,
+        CanvaAccessError,
+        canva_access_token,
+        canva_connect_status,
+        export_design_pdf_bytes,
+        extract_design_id,
+    )
+
     cleaned = (url or "").strip()
     if not cleaned:
         raise ValueError("Plak een Canva-link.")
@@ -191,17 +211,16 @@ def preview_canva_link(url: str) -> dict[str, Any]:
         cleaned = "https://" + cleaned
     if not _is_canva_url(cleaned):
         raise ValueError("Dit lijkt geen Canva-link (canva.com).")
-    return {
-        "source_kind": "canva_url",
+
+    design_id = extract_design_id(cleaned)
+    status = canva_connect_status()
+    token = (access_token or canva_access_token() or "").strip()
+    base_meta = {
+        "source_kind": "canva",
         "canva_url": cleaned,
-        "readable": True,
-        "content_extracted": False,
-        "link_import_available": False,
-        "note": (
-            "Deze Canva-link kan niet worden uitgelezen. Directe linkimport staat nog open. "
-            "Exporteer de strategie als PDF en gebruik ‘Voorstellen ophalen via PDF’, "
-            "of vul handmatig in."
-        ),
+        "design_id": design_id,
+        "link_import_available": bool(token) or pdf_bytes is not None,
+        "access": status,
         "proposed": {
             "start_answers": {},
             "strategy_fields": {"canva_strategy_url": cleaned},
@@ -209,10 +228,82 @@ def preview_canva_link(url: str) -> dict[str, Any]:
             "field_sources": {},
         },
         "missing": [q["label"] for q in START_QUESTIONS],
-        "open_questions": [
-            "Directe Canva-linkimport staat nog open. Exporteer intussen als PDF of vul handmatig aan."
-        ],
         "filled_keys": [],
+    }
+
+    if pdf_bytes is None and not token:
+        return {
+            **base_meta,
+            "readable": False,
+            "content_extracted": False,
+            "note": ACCESS_REQUIREMENTS_NL,
+            "open_questions": [
+                ACCESS_REQUIREMENTS_NL,
+                "PDF-route blijft beschikbaar: exporteer het ontwerp als tekst-PDF en gebruik ‘Voorstellen ophalen via PDF’.",
+            ],
+        }
+
+    try:
+        raw = pdf_bytes if pdf_bytes is not None else export_design_pdf_bytes(
+            design_id, token=token
+        )
+    except CanvaAccessError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise CanvaAccessError(f"Canva-export mislukt: {exc}") from exc
+
+    try:
+        pdf_preview = preview_strategy_pdf(raw, filename=f"canva-{design_id}.pdf")
+    except ValueError as exc:
+        # Export worked but no extractable text (scan/image-only).
+        return {
+            **base_meta,
+            "readable": True,
+            "content_extracted": False,
+            "note": (
+                f"Canva-ontwerp geëxporteerd, maar geen tekst gelezen ({exc}). "
+                "Gebruik een tekst-PDF-export of vul handmatig in."
+            ),
+            "open_questions": [
+                "PDF-route blijft beschikbaar als de Connect-export geen tekst oplevert."
+            ],
+        }
+
+    start = dict(pdf_preview.get("proposed", {}).get("start_answers") or {})
+    fields = dict(pdf_preview.get("proposed", {}).get("strategy_fields") or {})
+    fields["canva_strategy_url"] = cleaned
+    field_sources = {
+        key: f"Canva Connect · {design_id}"
+        for key in list(start.keys()) + [k for k in fields if k != "canva_strategy_url"]
+    }
+    filled = {**start, **{k: v for k, v in fields.items() if k != "canva_strategy_url"}}
+    return {
+        **base_meta,
+        "readable": True,
+        "content_extracted": bool(filled),
+        "char_count": pdf_preview.get("char_count") or 0,
+        "section_headings": pdf_preview.get("section_headings") or [],
+        "excerpt": pdf_preview.get("excerpt") or "",
+        "filename": f"canva-{design_id}.pdf",
+        "proposed": {
+            "start_answers": start,
+            "strategy_fields": fields,
+            "source_notes": [
+                f"Canva Connect-export: {cleaned}",
+                f"Design-id {design_id}",
+            ],
+            "field_sources": field_sources,
+        },
+        "missing": [q["label"] for q in START_QUESTIONS if not start.get(q["key"])],
+        "open_questions": [
+            "Controleer de voorstellen. Alleen lege velden worden gevuld na goedkeuring.",
+        ],
+        "filled_keys": sorted(filled.keys()),
+        "note": (
+            "Voorstellen komen uit tekst die via Canva Connect uit het ontwerp is geëxporteerd."
+            if filled
+            else "Canva-ontwerp gelezen, maar geen strategievelden gevonden. PDF-route blijft beschikbaar."
+        ),
     }
 
 

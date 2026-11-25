@@ -946,7 +946,7 @@ export default function ClientSetupPage({
       await flushAutosave().catch(() => {});
       if (!url) {
         setCanvaImportHint(
-          "Plak eerst een Canva-link. Directe linkimport staat nog open: exporteer intussen als PDF en gebruik ‘Voorstellen ophalen via PDF’.",
+          "Plak eerst een Canva-link. Zonder Canva Connect-token blijft de PDF-route beschikbaar.",
         );
         document.getElementById("setup-pdf-import")?.scrollIntoView({
           behavior: "smooth",
@@ -959,14 +959,24 @@ export default function ClientSetupPage({
         method: "POST",
         body: { url },
       });
-      // Canva designs are not scraped — keep link, offer PDF path.
+      if (preview.content_extracted && (preview.filled_keys || []).length) {
+        setImportPreview(preview);
+        setCanvaImportHint("");
+        setImportNote(
+          preview.note ||
+            `Canva gelezen. Gevonden: ${(preview.filled_keys || []).join(", ")}.`,
+        );
+        return;
+      }
+      // No Connect access or no strategy text — keep PDF path available.
       setImportPreview(null);
       setCanvaImportHint(
         preview.note ||
-          "Deze Canva-link kan niet worden uitgelezen. Directe linkimport staat nog open. Gebruik hieronder de PDF-import of vul handmatig in.",
+          preview.access?.requirements_nl ||
+          "Canva-link kon niet worden uitgelezen. PDF-import blijft beschikbaar.",
       );
       setImportNote(
-        "Canva-link bewaard als bron. Voor veldvoorstellen: exporteer de strategie als tekst-PDF en kies ‘Voorstellen ophalen via PDF’.",
+        "Canva-link bewaard als bron. Voor veldvoorstellen zonder Connect-toegang: exporteer als tekst-PDF en kies ‘Voorstellen ophalen via PDF’.",
       );
       try {
         document.getElementById("setup-pdf-import")?.scrollIntoView({
@@ -978,10 +988,20 @@ export default function ClientSetupPage({
       }
       pdfInputRef.current?.focus?.();
     } catch (exc) {
-      setLocalError(exc.message || dutchSaveError(exc));
+      const message = exc.message || dutchSaveError(exc);
+      setLocalError(message);
+      setImportPreview(null);
       setCanvaImportHint(
-        "Canva-link kon niet worden gevalideerd. Directe linkimport staat nog open — gebruik PDF-import of handmatige invoer.",
+        `${message} PDF-import blijft beschikbaar onder ‘Voorstellen ophalen via PDF’.`,
       );
+      try {
+        document.getElementById("setup-pdf-import")?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      } catch {
+        /* ignore */
+      }
     } finally {
       setBusy("");
     }
@@ -1574,9 +1594,9 @@ export default function ClientSetupPage({
               />
             </div>
             <p className="hint">
-              Optioneel — blokkeert afronden niet. De link wordt bewaard als bron. Canva-ontwerpinhoud
-              wordt via de link <strong>niet</strong> uitgelezen; directe linkimport staat nog open.
-              Gebruik dan PDF-export hieronder.
+              Optioneel — blokkeert afronden niet. Met Canva Connect (scope{" "}
+              <code>design:content:read</code>) haalt HAMSTER voorstellen uit het ontwerp; anders
+              blijft PDF-import hieronder beschikbaar.
             </p>
             <label>
               Canva-URL
@@ -1600,9 +1620,50 @@ export default function ClientSetupPage({
               disabled={!activeId || busy === "canva-import"}
               onClick={previewCanvaProposals}
             >
-              {busy === "canva-import" ? "Canva controleren…" : "Voorstellen ophalen uit Canva"}
+              {busy === "canva-import" ? "Canva lezen…" : "Voorstellen ophalen uit Canva"}
             </button>
             {canvaImportHint ? <p className="banner warn-soft">{canvaImportHint}</p> : null}
+            {importNote && importPreview?.source_kind === "canva" ? (
+              <p className="hint">{importNote}</p>
+            ) : null}
+            {importPreview?.source_kind === "canva" ? (
+              <div className="stack">
+                <p className="banner">
+                  Bron: Canva
+                  {importPreview.canva_url ? ` · ${importPreview.canva_url}` : ""}
+                  {(importPreview.filled_keys || []).length
+                    ? ` · gevonden: ${(importPreview.filled_keys || []).join(", ")}`
+                    : " · geen veldvoorstellen"}
+                </p>
+                {(importPreview.filled_keys || []).length ? (
+                  <ul className="plain-list">
+                    {(importPreview.filled_keys || []).map((key) => (
+                      <li key={`canva-src-${key}`}>
+                        {key}
+                        <span className="hint">
+                          {" "}
+                          · bron:{" "}
+                          {(importPreview.proposed?.field_sources || {})[key] || "Canva Connect"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <div className="row-actions">
+                  <button
+                    className="primary"
+                    type="button"
+                    disabled={busy === "import" || !(importPreview.filled_keys || []).length}
+                    onClick={stageImportProposal}
+                  >
+                    Voorstellen klaarzetten ter controle
+                  </button>
+                  <button className="secondary" type="button" onClick={() => setImportPreview(null)}>
+                    Annuleren
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </section>
 
           <section className="card stack" id="setup-pdf-import">
@@ -1630,10 +1691,14 @@ export default function ClientSetupPage({
                 }}
               />
             </label>
-            {importNote && importPreview?.source_kind !== "figma" ? (
+            {importNote &&
+            importPreview?.source_kind !== "figma" &&
+            importPreview?.source_kind !== "canva" ? (
               <p className="hint">{importNote}</p>
             ) : null}
-            {importPreview && importPreview.source_kind !== "figma" ? (
+            {importPreview &&
+            importPreview.source_kind !== "figma" &&
+            importPreview.source_kind !== "canva" ? (
               <div className="stack">
                 <p className="banner">
                   Bron: {importPreview.source_kind}
