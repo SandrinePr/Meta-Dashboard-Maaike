@@ -15,7 +15,7 @@ function fmtAvg(value) {
   return Number(value).toLocaleString("nl-NL", { maximumFractionDigits: 1 });
 }
 
-export default function ComparisonPage({ client, onOpenConnect }) {
+export default function ComparisonPage({ client, onOpenConnect, canEdit = true }) {
   const [state, setState] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -424,6 +424,7 @@ export default function ComparisonPage({ client, onOpenConnect }) {
             </span>
           </div>
 
+          {canEdit ? (
           <button
             className="primary"
             type="button"
@@ -434,6 +435,9 @@ export default function ComparisonPage({ client, onOpenConnect }) {
               ? "Berichten van concurrenten ophalen…"
               : "Berichten van concurrenten ophalen"}
           </button>
+          ) : (
+            <p className="hint">Berichten van concurrenten ophalen doet een editor. Jij kunt de lijst bekijken.</p>
+          )}
         </div>
 
         {/* Live voortgang tijdens het ophalen */}
@@ -524,7 +528,7 @@ export default function ComparisonPage({ client, onOpenConnect }) {
               Hier zie je voor <strong>{client.name}</strong> per concurrent of er al berichten klaarstaan, wanneer het ophalen voor het laatst is gelukt en of er nog actie nodig is.
             </p>
           </div>
-          {!adding ? (
+          {canEdit && !adding ? (
             <button
               className="primary"
               type="button"
@@ -681,6 +685,8 @@ export default function ComparisonPage({ client, onOpenConnect }) {
                   </div>
 
                   <div className="report-list-actions" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                    {canEdit ? (
+                    <>
                     <button
                       className="secondary"
                       type="button"
@@ -702,6 +708,8 @@ export default function ComparisonPage({ client, onOpenConnect }) {
                     >
                       {isRowRemoving ? "Verwijderen…" : "Concurrent verwijderen"}
                     </button>
+                    </>
+                    ) : null}
                   </div>
                 </div>
               );

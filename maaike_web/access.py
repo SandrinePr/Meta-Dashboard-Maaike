@@ -135,7 +135,7 @@ def resolve_identity(request: Request) -> AuthIdentity | Response:
     accounts = load_auth_accounts()
     open_user = AuthIdentity(
         username="open",
-        role="admin",
+        role="viewer",
         auth_enabled=False,
         role_enforced=False,
     )

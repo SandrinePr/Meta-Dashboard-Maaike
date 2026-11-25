@@ -66,6 +66,11 @@ button {
 }
 
 .sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  max-height: 100vh;
+  overflow: auto;
   padding: 1.5rem 2rem 2rem;
   background: $sidebar;
   color: $text;

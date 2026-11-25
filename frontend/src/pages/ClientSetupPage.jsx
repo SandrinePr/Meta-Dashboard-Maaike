@@ -6,10 +6,10 @@ import { dashboardClientsUrl, notifyMetaOauthResult } from "../oauthBridge.js";
 import { useMetaLogin } from "../useMetaLogin.js";
 
 const STEPS = [
-  { id: 1, title: "Klantnaam", short: "Naam" },
-  { id: 2, title: "Facebook en Instagram", short: "Koppelen" },
-  { id: 3, title: "Inrichting per klant", short: "Inrichting" },
-  { id: 4, title: "Controleren", short: "Afronden" },
+  { id: 1, title: "Klantgegevens", short: "Klantgegevens" },
+  { id: 2, title: "Accounts en bronnen", short: "Accounts en bronnen" },
+  { id: 3, title: "Doelen en strategie", short: "Doelen en strategie" },
+  { id: 4, title: "Controleren en goedkeuren", short: "Controleren" },
 ];
 
 /** Strategy answers that feed AI as this client's prompt context. */
@@ -1314,11 +1314,11 @@ export default function ClientSetupPage({
 
       {activeId ? (
         <div className="setup-save-status" aria-live="polite">
-          {saveStatus === "saving" ? <span className="setup-save-saving">Bezig met opslaan…</span> : null}
+          {saveStatus === "saving" ? <span className="setup-save-saving">Wordt opgeslagen</span> : null}
           {saveStatus === "saved" ? <span className="setup-save-ok">Opgeslagen</span> : null}
           {saveStatus === "error" ? (
             <span className="setup-save-error">
-              Opslaan lukte niet{" "}
+              Opslaan mislukt – probeer opnieuw{" "}
               <button
                 type="button"
                 className="linkish"

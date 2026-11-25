@@ -15,13 +15,16 @@ const APP_NAME = "HAMSTER";
 
 /** Daily work for Jet/Mo after choosing a client (Maaike point 5). */
 const DAILY_NAV = [
-  ["social_posts", "Socialmediaberichten"],
+  ["start", "Start"],
+  ["social_posts", "Berichten"],
   ["results", "Resultaten"],
+  ["comparison", "Concurrenten"],
   ["reports_analysis", "Rapporten"],
 ];
 
 const TITLES = {
-  strategy: "Doelen & Strategie",
+  start: "Start",
+  strategy: "Doelen en strategie",
   reports_analysis: "Rapporten",
   comparison: "Concurrenten",
   social_posts: "Socialmediaberichten",
@@ -40,15 +43,19 @@ const TECH_TABS = new Set(["status", "prompts", "planning", "backup", "trial"]);
 const SOCIAL_TABS = new Set(["all_posts", "performance"]);
 
 function navPagesForRole(role) {
-  const pages = [...DAILY_NAV];
-  if (role === "viewer") return pages;
-  // Klant inrichten stays the one button next to the selected client.
-  pages.push(["comparison", "Concurrenten"]);
-  pages.push(["settings", "Instellingen"]);
-  if (role === "admin") {
-    pages.push(["tech_admin", "Technisch beheer"]);
+  if (role === "viewer" || role === "guest") return [...DAILY_NAV];
+  if (role === "editor") {
+    return [
+      ["client_settings", "Klanten"],
+      ["client_setup", "Klant inrichten"],
+      ["comparison", "Concurrenten"],
+    ];
   }
-  return pages;
+  return [
+    ["tech_admin", "Technisch beheer"],
+    ["client_settings", "Klanten"],
+    ...DAILY_NAV.filter(([id]) => id !== "start"),
+  ];
 }
 
 function roleLabel(session) {
@@ -218,7 +225,7 @@ function resolveRoute(requestedPage) {
     };
   }
   return {
-    page: "social_posts",
+    page: "start",
     reportsTab: "reports",
     settingsTab: "home",
     techTab: "status",
@@ -885,6 +892,34 @@ export default function App() {
               }
             />
           ) : null}
+          {page === "start" && selected ? (
+            <section className="stack">
+              <h1 className="rro-page-title">{selected.name} · Start</h1>
+              <p className="hint">
+                Dit is je volgende taak voor <strong>{selected.name}</strong>. De rapportperiode loopt
+                van de 21e van de vorige maand tot en met de 20e van de rapportmaand.
+              </p>
+              <NextStepBanner
+                client={selected}
+                role={role}
+                channelStatus={pageChannelStatus}
+                currentPage="start"
+                onOpenSetup={() => openClientSetup(selected)}
+                onFetchPosts={() => openPage("social_posts")}
+                onOpenResults={() => openPage("results")}
+                onOpenPosts={() => openPage("social_posts")}
+                onOpenReports={() => openPage("reports_analysis")}
+              />
+              <div className="row-actions wrap">
+                <button className="primary" type="button" onClick={() => openPage("reports_analysis")}>
+                  Naar rapporten
+                </button>
+                <button className="secondary" type="button" onClick={() => openPage("social_posts")}>
+                  Berichten bekijken
+                </button>
+              </div>
+            </section>
+          ) : null}
           {(page === "social_posts" || page === "results") && selected ? (
             <SocialPostsPage
               key={`social-${selected.id}`}
@@ -917,11 +952,12 @@ export default function App() {
               onPeriodChange={setSocialPeriod}
             />
           ) : null}
-          {page === "comparison" && selected && canEdit ? (
+          {page === "comparison" && selected ? (
             <ComparisonPage
               key={`cmp-${selected.id}`}
               client={selected}
-              onOpenConnect={() => openClientSetup(selected)}
+              canEdit={canEdit}
+              onOpenConnect={canEdit ? () => openClientSetup(selected) : undefined}
             />
           ) : null}
           {page === "settings" && isEditor ? (
