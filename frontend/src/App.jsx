@@ -255,9 +255,6 @@ export default function App() {
   const [totals, setTotals] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [lastSyncMessage, setLastSyncMessage] = useState("");
-  const [loginUser, setLoginUser] = useState("");
-  const [loginPass, setLoginPass] = useState("");
-  const [loginError, setLoginError] = useState("");
 
   const loadClients = useCallback(async () => {
     const payload = await api("/api/clients");
@@ -378,12 +375,8 @@ export default function App() {
       }
     }
     window.history.replaceState({}, "", window.location.pathname);
-    loadSession()
-      .then((payload) => {
-        if (payload?.login_required) return null;
-        return loadClients();
-      })
-      .catch((exc) => setError(exc.message));
+    loadSession().catch((exc) => setError(exc.message));
+    loadClients().catch((exc) => setError(exc.message));
   }, [loadClients, loadSession]);
 
   useEffect(() => {
@@ -578,59 +571,6 @@ export default function App() {
 
   const pageTitle = TITLES[page] || APP_NAME;
 
-  async function submitLogin(event) {
-    event.preventDefault();
-    setLoginError("");
-    const token = btoa(`${loginUser}:${loginPass}`);
-    window.sessionStorage.setItem("hamster-auth", token);
-    try {
-      const payload = await loadSession();
-      if (payload?.login_required) {
-        window.sessionStorage.removeItem("hamster-auth");
-        setLoginError("Die combinatie klopt niet. Probeer opnieuw.");
-        return;
-      }
-      setLoginPass("");
-      await loadClients();
-    } catch (exc) {
-      window.sessionStorage.removeItem("hamster-auth");
-      setLoginError(exc.message || "Inloggen is niet gelukt.");
-    }
-  }
-
-  if (session?.login_required) {
-    return (
-      <div className="shell">
-        <main className="main">
-          <section className="panel card stack" style={{ maxWidth: "28rem", margin: "2rem auto" }}>
-            <h1 className="rro-page-title">{APP_NAME}</h1>
-            <p>
-              Je kunt HAMSTER openen zonder browserpop-up. Log hier in om klantgegevens te zien.
-              Zonder login blijven klanten en beheer afgeschermd.
-            </p>
-            <form className="stack" onSubmit={submitLogin}>
-              <label>
-                Gebruikersnaam
-                <input value={loginUser} onChange={(e) => setLoginUser(e.target.value)} autoComplete="username" />
-              </label>
-              <label>
-                Wachtwoord
-                <input
-                  type="password"
-                  value={loginPass}
-                  onChange={(e) => setLoginPass(e.target.value)}
-                  autoComplete="current-password"
-                />
-              </label>
-              {loginError ? <p className="banner error">{loginError}</p> : null}
-              <button className="primary" type="submit">Inloggen</button>
-            </form>
-          </section>
-        </main>
-      </div>
-    );
-  }
-
   if (popupReturn) {
     return (
       <div className="shell popup-return-shell">
@@ -675,18 +615,6 @@ export default function App() {
           <strong className="role-badge-value">{roleLabel(session)}</strong>
           {session?.username ? (
             <span className="role-badge-user">{session.username}</span>
-          ) : null}
-          {session?.auth_enabled ? (
-            <button
-              type="button"
-              className="linkish"
-              onClick={() => {
-                window.sessionStorage.removeItem("hamster-auth");
-                window.location.reload();
-              }}
-            >
-              Uitloggen
-            </button>
           ) : null}
           {session && role === "viewer" ? (
             <span className="role-badge-user">

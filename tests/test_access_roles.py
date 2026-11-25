@@ -86,9 +86,12 @@ def test_viewer_cannot_mutate(role_client):
     assert role_client.post("/api/clients", headers=headers, json={"name": "X"}).status_code == 403
 
 
-def test_unauthenticated_gets_401_when_passwords_set(role_client):
-    assert role_client.get("/api/session").status_code == 401
-    assert role_client.get("/api/ai-status").status_code == 401
+def test_link_opens_without_login_when_passwords_set(role_client):
+    session = role_client.get("/api/session")
+    assert session.status_code == 200
+    assert session.json()["role"] == "admin"
+    assert session.json()["login_required"] is False
+    assert role_client.get("/api/clients").status_code == 200
 
 
 def test_open_mode_default_role_editor_blocks_tech(tmp_path, monkeypatch):

@@ -127,17 +127,18 @@ def guest_identity(*, auth_enabled: bool) -> AuthIdentity:
 
 
 def resolve_identity(request: Request) -> AuthIdentity | Response:
-    """Open the site without a browser login popup.
+    """Anyone with the link can use HAMSTER. No login screen and no browser popup.
 
-    HTML and assets load for everyone. Client and admin APIs stay closed
-    until a valid HAMSTER login is sent. A missing login returns JSON 401
-    without WWW-Authenticate, so the browser does not show ‘Meld je aan’.
+    A valid Basic Auth header still selects admin, editor or viewer when those
+    accounts exist. Without that header everyone gets the open role.
     """
     accounts = load_auth_accounts()
-    path = request.url.path.rstrip("/") or "/"
-    is_api = path.startswith("/api/")
-    public_api = path in PUBLIC_PATHS or path == "/api/health" or path == "/api/session"
-
+    open_user = AuthIdentity(
+        username="open",
+        role="admin",
+        auth_enabled=False,
+        role_enforced=False,
+    )
     if not accounts:
         return AuthIdentity(
             username="open",
@@ -147,19 +148,11 @@ def resolve_identity(request: Request) -> AuthIdentity | Response:
         )
 
     parsed = parse_basic_auth(request.headers.get("authorization"))
-    identity = match_account(parsed[0], parsed[1], accounts) if parsed else None
-
-    if not is_api or public_api:
-        return identity or guest_identity(auth_enabled=True)
-
-    if identity is None:
-        return JSONResponse(
-            status_code=401,
-            content={
-                "detail": "Log in om klantgegevens te zien. De site zelf is wel te openen.",
-            },
-        )
-    return identity
+    if parsed:
+        identity = match_account(parsed[0], parsed[1], accounts)
+        if identity is not None:
+            return identity
+    return open_user
 
 
 def path_requires_admin(path: str) -> bool:
