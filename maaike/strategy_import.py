@@ -87,11 +87,39 @@ def _trim_creative_tail(body: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _heading_is_field_label(heading: str, pattern: str) -> bool:
+# Strict Figma strategy headings only — creatives often contain the word "website"/"regio"
+# inside captions; those must not become strategy proposals.
+_FIGMA_HEADING_ALIASES: dict[str, tuple[str, ...]] = {
+    "website": (r"(?i)^website$", r"(?i)^onze website$"),
+    "bedrijfsomschrijving": (r"(?i)^bedrijfsomschrijving$", r"(?i)^over (het )?bedrijf$"),
+    "sectoren": (r"(?i)^sectoren?$", r"(?i)^branche$"),
+    "geografische_regio": (r"(?i)^geografisch(e)? (werkgebied|regio)$", r"(?i)^werkgebied$", r"(?i)^regio$"),
+    "producten_diensten": (r"(?i)^producten?\s*/?\s*diensten$", r"(?i)^aanbod$"),
+    "onderscheidend_vermogen": (r"(?i)^onderscheidend vermogen$", r"(?i)^usp$", r"(?i)^positionering$"),
+    "gewenste_socialresultaten": (r"(?i)^gewenste social(resultaten)?$", r"(?i)^social doelen$", r"(?i)^kpis?$"),
+    "platforms": (r"(?i)^platforms?$", r"(?i)^kanalen$"),
+    "tone_of_voice": (r"(?i)^tone of voice$", r"(?i)^huisstijl$", r"(?i)^schrijfstijl$"),
+    "beschikbaar_beeld": (r"(?i)^beschikbaar beeld(-| )?materiaal$", r"(?i)^fotobank$"),
+    "frequentie_beperkingen": (r"(?i)^plaatsingsfrequentie$", r"(?i)^frequentie$", r"(?i)^beperkingen$"),
+    "doelgroep": (r"(?i)^doelgroep$", r"(?i)^target audience$"),
+    "concurrenten": (r"(?i)^concurrenten$", r"(?i)^concurrentie$"),
+    "korte_termijn_doelen": (r"(?i)^korte[- ]?termijn(s)?( doelen)?$",),
+    "lange_termijn_doelen": (r"(?i)^lange[- ]?termijn(s)?( doelen)?$",),
+    "contentkeuzes": (r"(?i)^content(pijlers|keuzes)$", r"(?i)^pillars$"),
+    "contactpersonen": (r"(?i)^contactpersonen$", r"(?i)^contactpersoon$"),
+    "tags_samenwerkingen": (r"(?i)^tags$", r"(?i)^samenwerkingen$"),
+    "reactiebeleid": (r"(?i)^reactiebeleid$", r"(?i)^community.?beheer$"),
+}
+
+
+def _heading_is_field_label(heading: str, pattern: str, *, key: str = "", strict: bool = False) -> bool:
     """True when the heading is essentially the field label, not a caption fragment."""
     h = (heading or "").strip()
     if not h or len(h) > 48:
         return False
+    if strict:
+        aliases = _FIGMA_HEADING_ALIASES.get(key) or ()
+        return any(re.fullmatch(alias, h) for alias in aliases)
     match = re.search(pattern, h)
     if not match:
         return False
@@ -117,7 +145,9 @@ def _map_sections_to_fields(
             continue
         for bucket, key, pattern in _FIELD_PATTERNS:
             if heading_only:
-                heading_hit = _heading_is_field_label(heading, pattern)
+                heading_hit = _heading_is_field_label(
+                    heading, pattern, key=key, strict=True
+                )
                 body_hit = False
             else:
                 heading_hit = bool(re.search(pattern, heading))
