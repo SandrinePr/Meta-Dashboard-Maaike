@@ -35,7 +35,7 @@ const TITLES = {
 const DAILY_PAGES = new Set(["social_posts", "results", "reports_analysis"]);
 
 const REPORTS_TABS = new Set(["reports"]);
-const SETTINGS_TABS = new Set(["home", "legend", "ai", "prompts", "planning", "backup"]);
+const SETTINGS_TABS = new Set(["home", "legend", "prompts", "ai", "planning", "backup"]);
 const TECH_TABS = new Set(["status", "prompts", "planning", "backup", "trial"]);
 const SOCIAL_TABS = new Set(["all_posts", "performance"]);
 
@@ -199,11 +199,20 @@ function resolveRoute(requestedPage) {
       socialTab: "all_posts",
     };
   }
+  if (raw === "prompts") {
+    return {
+      page: "settings",
+      reportsTab: "reports",
+      settingsTab: "prompts",
+      techTab: "status",
+      socialTab: "all_posts",
+    };
+  }
   if (raw === "reports_analysis" || raw === "settings") {
     return {
       page: raw,
       reportsTab: "reports",
-      settingsTab: raw === "settings" ? "home" : "home",
+      settingsTab: "home",
       techTab: "status",
       socialTab: "all_posts",
     };
@@ -601,6 +610,11 @@ export default function App() {
           <strong className="role-badge-value">{roleLabel(session)}</strong>
           {session?.username ? (
             <span className="role-badge-user">{session.username}</span>
+          ) : null}
+          {session && role === "viewer" ? (
+            <span className="role-badge-user">
+              Geen Instellingen/Prompts — log in als editor om klantprompts te bewerken.
+            </span>
           ) : null}
         </div>
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import ClientPromptsPanel from "../components/ClientPromptsPanel.jsx";
 import LegendPage from "./LegendPage.jsx";
 
 /**
@@ -16,14 +17,15 @@ export default function SettingsHubPage({
   onOpenTechAdmin,
   onOpenClients,
 }) {
-  const role = session?.role || "admin";
+  const role = session?.role || "viewer";
   const isAdmin = role === "admin";
   const isEditor = role === "editor" || isAdmin;
   const isViewer = role === "viewer";
-  const [tab, setTab] = useState(initialTab === "legend" ? "legend" : "home");
+  const allowedTabs = new Set(["home", "legend", "prompts"]);
+  const [tab, setTab] = useState(allowedTabs.has(initialTab) ? initialTab : "home");
 
   useEffect(() => {
-    setTab(initialTab === "legend" ? "legend" : "home");
+    setTab(allowedTabs.has(initialTab) ? initialTab : "home");
   }, [initialTab, client?.id]);
 
   function selectTab(next) {
@@ -35,8 +37,8 @@ export default function SettingsHubPage({
     return (
       <div className="stack">
         <p className="banner">
-          Als gewone gebruiker bekijk je vooral rapporten en berichten. Instellingen wijzigen mag
-          alleen een editor (Jet/Mo) of beheerder.
+          Als gewone gebruiker bekijk je vooral rapporten en berichten. Instellingen en klantprompts
+          wijzigen mag alleen een editor (Jet/Mo) of beheerder.
         </p>
         {!session?.role_enforced ? (
           <p className="hint">{session?.note_nl}</p>
@@ -49,10 +51,9 @@ export default function SettingsHubPage({
     <div className="stack">
       <p className="banner">
         <strong>Wie hoort hier?</strong> Jet en Mo (editors) openen{" "}
-        <strong>Klant inrichten</strong> voor doelen, strategie, links, concurrenten en
-        klantprompts, en beheren hier de legenda. Dagelijks werk staat links: Socialmediaberichten,
-        Resultaten en Rapporten. Technisch beheer (algemene prompts, API’s, back-up) blijft voor
-        beheerders.
+        <strong>Prompts</strong> voor de klantprompts van de geselecteerde klant, en{" "}
+        <strong>Klant inrichten</strong> voor doelen, strategie, links en concurrenten. Algemene
+        AI-prompts blijven bij <strong>Technisch beheer → Prompts</strong> (alleen beheerder).
       </p>
       {!session?.role_enforced ? <p className="hint">{session?.note_nl}</p> : null}
 
@@ -65,6 +66,15 @@ export default function SettingsHubPage({
           onClick={() => selectTab("home")}
         >
           Overzicht
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "prompts"}
+          className={tab === "prompts" ? "subnav-tab is-active" : "subnav-tab"}
+          onClick={() => selectTab("prompts")}
+        >
+          Prompts
         </button>
         <button
           type="button"
@@ -82,12 +92,20 @@ export default function SettingsHubPage({
           <section className="card stack">
             <h3 style={{ marginTop: 0 }}>Voor editors (Jet &amp; Mo)</h3>
             <p className="hint">
-              Wat je hier doet: klantgegevens bijwerken, Meta koppelen, en de legenda per klant
-              beheren voor het dagelijkse berichtenwerk.
+              Wat je hier doet: klantprompts bekijken en aanpassen, klantgegevens bijwerken, Meta
+              koppelen, en de legenda per klant beheren.
             </p>
             <div className="row-actions wrap">
               <button
                 className="primary"
+                type="button"
+                disabled={!isEditor || !client}
+                onClick={() => selectTab("prompts")}
+              >
+                {client ? `Prompts · ${client.name}` : "Prompts"}
+              </button>
+              <button
+                className="secondary"
                 type="button"
                 disabled={!isEditor}
                 onClick={() => onOpenClientSetup?.(client || null)}
@@ -103,35 +121,42 @@ export default function SettingsHubPage({
             </div>
             {!client ? (
               <p className="banner">
-                Kies links een klant, of open Alle klanten, voordat je de inrichting start.
+                Kies links een klant, of open Alle klanten, voordat je prompts of inrichting opent.
               </p>
-            ) : null}
+            ) : (
+              <p className="hint">
+                Actieve klant voor prompts en inrichting: <strong>{client.name}</strong>.
+              </p>
+            )}
           </section>
 
           <section className="card stack">
             <h3 style={{ marginTop: 0 }}>Wat je op elk scherm doet</h3>
             <ul className="plain-list" style={{ lineHeight: 1.55 }}>
               <li>
-                <strong>Klant inrichten</strong> — één plek voor naam, Meta-koppeling, doelen,
-                strategie, links, concurrenten en de prompts die bij die klant horen.
+                <strong>Prompts</strong> — klantprompts van de geselecteerde klant (zelfde velden
+                als Klant inrichten → Klantprompts).
               </li>
               <li>
-                <strong>Legenda</strong> — formats, pijlers en hooks die je bij Socialmediaberichten
-                invult.
+                <strong>Klant inrichten</strong> — naam, Meta-koppeling, doelen, strategie, links,
+                concurrenten en klantprompts.
+              </li>
+              <li>
+                <strong>Legenda</strong> — formats, pijlers en hooks voor Socialmediaberichten.
               </li>
               <li>
                 <strong>Socialmediaberichten / Resultaten / Rapporten</strong> — dagelijks werk in
-                het menu links (niet hier).
+                het menu links.
               </li>
               {isAdmin ? (
                 <li>
-                  <strong>Technisch beheer</strong> — API-status, prompts, planning, back-up en
-                  diagnose (alleen beheerder).
+                  <strong>Technisch beheer → Prompts</strong> — algemene AI-prompts voor alle
+                  klanten (alleen beheerder).
                 </li>
               ) : (
                 <li>
-                  <strong>Technisch beheer</strong> — niet zichtbaar voor editors; vraag een
-                  beheerder bij API- of serverproblemen.
+                  <strong>Technisch beheer</strong> — niet zichtbaar voor editors; algemene prompts
+                  vraagt u aan een beheerder.
                 </li>
               )}
             </ul>
@@ -143,6 +168,34 @@ export default function SettingsHubPage({
               </div>
             ) : null}
           </section>
+        </div>
+      ) : null}
+
+      {tab === "prompts" ? (
+        <div className="stack">
+          <p className="banner" style={{ marginBottom: 0 }}>
+            Prompts voor{" "}
+            <strong>{client ? client.name : "geen klant geselecteerd"}</strong>
+            {client ? ". Wissel links van klant om BBQube of een andere klant te openen." : "."}
+          </p>
+          <ClientPromptsPanel
+            key={`settings-prompts-${client?.id || "none"}`}
+            client={client}
+            canEdit={isEditor}
+            onNotice={onNotice}
+            onError={onError}
+          />
+          {client ? (
+            <div className="row-actions">
+              <button
+                className="secondary"
+                type="button"
+                onClick={() => onOpenClientSetup?.(client)}
+              >
+                Open volledige Klant inrichten
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

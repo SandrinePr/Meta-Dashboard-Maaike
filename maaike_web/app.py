@@ -2521,9 +2521,17 @@ def create_app() -> FastAPI:
         if assets_dir.is_dir():
             app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
+        def _spa_index_response() -> FileResponse:
+            # Never cache the shell HTML: a stale index.html keeps an old asset hash and
+            # makes editors see a viewer-like menu without Instellingen / rolbadge.
+            return FileResponse(
+                _FRONTEND_DIST / "index.html",
+                headers={"Cache-Control": "no-store, max-age=0, must-revalidate"},
+            )
+
         @app.get("/")
         def spa_index() -> FileResponse:
-            return FileResponse(_FRONTEND_DIST / "index.html")
+            return _spa_index_response()
 
         @app.get("/{full_path:path}")
         def spa_fallback(full_path: str) -> FileResponse:
@@ -2536,7 +2544,7 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=404, detail="Niet gevonden.") from exc
             if candidate.is_file():
                 return FileResponse(candidate)
-            return FileResponse(_FRONTEND_DIST / "index.html")
+            return _spa_index_response()
 
     return app
 
