@@ -37,16 +37,22 @@ REQUIRED_SCOPES = ("design:content:read",)
 REQUEST_SCOPES = " ".join(REQUIRED_SCOPES)
 
 APP_TYPE_NL = (
-    "Gebruik een Canva Connect-app van type private of public (gebruikerskoppeling). "
-    "Geen service-app: die handelt niet namens de Canva-gebruiker die het ontwerp bezit."
+    "Gebruik een Canva Connect-app met gebruikerskoppeling (OAuth + PKCE). "
+    "Kies Public (‘Anyone on Canva’) als Red Rock geen Canva Enterprise heeft. "
+    "Private (‘Restricted to your Canva team’) kan alleen op Enterprise en moet door "
+    "een Canva-teambeheerder worden goedgekeurd. Geen service-app."
 )
 
 ADMIN_STEPS_NL = (
-    "Canva-beheerder: 1) Developer Portal → Create app → kies Private of Public. "
-    "2) Outside Canva → Scopes → zet design:content:read. "
-    "3) Redirect URLs → voeg toe: {redirect}. "
-    "4) Credentials → client ID + client secret in Render als CANVA_CLIENT_ID en "
-    "CANVA_CLIENT_SECRET. 5) In HAMSTER: Canva-account koppelen (OAuth)."
+    "Canva-beheerder (Developer Portal → Your apps → Create app): "
+    "1) Kies Public (‘Anyone on Canva’) óf Private (‘Restricted to your Canva team’ — alleen "
+    "Enterprise; goedkeuring via Canva Team admin in Team settings → Apps). "
+    "2) Outside Canva → Configuration → Scopes → alleen design:content: Read "
+    "(design:content:read). "
+    "3) Outside Canva → Redirect URLs → voeg exact toe: {redirect}. "
+    "4) Outside Canva → Configuration → Credentials → client ID + genereer client secret; "
+    "zet die in Render (service hamster) als CANVA_CLIENT_ID en CANVA_CLIENT_SECRET. "
+    "5) In HAMSTER → Klant inrichten → Canva-account koppelen (OAuth)."
 )
 
 
