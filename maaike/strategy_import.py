@@ -104,19 +104,135 @@ def preview_canva_link(url: str) -> dict[str, Any]:
         "canva_url": cleaned,
         "readable": True,
         "content_extracted": False,
+        "link_import_available": False,
         "note": (
-            "Canva-ontwerp zelf wordt niet uitgelezen. Bewaar de link als bron en upload "
-            "desnoods de PDF-export voor tekstimport."
+            "Canva-linkimport ontbreekt: het ontwerp zelf wordt niet uitgelezen. "
+            "Exporteer de strategie als PDF en gebruik ‘Voorstellen ophalen via PDF’."
         ),
         "proposed": {
             "start_answers": {},
             "strategy_fields": {"canva_strategy_url": cleaned},
             "source_notes": [f"Canva-strategie: {cleaned}"],
+            "field_sources": {},
         },
         "missing": [q["label"] for q in START_QUESTIONS],
         "open_questions": [
             "Exporteer de Canva-strategie als PDF om velden automatisch te vullen, of vul handmatig aan."
         ],
+        "filled_keys": [],
+    }
+
+
+def _platform_label(hint: str) -> str:
+    raw = str(hint or "").strip().lower()
+    if not raw:
+        return ""
+    if "insta" in raw:
+        return "Instagram"
+    if "face" in raw or raw == "fb":
+        return "Facebook"
+    if "linked" in raw:
+        return "LinkedIn"
+    if "tiktok" in raw:
+        return "TikTok"
+    return str(hint).strip()[:80]
+
+
+def preview_figma_strategy(
+    conn,
+    client_id: int,
+    *,
+    document: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Propose strategy fills only from text/planning that is demonstrably in Figma.
+
+    Creatives-only files may yield contentkeuzes/platforms from briefs, never invented
+    doelgroep or bedrijfsdoelen.
+    """
+    from maaike.figma_planning import (
+        collect_all_text_from_figma_document,
+        extract_items_from_figma_document,
+        fetch_figma_file,
+        get_figma_connection,
+        is_usable_classification,
+    )
+
+    link = get_figma_connection(conn, client_id)
+    if not link.get("linked"):
+        raise ValueError("Koppel eerst een Figma-bestand bij deze klant.")
+    file_key = str(link.get("file_key") or "").strip()
+    doc = document if isinstance(document, dict) else fetch_figma_file(file_key)
+
+    text = collect_all_text_from_figma_document(doc)
+    sections = _split_sections(text) if text else {}
+    mapped = _map_sections_to_fields(sections) if sections else {"start_answers": {}, "strategy_fields": {}}
+    start = dict(mapped["start_answers"])
+    fields = dict(mapped["strategy_fields"])
+    field_sources: dict[str, str] = {
+        key: "Figma-tekst (koppen/secties in het bestand)"
+        for key in list(start.keys()) + list(fields.keys())
+    }
+
+    items = extract_items_from_figma_document(doc, file_key)
+    pillars = sorted(
+        {
+            str(item.get("pillar_raw") or "").strip()
+            for item in items
+            if item.get("pillar_usable") and is_usable_classification(item.get("pillar_raw"))
+        }
+    )
+    platforms = sorted(
+        {
+            label
+            for item in items
+            if (label := _platform_label(item.get("platform_hint") or ""))
+        }
+    )
+    if pillars and not str(fields.get("contentkeuzes") or "").strip():
+        fields["contentkeuzes"] = "Contentpijlers uit Figma-planning: " + ", ".join(pillars)
+        field_sources["contentkeuzes"] = "Figma-planning · Contentpijler"
+    if platforms and not str(start.get("platforms") or "").strip():
+        start["platforms"] = ", ".join(platforms)
+        field_sources["platforms"] = "Figma-planning · platform in brief"
+
+    filled = {**start, **fields}
+    missing = [q["label"] for q in START_QUESTIONS if not start.get(q["key"])]
+    notes = [
+        f"Figma-bron: {link.get('source_url') or file_key}",
+        f"{len(items)} planning-item(s) gelezen; {len(text)} tekens platte tekst.",
+    ]
+    if not filled:
+        notes.append(
+            "Geen strategievelden gevonden. Een Figma met alleen creatives levert "
+            "geen doelgroep of bedrijfsdoelen op."
+        )
+    return {
+        "source_kind": "figma",
+        "file_key": file_key,
+        "source_url": link.get("source_url") or "",
+        "readable": True,
+        "content_extracted": bool(text or items),
+        "char_count": len(text),
+        "planning_item_count": len(items),
+        "section_headings": [k for k in sections if k != "_preamble"][:20],
+        "excerpt": text[:1200],
+        "proposed": {
+            "start_answers": start,
+            "strategy_fields": fields,
+            "source_notes": notes,
+            "field_sources": field_sources,
+        },
+        "missing": missing,
+        "open_questions": [
+            "Controleer de voorstellen. Alleen lege velden worden gevuld na goedkeuring.",
+            "Velden die niet in Figma staan (bijv. doelgroep) blijven leeg.",
+        ],
+        "filled_keys": sorted(filled.keys()),
+        "note": (
+            "Voorstellen komen alleen uit tekst en planninglabels die in Figma staan."
+            if filled
+            else "Geen bruikbare strategie-informatie in dit Figma-bestand."
+        ),
     }
 
 
@@ -130,6 +246,9 @@ def preview_strategy_pdf(file_bytes: bytes, *, filename: str = "") -> dict[str, 
     mapped = _map_sections_to_fields(sections)
     filled = {**mapped["start_answers"], **mapped["strategy_fields"]}
     missing = [q["label"] for q in START_QUESTIONS if not mapped["start_answers"].get(q["key"])]
+    field_sources = {
+        key: f"PDF-strategie ({filename or 'upload'})" for key in filled
+    }
     return {
         "source_kind": "strategy_pdf",
         "filename": filename or "strategie.pdf",
@@ -142,6 +261,7 @@ def preview_strategy_pdf(file_bytes: bytes, *, filename: str = "") -> dict[str, 
             "start_answers": mapped["start_answers"],
             "strategy_fields": mapped["strategy_fields"],
             "source_notes": [f"PDF-strategie import: {filename or 'upload'}"],
+            "field_sources": field_sources,
         },
         "missing": missing,
         "open_questions": [
@@ -229,6 +349,7 @@ def apply_strategy_import(
                 "start_answers": proposed_answers,
                 "strategy_fields": proposed_fields,
                 "source_notes": list(proposed.get("source_notes") or []),
+                "field_sources": dict(proposed.get("field_sources") or {}),
                 "source_kind": source_kind or "import",
                 "filename": filename or "",
                 "preserve_manual": bool(preserve_manual),

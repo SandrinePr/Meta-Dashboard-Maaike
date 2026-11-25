@@ -1978,6 +1978,20 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.post("/api/clients/{client_id}/strategy/import/figma-preview")
+    def strategy_figma_preview(client_id: int) -> dict:
+        """Propose empty-field strategy fills from the linked Figma file (no paid AI)."""
+        from maaike.strategy_import import preview_figma_strategy
+
+        try:
+            with transaction() as conn:
+                _require_client(conn, client_id)
+                return preview_figma_strategy(conn, client_id)
+        except ValueError as exc:
+            detail = str(exc)
+            status = 403 if "403" in detail or "refused access" in detail.lower() else 400
+            raise HTTPException(status_code=status, detail=detail) from exc
+
     @app.post("/api/clients/{client_id}/strategy/import/pdf-preview")
     async def strategy_pdf_preview(client_id: int, request: Request) -> dict:
         from maaike.strategy_files import save_strategy_pdf

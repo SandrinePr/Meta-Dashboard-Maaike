@@ -645,6 +645,28 @@ def extract_items_from_figma_document(doc: dict[str, Any], file_key: str) -> lis
     return items
 
 
+def collect_all_text_from_figma_document(doc: dict[str, Any]) -> str:
+    """Flatten TEXT node characters for strategy heuristics (no invention)."""
+    parts: list[str] = []
+
+    def walk(node: dict[str, Any]) -> None:
+        if not isinstance(node, dict):
+            return
+        if str(node.get("type") or "") == "TEXT":
+            chars = node.get("characters")
+            text = str(chars if chars is not None else node.get("name") or "").strip()
+            if text:
+                parts.append(text)
+        for child in node.get("children") or []:
+            if isinstance(child, dict):
+                walk(child)
+
+    root = doc.get("document") if isinstance(doc, dict) else None
+    if isinstance(root, dict):
+        walk(root)
+    return "\n".join(parts)
+
+
 def sync_from_figma_api(conn, client_id: int) -> dict[str, Any]:
     link = get_figma_connection(conn, client_id)
     if not link["linked"]:

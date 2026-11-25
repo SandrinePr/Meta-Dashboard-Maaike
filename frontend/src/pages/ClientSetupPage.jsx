@@ -165,6 +165,9 @@ export default function ClientSetupPage({
   const [competitorInput, setCompetitorInput] = useState("");
   const [importPreview, setImportPreview] = useState(null);
   const [importNote, setImportNote] = useState("");
+  const [proposalDraft, setProposalDraft] = useState(null);
+  const [canvaImportHint, setCanvaImportHint] = useState("");
+  const pdfInputRef = useRef(null);
   const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
   const [targetDraft, setTargetDraft] = useState({
     metric_name: "",
@@ -277,6 +280,7 @@ export default function ClientSetupPage({
       answersDraftRef.current = mergedAnswers;
       strategyRef.current = nextStrategy;
       setStrategy(nextStrategy);
+      setProposalDraft(strat.pending_proposal || null);
       setFigma(fig);
       setComparison(cmp);
 
@@ -835,6 +839,7 @@ export default function ClientSetupPage({
     setBusy("import");
     setLocalError("");
     setImportNote("");
+    setCanvaImportHint("");
     try {
       const body = new FormData();
       body.append("file", file);
@@ -862,73 +867,162 @@ export default function ClientSetupPage({
     }
   }
 
-  function applyImportDraftLocally() {
-    if (!importPreview?.proposed) return;
-    const proposed = importPreview.proposed.start_answers || {};
-    const current = { ...(strategy?.start_answers || {}), ...(answersDraftRef.current || {}) };
-    let filled = 0;
-    const skipped = [];
-    for (const [key, value] of Object.entries(proposed)) {
-      const text = String(value || "").trim();
-      if (!text) continue;
-      if (String(current[key] || "").trim()) {
-        skipped.push(key);
-        continue;
-      }
-      current[key] = text;
-      filled += 1;
-    }
-    answersDraftRef.current = current;
-    const fields = {
-      ...(strategy?.strategy_fields || {}),
-      ...(importPreview.proposed.strategy_fields || {}),
-    };
-    if (importPreview.file_ref) {
-      fields.strategy_pdf_ref = importPreview.file_ref;
-      fields.last_pdf_meta = {
-        filename: importPreview.filename || "strategie.pdf",
-        source_kind: importPreview.source_kind || "strategy_pdf",
-        file_ref: importPreview.file_ref,
-        byte_size: importPreview.byte_size || 0,
+  async function stageImportProposal() {
+    if (!activeId || !importPreview?.proposed) return;
+    setBusy("import");
+    setLocalError("");
+    try {
+      await flushAutosave().catch(() => {});
+      const payload = await api(`/api/clients/${activeId}/strategy/import/apply`, {
+        method: "POST",
+        body: {
+          proposed: importPreview.proposed,
+          preserve_manual: true,
+          stage_only: true,
+          source_kind: importPreview.source_kind || "strategy_pdf",
+          filename: importPreview.filename || "",
+          file_ref: importPreview.file_ref || "",
+        },
+      });
+      const next = {
+        ...payload,
+        start_answers: mergeAnswersPreferLocal(
+          payload.start_answers || {},
+          answersDraftRef.current || {},
+        ),
       };
-      if (activeId) {
-        api(`/api/clients/${activeId}/strategy/import/apply`, {
-          method: "POST",
-          body: {
-            proposed: {},
-            preserve_manual: true,
-            stage_only: true,
-            source_kind: importPreview.source_kind || "strategy_pdf",
-            filename: importPreview.filename || "strategie.pdf",
-            file_ref: importPreview.file_ref,
-          },
-        }).catch(() => {});
-      }
-    }
-    if (fields.canva_strategy_url) {
-      canvaDraftRef.current = String(fields.canva_strategy_url).trim();
-      setCanvaUrl(canvaDraftRef.current);
-    }
-    const next = {
-      ...strategy,
-      start_answers: current,
-      strategy_fields: fields,
-      missing_required: computeMissingRequired(current, strategy?.questions || questions),
-    };
-    strategyRef.current = next;
-    setStrategy(next);
-    markDirtyAndSchedule();
-    setLocalNotice(
-      filled
-        ? `${filled} lege veld(en) als concept ingevuld. Controleer de teksten — ze worden automatisch bewaard.`
-        : "Geen lege velden om te vullen; bestaande antwoorden blijven staan.",
-    );
-    if (skipped.length) {
-      setImportNote(
-        `Handmatige antwoorden behouden (${skipped.length}). Brondata die niet paste of al gevuld was, is overgeslagen.`,
+      answersDraftRef.current = next.start_answers;
+      strategyRef.current = next;
+      setStrategy(next);
+      setProposalDraft(payload.pending_proposal || null);
+      setImportPreview(null);
+      setLocalNotice(
+        payload.pending_proposal
+          ? "Voorstellen klaargezet ter controle. Handmatige antwoorden blijven staan tot je goedkeurt."
+          : "Bron bewaard. Geen nieuwe voorstellen — lege of al gevulde velden leverden niets nieuws op.",
       );
+    } catch (exc) {
+      setLocalError(dutchSaveError(exc));
+    } finally {
+      setBusy("");
     }
-    setImportPreview(null);
+  }
+
+  async function previewFigmaProposals() {
+    if (!activeId) return;
+    setBusy("figma-import");
+    setLocalError("");
+    setImportNote("");
+    try {
+      await flushAutosave().catch(() => {});
+      const preview = await api(`/api/clients/${activeId}/strategy/import/figma-preview`, {
+        method: "POST",
+        body: {},
+      });
+      setImportPreview(preview);
+      setImportNote(
+        preview.note ||
+          (preview.filled_keys?.length
+            ? `Figma gelezen. Gevonden: ${preview.filled_keys.join(", ")}.`
+            : "Geen strategie-informatie in dit Figma-bestand."),
+      );
+    } catch (exc) {
+      setLocalError(exc.message || dutchSaveError(exc));
+      setImportPreview(null);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function explainCanvaLinkImport() {
+    setCanvaImportHint(
+      "Canva-linkimport ontbreekt: het ontwerp zelf wordt niet uitgelezen. Exporteer de strategie als PDF uit Canva en kies hieronder ‘Voorstellen ophalen via PDF’.",
+    );
+    setImportNote("");
+    try {
+      document.getElementById("setup-pdf-import")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch {
+      /* ignore */
+    }
+    pdfInputRef.current?.focus?.();
+  }
+
+  function setProposalAnswer(key, value) {
+    setProposalDraft((cur) => {
+      if (!cur) return cur;
+      return {
+        ...cur,
+        start_answers: { ...(cur.start_answers || {}), [key]: value },
+      };
+    });
+  }
+
+  function setProposalField(key, value) {
+    setProposalDraft((cur) => {
+      if (!cur) return cur;
+      return {
+        ...cur,
+        strategy_fields: { ...(cur.strategy_fields || {}), [key]: value },
+      };
+    });
+  }
+
+  async function approveProposal() {
+    if (!activeId || !proposalDraft) return;
+    setBusy("proposal");
+    setLocalError("");
+    try {
+      const payload = await api(`/api/clients/${activeId}/strategy/proposal/approve`, {
+        method: "POST",
+        body: { proposal: proposalDraft },
+      });
+      const next = {
+        ...payload,
+        start_answers: mergeAnswersPreferLocal(
+          payload.start_answers || {},
+          answersDraftRef.current || {},
+        ),
+      };
+      answersDraftRef.current = next.start_answers;
+      strategyRef.current = next;
+      setStrategy(next);
+      setProposalDraft(null);
+      writeStoredDraft(activeId, {
+        start_answers: next.start_answers,
+        canvaUrl: canvaDraftRef.current,
+        figmaUrl: figmaUrlDraftRef.current,
+        figmaKey: figmaKeyDraftRef.current,
+      });
+      setLocalNotice("Voorstel goedgekeurd. Alleen eerder lege velden zijn bijgewerkt.");
+    } catch (exc) {
+      setLocalError(dutchSaveError(exc));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function discardProposal() {
+    if (!activeId) return;
+    setBusy("proposal");
+    setLocalError("");
+    try {
+      const payload = await api(`/api/clients/${activeId}/strategy/proposal/discard`, {
+        method: "POST",
+        body: {},
+      });
+      setStrategy((cur) => ({ ...(cur || {}), ...payload, start_answers: answersDraftRef.current }));
+      setProposalDraft(null);
+      setLocalNotice("Voorstel verworpen. Handmatige antwoorden ongewijzigd.");
+    } catch (exc) {
+      setLocalError(dutchSaveError(exc));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function applyImportDraftLocally() {
+    // Kept as alias for the staged approval flow (point 9).
+    return stageImportProposal();
   }
 
   async function addTarget() {
@@ -1440,8 +1534,8 @@ export default function ClientSetupPage({
               />
             </div>
             <p className="hint">
-              Optioneel — blokkeert afronden niet. Alleen de URL wordt bewaard; Canva-ontwerpinhoud
-              wordt niet uitgelezen.
+              Optioneel — blokkeert afronden niet. De link wordt bewaard als bron. Canva-ontwerpinhoud
+              wordt via de link <strong>niet</strong> uitgelezen.
             </p>
             <label>
               Canva-URL
@@ -1459,21 +1553,31 @@ export default function ClientSetupPage({
                 placeholder="https://www.canva.com/design/…"
               />
             </label>
+            <button
+              className="secondary"
+              type="button"
+              disabled={!activeId}
+              onClick={explainCanvaLinkImport}
+            >
+              Voorstellen ophalen uit Canva
+            </button>
+            {canvaImportHint ? <p className="banner">{canvaImportHint}</p> : null}
           </section>
 
-          <section className="card stack">
+          <section className="card stack" id="setup-pdf-import">
             <div className="setup-block-head">
-              <h4>Voorstellen uit PDF</h4>
+              <h4>Voorstellen ophalen via PDF</h4>
               <StatusPill kind="optional" label="Optioneel" />
             </div>
             <p className="hint">
-              Dit <strong>leest wel inhoud in</strong> (in tegenstelling tot alleen een link).
-              Voorstellen vullen alleen lege velden als concept; handmatige antwoorden blijven staan.
-              Na bevestiging worden de concepten automatisch bewaard.
+              Gebruik dit voor een Canva-strategie-PDF (of een andere tekst-PDF). Alleen informatie
+              die in de PDF staat, wordt voorgesteld. Handmatige antwoorden blijven staan tot je
+              goedkeurt.
             </p>
             <label className="secondary file-btn">
-              PDF kiezen voor voorstellen
+              {busy === "import" ? "PDF lezen…" : "PDF kiezen / Voorstellen ophalen via PDF"}
               <input
+                ref={pdfInputRef}
                 type="file"
                 accept="application/pdf,.pdf"
                 hidden
@@ -1485,8 +1589,10 @@ export default function ClientSetupPage({
                 }}
               />
             </label>
-            {importNote ? <p className="hint">{importNote}</p> : null}
-            {importPreview ? (
+            {importNote && importPreview?.source_kind !== "figma" ? (
+              <p className="hint">{importNote}</p>
+            ) : null}
+            {importPreview && importPreview.source_kind !== "figma" ? (
               <div className="stack">
                 <p className="banner">
                   Bron: {importPreview.source_kind}
@@ -1504,8 +1610,13 @@ export default function ClientSetupPage({
                   </p>
                 ) : null}
                 <div className="row-actions">
-                  <button className="primary" type="button" onClick={applyImportDraftLocally}>
-                    Voorstellen in lege velden zetten
+                  <button
+                    className="primary"
+                    type="button"
+                    disabled={busy === "import"}
+                    onClick={stageImportProposal}
+                  >
+                    Voorstellen klaarzetten ter controle
                   </button>
                   <button className="secondary" type="button" onClick={() => setImportPreview(null)}>
                     Annuleren
@@ -1525,7 +1636,8 @@ export default function ClientSetupPage({
             </div>
             <p className="hint">
               Optioneel — blokkeert afronden niet. Plak een volledige URL of alleen de file key; de
-              koppeling wordt automatisch bewaard. Dat vult geen strategievragen in.
+              koppeling wordt automatisch bewaard. Voorstellen komen alleen uit tekst of
+              planninglabels die aantoonbaar in Figma staan (geen verzonnen doelgroep).
             </p>
             <label>
               Figma-URL
@@ -1559,7 +1671,120 @@ export default function ClientSetupPage({
                 placeholder="bestandssleutel"
               />
             </label>
+            {figmaFilled ? (
+              <button
+                className="secondary"
+                type="button"
+                disabled={!activeId || busy === "figma-import"}
+                onClick={previewFigmaProposals}
+              >
+                {busy === "figma-import" ? "Figma lezen…" : "Voorstellen ophalen uit Figma"}
+              </button>
+            ) : (
+              <p className="hint">Bewaar eerst een Figma-URL of file key om voorstellen op te halen.</p>
+            )}
+            {importNote && importPreview?.source_kind === "figma" ? (
+              <p className="hint">{importNote}</p>
+            ) : null}
+            {importPreview?.source_kind === "figma" ? (
+              <div className="stack">
+                <p className="banner">
+                  Bron: Figma
+                  {(importPreview.filled_keys || []).length
+                    ? ` · gevonden: ${(importPreview.filled_keys || []).join(", ")}`
+                    : " · geen veldvoorstellen"}
+                </p>
+                <div className="row-actions">
+                  <button
+                    className="primary"
+                    type="button"
+                    disabled={busy === "import" || !(importPreview.filled_keys || []).length}
+                    onClick={stageImportProposal}
+                  >
+                    Voorstellen klaarzetten ter controle
+                  </button>
+                  <button className="secondary" type="button" onClick={() => setImportPreview(null)}>
+                    Annuleren
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </section>
+
+          {proposalDraft ? (
+            <section className="card stack" aria-label="Voorstel ter controle">
+              <div className="setup-block-head">
+                <h4>Voorstel ter controle</h4>
+                <StatusPill kind="review" label="Te controleren" />
+              </div>
+              <p className="hint">
+                Pas voorstellen aan en keur goed. Alleen lege velden worden overgenomen.
+                Bron: {proposalDraft.source_kind || "import"}
+                {proposalDraft.filename ? ` · ${proposalDraft.filename}` : ""}.
+              </p>
+              {Object.keys(proposalDraft.start_answers || {}).length ? (
+                <div className="stack">
+                  {questions
+                    .filter((q) => (proposalDraft.start_answers || {})[q.key])
+                    .map((question) => (
+                      <label key={`prop-${question.key}`}>
+                        {question.label}
+                        <span className="hint">
+                          {" "}
+                          · bron:{" "}
+                          {(proposalDraft.field_sources || {})[question.key] ||
+                            proposalDraft.source_kind ||
+                            "import"}
+                        </span>
+                        <textarea
+                          rows={3}
+                          value={(proposalDraft.start_answers || {})[question.key] || ""}
+                          onChange={(e) => setProposalAnswer(question.key, e.target.value)}
+                        />
+                      </label>
+                    ))}
+                </div>
+              ) : null}
+              {Object.entries(proposalDraft.strategy_fields || {})
+                .filter(([key]) => !["canva_strategy_url", "canva_url"].includes(key))
+                .map(([key, value]) => (
+                  <label key={`prop-field-${key}`}>
+                    {key}
+                    <span className="hint">
+                      {" "}
+                      · bron: {(proposalDraft.field_sources || {})[key] || proposalDraft.source_kind || "import"}
+                    </span>
+                    <textarea
+                      rows={3}
+                      value={value || ""}
+                      onChange={(e) => setProposalField(key, e.target.value)}
+                    />
+                  </label>
+                ))}
+              {!Object.keys(proposalDraft.start_answers || {}).length &&
+              !Object.keys(proposalDraft.strategy_fields || {}).length ? (
+                <p className="muted">Geen nieuwe voorstellen (velden waren al gevuld).</p>
+              ) : null}
+              <div className="row-actions wrap">
+                <button
+                  className="primary"
+                  type="button"
+                  disabled={busy === "proposal"}
+                  onClick={approveProposal}
+                >
+                  Voorstel goedkeuren
+                </button>
+                <button
+                  className="secondary"
+                  type="button"
+                  disabled={busy === "proposal"}
+                  onClick={discardProposal}
+                >
+                  Voorstel verwerpen
+                </button>
+              </div>
+            </section>
+          ) : null}
 
           <section className="card stack" id="setup-competitors">
             <div className="setup-block-head">
