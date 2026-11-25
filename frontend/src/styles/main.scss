@@ -1147,6 +1147,30 @@ a.secondary {
   color: $muted;
 }
 
+.client-picker-actions {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
+.clients-overview-btn {
+  width: 100%;
+}
+
+.next-step-quiet {
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+}
+
+.next-step-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.85rem;
+  margin-top: 0.55rem;
+  font-size: 0.85rem;
+  color: $muted;
+}
+
 .subnav-tabs {
   display: flex;
   flex-wrap: wrap;

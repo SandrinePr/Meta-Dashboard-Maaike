@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import PerformancePage from "./PerformancePage.jsx";
 import PostsPage from "./PostsPage.jsx";
@@ -54,6 +54,7 @@ export default function SocialPostsPage({
   client,
   role = "viewer",
   canEdit = false,
+  hideTopStatus = false,
   initialTab = "all_posts",
   focusPostId,
   onClearFocus,
@@ -61,6 +62,7 @@ export default function SocialPostsPage({
   onOpenPost,
   onOpenConnect,
   onOpenCompetitors,
+  onChannelStatus,
   onSynced,
   periodSelection = "",
   onPeriodChange,
@@ -84,6 +86,8 @@ export default function SocialPostsPage({
   const [completingWeekly, setCompletingWeekly] = useState(false);
   const [weeklyError, setWeeklyError] = useState("");
   const [weeklyNotice, setWeeklyNotice] = useState("");
+  const onChannelStatusRef = useRef(onChannelStatus);
+  onChannelStatusRef.current = onChannelStatus;
 
   const loadChannelAndWeekly = useCallback(async (targetClientId, guard = () => true) => {
     // Load channel status first so a weekly-plan failure cannot leave the UI on “laden…”.
@@ -93,13 +97,16 @@ export default function SocialPostsPage({
     } catch (exc) {
       if (!guard()) return;
       setChannelStatus(null);
+      onChannelStatusRef.current?.(null);
       throw exc;
     }
     if (!guard()) return;
     if (totalsRes?.client_id != null && Number(totalsRes.client_id) !== Number(targetClientId)) {
       return;
     }
-    setChannelStatus(totalsRes?.channel_status || null);
+    const nextStatus = totalsRes?.channel_status || null;
+    setChannelStatus(nextStatus);
+    onChannelStatusRef.current?.(nextStatus);
 
     try {
       const weeklyRes = await api(`/api/clients/${targetClientId}/logs/weekly-plan`);
@@ -141,6 +148,7 @@ export default function SocialPostsPage({
     let active = true;
     const targetId = client.id;
     setChannelStatus(null);
+    onChannelStatusRef.current?.(null);
     setLogsWeekly(null);
     setWeeklyDraft(null);
     setTopNotice("");
@@ -319,151 +327,110 @@ export default function SocialPostsPage({
 
   return (
     <div className="stack">
-      {/* Bovenste kaart: status per kanaal + belangrijkste actie bovenaan (punt 16 & 17) */}
-      <section
-        className="card stack"
-        aria-label="Koppeling en ophaalstatus"
-        style={{
-          background: channelStatus ? statusTone : undefined,
-          borderColor: channelStatus ? statusBorder : undefined,
-          gap: "0.85rem",
-        }}
-      >
-        {!channelStatus && !topError ? (
-          <p className="muted" style={{ margin: 0 }}>
-            Status voor {client.name} laden…
-          </p>
-        ) : !channelStatus && topError ? (
-          <div className="stack" style={{ gap: "0.35rem" }}>
-            <strong style={{ fontSize: "1.05rem" }}>Status voor {client.name} niet beschikbaar</strong>
-            <p style={{ margin: 0 }}>
-              De koppelingsstatus kon niet worden geladen. Vernieuw de pagina of vraag een editor om
-              hulp.
+      {/* Status + hoofdactie staan in NextStepBanner; hier alleen fouten/notices. */}
+      {!hideTopStatus ? (
+        <section
+          className="card stack"
+          aria-label="Koppeling en ophaalstatus"
+          style={{
+            background: channelStatus ? statusTone : undefined,
+            borderColor: channelStatus ? statusBorder : undefined,
+            gap: "0.85rem",
+          }}
+        >
+          {!channelStatus && !topError ? (
+            <p className="muted" style={{ margin: 0 }}>
+              Status voor {client.name} laden…
             </p>
-          </div>
-        ) : (
-          <>
-            <div
-              className="row-actions wrap"
-              style={{ justifyContent: "space-between", alignItems: "flex-start", gap: "1rem" }}
-            >
+          ) : !channelStatus && topError ? (
+            <div className="stack" style={{ gap: "0.35rem" }}>
+              <strong style={{ fontSize: "1.05rem" }}>Status voor {client.name} niet beschikbaar</strong>
+              <p style={{ margin: 0 }}>
+                De koppelingsstatus kon niet worden geladen. Vernieuw de pagina of vraag een editor om
+                hulp.
+              </p>
+            </div>
+          ) : channelStatus ? (
+            <>
               <div className="stack" style={{ gap: "0.3rem", maxWidth: "44rem" }}>
                 <strong style={{ fontSize: "1.12rem" }}>{channelStatus.headline}</strong>
-                <p style={{ margin: 0 }}>
-                  {canEdit
-                    ? channelStatus.next_action
-                    : channelStatus.state === "connect_required"
-                      ? `Voor ${client.name} is Facebook/Instagram nog niet gekoppeld. Een editor regelt dat via Klant inrichten.`
-                      : channelStatus.state === "fetch_first_posts"
-                        ? `Voor ${client.name} staan nog geen berichten klaar. Vraag een editor om berichten op te halen.`
-                        : channelStatus.next_action}
-                </p>
+                <p style={{ margin: 0 }}>{channelStatus.next_action}</p>
               </div>
-              {canEdit ? (
-                <div className="row-actions wrap">
-                  {channelStatus.action_key === "connect_accounts" ? (
-                    <button
-                      className="primary"
-                      type="button"
-                      onClick={() => onOpenConnect?.()}
-                    >
-                      {channelStatus.action_label || "Accounts koppelen"}
-                    </button>
-                  ) : (
-                    <button
-                      className="primary"
-                      type="button"
-                      disabled={fetchingTop}
-                      onClick={runPrimaryFetch}
-                    >
-                      {fetchingTop
-                        ? "Berichten ophalen…"
-                        : channelStatus.action_label || "Berichten ophalen"}
-                    </button>
-                  )}
-                  {channelStatus.connected && onOpenConnect ? (
-                    <button className="secondary" type="button" onClick={() => onOpenConnect()}>
-                      Koppeling bekijken
-                    </button>
-                  ) : null}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(13.5rem, 1fr))",
+                  gap: "0.65rem",
+                }}
+              >
+                <div
+                  style={{
+                    background: "rgba(16, 28, 44, 0.65)",
+                    border: "1px solid rgba(242, 240, 236, 0.14)",
+                    borderRadius: "0.5rem",
+                    padding: "0.65rem 0.8rem",
+                  }}
+                >
+                  <div className="hint" style={{ margin: 0 }}>
+                    Facebook
+                  </div>
+                  <strong>{channelStatus.facebook?.label || "Niet gekoppeld"}</strong>
                 </div>
-              ) : null}
-            </div>
+                <div
+                  style={{
+                    background: "rgba(16, 28, 44, 0.65)",
+                    border: "1px solid rgba(242, 240, 236, 0.14)",
+                    borderRadius: "0.5rem",
+                    padding: "0.65rem 0.8rem",
+                  }}
+                >
+                  <div className="hint" style={{ margin: 0 }}>
+                    Instagram
+                  </div>
+                  <strong>{channelStatus.instagram?.label || "Niet gekoppeld"}</strong>
+                </div>
+                <div
+                  style={{
+                    background: "rgba(16, 28, 44, 0.65)",
+                    border: "1px solid rgba(242, 240, 236, 0.14)",
+                    borderRadius: "0.5rem",
+                    padding: "0.65rem 0.8rem",
+                  }}
+                >
+                  <div className="hint" style={{ margin: 0 }}>
+                    Berichten laatst opgehaald
+                  </div>
+                  <strong>{channelStatus.last_fetched_label || "Nog nooit opgehaald"}</strong>
+                </div>
+              </div>
+            </>
+          ) : null}
+        </section>
+      ) : null}
 
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(13.5rem, 1fr))",
-                gap: "0.65rem",
-              }}
-            >
-              <div
-                style={{
-                  background: "rgba(16, 28, 44, 0.65)",
-                  border: "1px solid rgba(242, 240, 236, 0.14)",
-                  borderRadius: "0.5rem",
-                  padding: "0.65rem 0.8rem",
-                }}
-              >
-                <div className="hint" style={{ margin: 0 }}>
-                  Facebook
-                </div>
-                <strong>{channelStatus.facebook?.label || "Niet gekoppeld"}</strong>
-              </div>
-              <div
-                style={{
-                  background: "rgba(16, 28, 44, 0.65)",
-                  border: "1px solid rgba(242, 240, 236, 0.14)",
-                  borderRadius: "0.5rem",
-                  padding: "0.65rem 0.8rem",
-                }}
-              >
-                <div className="hint" style={{ margin: 0 }}>
-                  Instagram
-                </div>
-                <strong>{channelStatus.instagram?.label || "Niet gekoppeld"}</strong>
-              </div>
-              <div
-                style={{
-                  background: "rgba(16, 28, 44, 0.65)",
-                  border: "1px solid rgba(242, 240, 236, 0.14)",
-                  borderRadius: "0.5rem",
-                  padding: "0.65rem 0.8rem",
-                }}
-              >
-                <div className="hint" style={{ margin: 0 }}>
-                  Berichten laatst opgehaald
-                </div>
-                <strong>{channelStatus.last_fetched_label || "Nog nooit opgehaald"}</strong>
-              </div>
-            </div>
-          </>
-        )}
-
-        {topNotice ? <p className="banner" style={{ margin: 0 }}>{topNotice}</p> : null}
-        {topError ? <p className="banner error" style={{ margin: 0 }}>{topError}</p> : null}
-        {adminDetailsCombined ? (
-          <details>
-            <summary className="hint" style={{ cursor: "pointer" }}>
-              Technische foutdetails (alleen voor beheer)
-            </summary>
-            <pre
-              className="hint"
-              style={{
-                marginTop: "0.4rem",
-                padding: "0.6rem",
-                background: "rgba(16, 28, 44, 0.7)",
-                border: "1px solid rgba(242, 240, 236, 0.14)",
-                borderRadius: "0.4rem",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-              }}
-            >
-              {adminDetailsCombined}
-            </pre>
-          </details>
-        ) : null}
-      </section>
+      {topNotice ? <p className="banner" style={{ margin: 0 }}>{topNotice}</p> : null}
+      {topError ? <p className="banner error" style={{ margin: 0 }}>{topError}</p> : null}
+      {adminDetailsCombined && canEdit ? (
+        <details>
+          <summary className="hint" style={{ cursor: "pointer" }}>
+            Technische foutdetails (alleen voor beheer)
+          </summary>
+          <pre
+            className="hint"
+            style={{
+              marginTop: "0.4rem",
+              padding: "0.6rem",
+              background: "rgba(16, 28, 44, 0.7)",
+              border: "1px solid rgba(242, 240, 236, 0.14)",
+              borderRadius: "0.4rem",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {adminDetailsCombined}
+          </pre>
+        </details>
+      ) : null}
 
       {/* Subnavigatie: Alle berichten & Resultaten */}
       <div className="subnav-tabs" role="tablist" aria-label="Socialmediaberichten">

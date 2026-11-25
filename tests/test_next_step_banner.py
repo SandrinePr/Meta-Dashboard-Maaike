@@ -33,6 +33,8 @@ def build_next_step(
         return {"action": "setup", "tone": "warn"}
     if editable and strategy and strategy.get("review_status") == "te_controleren":
         return {"action": "setup", "tone": "info"}
+    if channel.get("state") == "ready_to_view":
+        return {"action": "fetch" if editable else "posts", "tone": "ok"}
     return {"action": "results", "tone": "ok", "name": name}
 
 
@@ -66,14 +68,14 @@ def test_editor_incomplete_strategy_leads_to_setup():
     assert step["action"] == "setup"
 
 
-def test_ready_client_points_to_results():
+def test_ready_client_points_to_fetch_for_editor():
     step = build_next_step(
         role="editor",
         client_name="BBQube",
-        channel={"state": "ready_to_view"},
+        channel={"state": "ready_to_view", "action_label": "Nieuwe berichten ophalen"},
         strategy={"missing_required": [], "review_status": "definitief"},
     )
-    assert step["action"] == "results"
+    assert step["action"] == "fetch"
 
 
 def test_status_error_does_not_hang_on_loading():

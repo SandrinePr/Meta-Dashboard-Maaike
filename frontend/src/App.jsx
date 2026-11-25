@@ -234,6 +234,7 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [totalsLoading, setTotalsLoading] = useState(false);
   const [totalsError, setTotalsError] = useState("");
+  const [pageChannelStatus, setPageChannelStatus] = useState(null);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -463,6 +464,7 @@ export default function App() {
     setTotals(null);
     setTotalsLoading(Boolean(id));
     setTotalsError("");
+    setPageChannelStatus(null);
     setMenuOpen(false);
   }
 
@@ -553,7 +555,6 @@ export default function App() {
     }
   }
 
-  const fetchAvailable = Boolean(selected?.connected);
   const pageTitle = TITLES[page] || APP_NAME;
 
   if (popupReturn) {
@@ -633,15 +634,6 @@ export default function App() {
                 +
               </button>
             ) : null}
-            <button
-              className="icon-btn gear-btn"
-              type="button"
-              title="Alle klanten"
-              aria-label="Alle klanten"
-              onClick={openClientsOverview}
-            >
-              ⚙
-            </button>
           </div>
           {selected ? (
             <div className="client-active-row">
@@ -649,52 +641,49 @@ export default function App() {
               <span className="client-active-name">{selected.name}</span>
             </div>
           ) : (
-            <p className="hint">Geen klant geselecteerd. Open Alle klanten via het tandwiel.</p>
+            <p className="hint">Geen klant geselecteerd. Open Alle klanten.</p>
           )}
+          <div className="client-picker-actions">
+            {selected && canEdit ? (
+              <button
+                className="primary"
+                type="button"
+                style={{ width: "100%" }}
+                onClick={() => openClientSetup(selected)}
+              >
+                Klant inrichten
+              </button>
+            ) : null}
+            <button
+              className="secondary clients-overview-btn"
+              type="button"
+              onClick={openClientsOverview}
+            >
+              Alle klanten
+            </button>
+          </div>
         </div>
 
-        <div className="sidebar-block sync-block">
-          <div className="sidebar-title">Synchronisatie</div>
-          {!selected ? <p className="muted">Kies eerst een klant.</p> : null}
-          {selected && totals && Number(totals.client_id) === Number(selected.id) ? (
+        {selected && totals && Number(totals.client_id) === Number(selected.id) ? (
+          <div className="sidebar-block sync-block">
+            <div className="sidebar-title">Berichten in beeld</div>
             <div className="sync-stats">
               <div>
-                <span>Instagram-berichten</span> <strong>{totals.instagram_posts}</strong>
+                <span>Instagram</span> <strong>{totals.instagram_posts}</strong>
               </div>
               <div>
-                <span>Instagram-reacties</span> <strong>{totals.instagram_comments_label}</strong>
-              </div>
-              <div>
-                <span>Facebook-berichten</span> <strong>{totals.facebook_posts}</strong>
-              </div>
-              <div>
-                <span>Facebook-reacties</span> <strong>{totals.facebook_comments_label}</strong>
+                <span>Facebook</span> <strong>{totals.facebook_posts}</strong>
               </div>
               <div>
                 <span>Laatst opgehaald</span> <strong>{totals.synced_at}</strong>
               </div>
             </div>
-          ) : null}
-          {lastSyncMessage ? <p className="hint">{lastSyncMessage}</p> : null}
-          {canEdit ? (
-            <>
-              <button
-                className="primary"
-                type="button"
-                style={{ width: "100%" }}
-                disabled={!selected || !fetchAvailable || syncing}
-                onClick={syncMeta}
-              >
-                {syncing ? "Berichten ophalen…" : "Berichten ophalen"}
-              </button>
-              {selected && !fetchAvailable ? (
-                <p className="hint">Koppel eerst Facebook en Instagram voor deze klant.</p>
-              ) : null}
-            </>
-          ) : selected ? (
-            <p className="hint">Alleen lezen: berichten ophalen mag een editor of beheerder.</p>
-          ) : null}
-        </div>
+            {lastSyncMessage ? <p className="hint">{lastSyncMessage}</p> : null}
+            <p className="hint">
+              Ophalen of koppelen regel je via de vervolgstap bovenaan het dagelijkse scherm.
+            </p>
+          </div>
+        ) : null}
 
         <hr className="sidebar-rule" />
 
@@ -736,11 +725,15 @@ export default function App() {
               client={selected}
               role={role}
               channelStatus={
-                totals && Number(totals.client_id) === Number(selected.id)
+                (pageChannelStatus &&
+                Number(pageChannelStatus.client_id || selected.id) === Number(selected.id)
+                  ? pageChannelStatus
+                  : null) ||
+                (totals && Number(totals.client_id) === Number(selected.id)
                   ? totals.channel_status || null
-                  : null
+                  : null)
               }
-              channelLoading={totalsLoading}
+              channelLoading={totalsLoading && !pageChannelStatus}
               channelError={totalsError || null}
               syncing={syncing}
               onOpenSetup={() => openClientSetup(selected)}
@@ -878,6 +871,7 @@ export default function App() {
               client={selected}
               role={role}
               canEdit={canEdit}
+              hideTopStatus
               initialTab={page === "results" ? "performance" : socialTab}
               focusPostId={focusPostId}
               onClearFocus={() => setFocusPostId(null)}
@@ -895,6 +889,13 @@ export default function App() {
                     }
                   : undefined
               }
+              onChannelStatus={(status) => {
+                if (!status) {
+                  setPageChannelStatus(null);
+                  return;
+                }
+                setPageChannelStatus({ ...status, client_id: selected.id });
+              }}
               onSynced={async () => {
                 await loadClients();
                 await loadTotals(selected.id);

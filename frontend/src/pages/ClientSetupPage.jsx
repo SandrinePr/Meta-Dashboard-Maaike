@@ -1240,6 +1240,23 @@ export default function ClientSetupPage({
               <strong>{name || client?.name || "deze klant"}</strong>. Algemene AI-prompts
               (voor alle klanten) staan bij <strong>Technisch beheer</strong> en horen niet hier.
             </p>
+            <nav className="row-actions wrap" aria-label="Onderdelen inrichting">
+              <a className="secondary" href="#setup-client-prompts" style={{ textDecoration: "none" }}>
+                Klantprompts
+              </a>
+              <a className="secondary" href="#setup-strategy" style={{ textDecoration: "none" }}>
+                Strategie
+              </a>
+              <a className="secondary" href="#setup-targets" style={{ textDecoration: "none" }}>
+                Doelen
+              </a>
+              <a className="secondary" href="#setup-links" style={{ textDecoration: "none" }}>
+                Links
+              </a>
+              <a className="secondary" href="#setup-competitors" style={{ textDecoration: "none" }}>
+                Concurrenten
+              </a>
+            </nav>
           </div>
 
           <section className="card stack" id="setup-client-prompts">
@@ -1414,7 +1431,7 @@ export default function ClientSetupPage({
             </button>
           </section>
 
-          <section className="card stack">
+          <section className="card stack" id="setup-links">
             <div className="setup-block-head">
               <h4>Canva-link</h4>
               <StatusPill

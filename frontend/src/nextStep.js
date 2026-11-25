@@ -127,6 +127,27 @@ export function buildNextStep(input = {}) {
     };
   }
 
+  if (channel.state === "ready_to_view") {
+    if (editable) {
+      return {
+        title: channel.headline || "Je berichten zijn klaar om te bekijken",
+        body:
+          channel.next_action ||
+          `Er staan berichten van ${name} klaar. Haal nieuwe berichten op wanneer je cijfers wilt bijwerken.`,
+        action: "fetch",
+        label: channel.action_label || "Nieuwe berichten ophalen",
+        tone: "ok",
+      };
+    }
+    return {
+      title: channel.headline || "Je berichten zijn klaar om te bekijken",
+      body: `Er staan berichten van ${name} klaar om te bekijken.`,
+      action: "posts",
+      label: "Naar Socialmediaberichten",
+      tone: "ok",
+    };
+  }
+
   return {
     title: "Klaar voor dagelijks werk",
     body: `Kies voor ${name} een onderdeel: Socialmediaberichten, Resultaten of Rapporten.`,

@@ -3,8 +3,8 @@ import { api } from "../api.js";
 import { buildNextStep } from "../nextStep.js";
 
 /**
- * Single concrete follow-up at the top of the daily dashboard.
- * Loads channel + strategy itself so a slow sidebar sync cannot leave “laden…” forever.
+ * Single concrete status + follow-up at the top of the daily dashboard.
+ * One headline, one body, one primary action — no competing “laden…” card.
  */
 export default function NextStepBanner({
   client,
@@ -94,16 +94,24 @@ export default function NextStepBanner({
   if (!client) return null;
 
   const effectiveChannel = channelFromParent || channelStatus;
-  const waitingForChannel = !effectiveChannel && (channelLoading || parentLoading) && !(channelError || parentError);
-  const waitingForStrategy =
-    Boolean(effectiveChannel) && !strategyDone && (role === "admin" || role === "editor");
+  const waitingForChannel =
+    !effectiveChannel && (channelLoading || parentLoading) && !(channelError || parentError);
+
+  // Stay quiet while loading — never show “laden…” next to a ready card below.
+  if (waitingForChannel) {
+    return (
+      <p className="muted next-step-quiet" aria-live="polite">
+        Status voor {client.name} wordt bijgewerkt…
+      </p>
+    );
+  }
 
   const step = buildNextStep({
     role,
     clientName: client.name,
     channelStatus: effectiveChannel,
     strategy: strategyDone ? strategy : null,
-    statusLoading: waitingForChannel || waitingForStrategy,
+    statusLoading: false,
     statusError: channelError || parentError,
   });
 
@@ -133,9 +141,16 @@ export default function NextStepBanner({
   return (
     <section className={toneClass} aria-label="Vervolgstap">
       <div className="next-step-copy">
-        <p className="next-step-kicker">Vervolgstap</p>
+        <p className="next-step-kicker">Status &amp; vervolgstap</p>
         <strong className="next-step-title">{step.title}</strong>
         <p className="next-step-body">{step.body}</p>
+        {effectiveChannel ? (
+          <div className="next-step-meta" aria-label="Kanaalstatus">
+            <span>Facebook: {effectiveChannel.facebook?.label || "—"}</span>
+            <span>Instagram: {effectiveChannel.instagram?.label || "—"}</span>
+            <span>Laatst opgehaald: {effectiveChannel.last_fetched_label || "—"}</span>
+          </div>
+        ) : null}
       </div>
       {showAction ? (
         <button
