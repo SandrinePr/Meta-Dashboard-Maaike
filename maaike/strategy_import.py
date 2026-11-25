@@ -143,6 +143,11 @@ def _map_sections_to_fields(
             continue
         if _is_creative_brief_noise(heading, clean_body):
             continue
+        heading_keys = [
+            key
+            for _bucket, key, pattern in _FIELD_PATTERNS
+            if re.search(pattern, heading)
+        ]
         for bucket, key, pattern in _FIELD_PATTERNS:
             if heading_only:
                 heading_hit = _heading_is_field_label(
@@ -150,8 +155,12 @@ def _map_sections_to_fields(
                 )
                 body_hit = False
             else:
-                heading_hit = bool(re.search(pattern, heading))
-                body_hit = bool(re.search(pattern, clean_body[:200]))
+                heading_hit = key in heading_keys
+                # If the heading already names a field, do not also mine its body
+                # for unrelated keys (e.g. "regio" inside a Doelgroep answer).
+                body_hit = (not heading_keys) and bool(
+                    re.search(pattern, clean_body[:200])
+                )
             if heading_hit or body_hit:
                 target = start if bucket == "start_answers" else fields
                 if key not in target:
