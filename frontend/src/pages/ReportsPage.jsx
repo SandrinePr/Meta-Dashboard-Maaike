@@ -231,6 +231,21 @@ export default function ReportsPage({
   const [sourceFragment, setSourceFragment] = useState("");
   const [mockScenario, setMockScenario] = useState("success_with_sources");
   const [preview, setPreview] = useState(null);
+  const [trendPlan, setTrendPlan] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api("/api/report-planning/monthly-trend")
+      .then((payload) => {
+        if (!cancelled) setTrendPlan(payload);
+      })
+      .catch(() => {
+        if (!cancelled) setTrendPlan(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const storageKey = `maaike-open-report-${client.id}`;
 
@@ -456,8 +471,10 @@ export default function ReportsPage({
                 </strong>
                 <p style={{ margin: 0, fontSize: "0.93rem", lineHeight: 1.5 }}>
                   Een <strong>Klantrapport</strong> voor {client.name} óf een zelfstandig{" "}
-                  <strong>Algemeen trendrapport</strong> met trends per socialmediakanaal. Op de 1e
-                  van iedere maand bewaart HAMSTER automatisch één algemeen trendrapport.
+                  <strong>Algemeen trendrapport</strong> met trends per socialmediakanaal.{" "}
+                  {trendPlan?.production_schedule_active
+                    ? `Productieplanning staat aan. Volgende run: ${trendPlan.next_run?.label_nl || "1e van de maand om 06:00"} .`
+                    : "De maandplanning draait nu alleen in simulatie. Er wordt nog geen echt trendrapport automatisch aangemaakt."}
                 </p>
               </div>
 

@@ -11,7 +11,7 @@ import TechAdminPage from "./pages/TechAdminPage.jsx";
 import SocialPostsPage from "./pages/SocialPostsPage.jsx";
 import StrategyPage from "./pages/StrategyPage.jsx";
 
-const APP_NAME = "Bruine Beer";
+const APP_NAME = "HAMSTER";
 
 /** Daily work for Jet/Mo after choosing a client (Maaike point 5). */
 const DAILY_NAV = [
@@ -42,8 +42,8 @@ const SOCIAL_TABS = new Set(["all_posts", "performance"]);
 function navPagesForRole(role) {
   const pages = [...DAILY_NAV];
   if (role === "viewer") return pages;
-  // Point 4: editors need a clear entry to client setup + settings.
-  pages.push(["client_setup", "Klant inrichten"]);
+  // Klant inrichten stays the one button next to the selected client.
+  pages.push(["comparison", "Concurrenten"]);
   pages.push(["settings", "Instellingen"]);
   if (role === "admin") {
     pages.push(["tech_admin", "Technisch beheer"]);
@@ -394,10 +394,7 @@ export default function App() {
       setPage("social_posts");
     }
     // Point 4: editors set up goals/strategy/competitors/client prompts in Klant inrichten.
-    if (
-      (page === "strategy" || page === "comparison") &&
-      session.role === "editor"
-    ) {
+    if (page === "strategy" && session.role === "editor") {
       setSetupIsNew(false);
       setPage("client_setup");
       setNotice(
@@ -482,6 +479,9 @@ export default function App() {
       openClientSetup(selected);
       return;
     }
+    if (next === "settings") {
+      setSettingsTab("prompts");
+    }
     if (next === "results") {
       setSocialTab("performance");
     } else if (next === "social_posts" && socialTab === "performance" && postId == null) {
@@ -557,7 +557,12 @@ export default function App() {
       await loadClients();
       await loadTotals(targetId);
     } catch (exc) {
-      setError("Het ophalen van berichten is nog niet gelukt. Controleer de koppeling van deze klant.");
+      const detail = String(exc?.message || "").trim();
+      setError(
+        detail && !/failed to fetch|networkerror/i.test(detail)
+          ? detail
+          : "Het ophalen van berichten is nog niet gelukt. Bestaande berichten blijven zichtbaar. Controleer per kanaal de koppeling.",
+      );
       setLastSyncMessage("Ophalen mislukt.");
     } finally {
       setSyncing(false);
@@ -896,14 +901,7 @@ export default function App() {
               }}
               onOpenPost={openSocialPost}
               onOpenConnect={canEdit ? () => openClientSetup(selected) : undefined}
-              onOpenCompetitors={
-                canEdit
-                  ? () => {
-                      if (role === "editor") openClientSetup(selected);
-                      else openPage("comparison");
-                    }
-                  : undefined
-              }
+              onOpenCompetitors={canEdit ? () => openPage("comparison") : undefined}
               onChannelStatus={(status) => {
                 if (!status) {
                   setPageChannelStatus(null);
@@ -919,7 +917,7 @@ export default function App() {
               onPeriodChange={setSocialPeriod}
             />
           ) : null}
-          {page === "comparison" && selected && isAdmin ? (
+          {page === "comparison" && selected && canEdit ? (
             <ComparisonPage
               key={`cmp-${selected.id}`}
               client={selected}

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { api } from "../api.js";
 import AiSettingsPage from "./AiSettingsPage.jsx";
 import AiTrialPage from "./AiTrialPage.jsx";
 import DataTransferPage from "./DataTransferPage.jsx";
@@ -30,6 +31,13 @@ export default function TechAdminPage({
   onOpenClientSetup,
 }) {
   const [tab, setTab] = useState(initialTab);
+  const [canvaSteps, setCanvaSteps] = useState("");
+
+  useEffect(() => {
+    api("/api/canva/status")
+      .then((payload) => setCanvaSteps(payload?.admin_steps_nl || ""))
+      .catch(() => setCanvaSteps(""));
+  }, []);
 
   useEffect(() => {
     setTab(initialTab);
@@ -75,6 +83,12 @@ export default function TechAdminPage({
 
       {tab === "status" ? (
         <div className="stack">
+          {canvaSteps ? (
+            <section className="card stack">
+              <h3 style={{ marginTop: 0 }}>Canva-koppeling (alleen beheer)</h3>
+              <p className="hint">{canvaSteps}</p>
+            </section>
+          ) : null}
           <section className="card stack">
             <h3 style={{ marginTop: 0 }}>Technische werking van Rapporten</h3>
             <ul className="plain-list" style={{ lineHeight: 1.6 }}>

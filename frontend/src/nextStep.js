@@ -66,6 +66,16 @@ export function buildNextStep(input = {}) {
     };
   }
 
+  if (channel.state === "view_existing") {
+    return {
+      title: channel.headline || "Berichten bekijken kan",
+      body: channel.next_action || `De berichten van ${name} blijven zichtbaar. Vernieuwen vraagt een nieuwe koppeling.`,
+      action: editable ? "setup" : "posts",
+      label: editable ? channel.action_label || "Accounts koppelen om te vernieuwen" : "Berichten bekijken",
+      tone: "info",
+    };
+  }
+
   if (channel.state === "connect_required") {
     if (editable) {
       return {

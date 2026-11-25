@@ -44,6 +44,9 @@ export default function PostsPage({
   const [showAdd, setShowAdd] = useState(false);
   const [importExportOpen, setImportExportOpen] = useState(false);
   const [draftQuery, setDraftQuery] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(
+    typeof window !== "undefined" ? window.matchMedia("(min-width: 900px)").matches : true,
+  );
   const [filters, setFilters] = useState({
     q: "",
     platform: "",
@@ -503,13 +506,19 @@ export default function PostsPage({
             className="row-actions wrap"
             style={{ justifyContent: "space-between", alignItems: "center" }}
           >
-            <h3 style={{ margin: 0 }}>Zoeken &amp; filteren</h3>
+            <h3 style={{ margin: 0 }}>
+              <button type="button" className="linkish" onClick={() => setFiltersOpen((open) => !open)}>
+                {filtersOpen ? "Verberg filters" : "Toon filters"}
+              </button>
+            </h3>
             {filtersActive ? (
               <button className="secondary" type="button" onClick={clearAllFilters}>
                 Alle filters wissen (toon alle {totalPosts} berichten)
               </button>
             ) : null}
           </div>
+          {filtersOpen ? (
+          <>
           <form
             className="filters-row"
             onSubmit={(event) => {
@@ -624,6 +633,10 @@ export default function PostsPage({
               active={contentMatchIds != null}
             />
           </details>
+          </>
+          ) : (
+            <p className="hint">Filters zijn ingeklapt. Tik op ‘Toon filters’ om te zoeken.</p>
+          )}
           <p className="hint" style={{ margin: 0 }}>
             {filtersActive ? (
               <>

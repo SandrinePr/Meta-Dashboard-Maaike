@@ -202,8 +202,11 @@ export default function SocialPostsPage({
       await loadChannelAndWeekly(targetId);
       await onSynced?.();
     } catch (exc) {
+      const detail = String(exc?.message || "").trim();
       setTopError(
-        "Het ophalen van berichten bij Facebook en Instagram is nu niet gelukt. Controleer of de koppeling nog geldig is.",
+        detail && !/failed to fetch|networkerror/i.test(detail)
+          ? `${detail} Bestaande berichten blijven in de lijst staan.`
+          : "Het ophalen van berichten bij Facebook en Instagram is nu niet gelukt. Bestaande berichten blijven zichtbaar. Controleer per kanaal de koppeling.",
       );
       setTopAdminDetail(exc.message || "");
       await loadChannelAndWeekly(targetId).catch(() => {});

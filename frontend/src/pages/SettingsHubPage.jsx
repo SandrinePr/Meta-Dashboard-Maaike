@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import ClientPromptsPanel from "../components/ClientPromptsPanel.jsx";
+import PlanningenPanel from "../components/PlanningenPanel.jsx";
 import LegendPage from "./LegendPage.jsx";
 
 /**
@@ -21,7 +22,7 @@ export default function SettingsHubPage({
   const isAdmin = role === "admin";
   const isEditor = role === "editor" || isAdmin;
   const isViewer = role === "viewer";
-  const allowedTabs = new Set(["home", "legend", "prompts"]);
+  const allowedTabs = new Set(["home", "legend", "prompts", "planning"]);
   const [tab, setTab] = useState(allowedTabs.has(initialTab) ? initialTab : "home");
 
   useEffect(() => {
@@ -79,6 +80,15 @@ export default function SettingsHubPage({
         <button
           type="button"
           role="tab"
+          aria-selected={tab === "planning"}
+          className={tab === "planning" ? "subnav-tab is-active" : "subnav-tab"}
+          onClick={() => selectTab("planning")}
+        >
+          Planningen
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={tab === "legend"}
           className={tab === "legend" ? "subnav-tab is-active" : "subnav-tab"}
           onClick={() => selectTab("legend")}
@@ -86,6 +96,8 @@ export default function SettingsHubPage({
           Legenda (formats &amp; pijlers)
         </button>
       </div>
+
+      {tab === "planning" ? <PlanningenPanel client={client} /> : null}
 
       {tab === "home" ? (
         <div className="stack">

@@ -39,12 +39,16 @@ def build_channel_status(conn, client, posts=None) -> dict:
     fb_label = (
         f"Gekoppeld ({client.meta_page_name})"
         if fb_connected and client.meta_page_name
-        else ("Gekoppeld" if fb_connected else "Niet gekoppeld")
+        else ("Gekoppeld" if fb_connected else (
+            f"Niet gekoppeld · {fb_count} berichten zichtbaar" if fb_count else "Niet gekoppeld"
+        ))
     )
     ig_label = (
         f"Gekoppeld (@{client.meta_ig_username.lstrip('@')})"
         if ig_connected and client.meta_ig_username
-        else ("Gekoppeld" if ig_connected else "Niet gekoppeld")
+        else ("Gekoppeld" if ig_connected else (
+            f"Niet gekoppeld · {ig_count} berichten zichtbaar" if ig_count else "Niet gekoppeld"
+        ))
     )
 
     last_raw = client.last_fetch_at or latest_sync_at(conn, client.client_id)
@@ -54,24 +58,35 @@ def build_channel_status(conn, client, posts=None) -> dict:
 
     meta_state = str(client.meta_status or "not_connected")
     if not verified:
-        state_code = "connect_required"
-        headline = "Koppel eerst je accounts"
-        if meta_state in {"expired", "revoked"}:
+        if own_count > 0 and meta_state not in {"expired", "revoked"}:
+            state_code = "view_existing"
+            headline = "Berichten bekijken kan"
             next_action = (
-                f"De koppeling met Facebook/Instagram voor {client.name} is verlopen. "
-                "Koppel de accounts opnieuw om berichten op te halen."
+                f"Er staan {own_count} berichten van {client.name} klaar om te bekijken. "
+                "Vernieuwen lukt nog niet: Facebook en Instagram zijn niet gekoppeld. "
+                "Koppel de accounts om nieuwe berichten op te halen."
             )
-        elif own_count > 0:
-            next_action = (
-                f"Facebook en Instagram zijn nog niet gekoppeld voor {client.name}. "
-                f"Er staan al wel {own_count} ingelezen bericht(en) klaar om te bekijken."
-            )
+            action_key = "connect_accounts"
+            action_label = "Accounts koppelen om te vernieuwen"
         else:
-            next_action = (
-                f"Koppel Facebook en Instagram voor {client.name} om berichten automatisch op te halen."
-            )
-        action_key = "connect_accounts"
-        action_label = "Accounts koppelen"
+            state_code = "connect_required"
+            headline = "Koppel eerst je accounts"
+            if meta_state in {"expired", "revoked"}:
+                next_action = (
+                    f"De koppeling met Facebook/Instagram voor {client.name} is verlopen. "
+                    "Koppel de accounts opnieuw om berichten op te halen."
+                    + (
+                        f" De {own_count} bestaande berichten blijven zichtbaar."
+                        if own_count
+                        else ""
+                    )
+                )
+            else:
+                next_action = (
+                    f"Koppel Facebook en Instagram voor {client.name} om berichten automatisch op te halen."
+                )
+            action_key = "connect_accounts"
+            action_label = "Accounts koppelen"
     elif own_count == 0:
         state_code = "fetch_first_posts"
         headline = "Haal je eerste berichten op"

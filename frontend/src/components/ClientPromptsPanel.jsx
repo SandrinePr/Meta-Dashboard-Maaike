@@ -137,9 +137,9 @@ export default function ClientPromptsPanel({
       <p className="hint">
         Zelfde velden en opslag als bij <strong>Klant inrichten → Klantprompts</strong>.
       </p>
-      {loading ? <p className="muted">Klantprompts laden…</p> : null}
+      {loading ? <p className="muted">Prompts laden…</p> : null}
       {!loading && !promptQuestions.length ? (
-        <p className="muted">Geen klantprompt-velden beschikbaar.</p>
+        <p className="muted">Geen promptvelden beschikbaar.</p>
       ) : null}
       {promptQuestions.map((question) => {
         const required = Boolean(question.required_for_complete);

@@ -1533,6 +1533,56 @@ export default function ClientSetupPage({
               })}
           </section>
 
+          <section className="card stack" id="setup-strategy-status" aria-label="Strategiestatus">
+            <div className="setup-block-head">
+              <h4>Strategie</h4>
+              <StatusPill
+                kind={strategy?.review_status === "definitief" ? "ready" : "todo"}
+                label={strategy?.review_status_label || "Concept"}
+              />
+            </div>
+            <p className="hint">
+              {strategy?.next_step ||
+                "Vul de vragen in, bekijk voorstellen en keur ze goed voordat de strategie definitief is."}
+            </p>
+            <div className="row-actions wrap" role="list" aria-label="Status van de strategie">
+              {["Concept", "Te controleren", "Definitief"].map((label) => {
+                const current = strategy?.review_status_label || "Concept";
+                const active = current.toLowerCase().includes(label.toLowerCase().slice(0, 6));
+                return (
+                  <span key={label} className={active ? "badge badge-active" : "badge"}>
+                    {label}
+                  </span>
+                );
+              })}
+            </div>
+            <div className="row-actions wrap">
+              {canvaUrl ? (
+                <a className="button secondary" href={canvaUrl} target="_blank" rel="noreferrer">
+                  Openen in Canva
+                </a>
+              ) : null}
+              {strategy?.strategy_pdf?.available || strategy?.strategy_pdf?.filename ? (
+                <>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() =>
+                      window.open(`/api/clients/${activeId}/strategy/pdf?disposition=inline`, "_blank", "noopener")
+                    }
+                  >
+                    PDF bekijken
+                  </button>
+                  <a className="button secondary" href={`/api/clients/${activeId}/strategy/pdf?disposition=attachment`}>
+                    PDF downloaden
+                  </a>
+                </>
+              ) : (
+                <span className="hint">Nog geen opgeslagen strategie-PDF. Die verschijnt na een PDF-import.</span>
+              )}
+            </div>
+          </section>
+
           <section className="card stack" id="setup-strategy">
             <div className="setup-block-head">
               <h4>Overige strategievragen</h4>
@@ -1657,16 +1707,13 @@ export default function ClientSetupPage({
               />
             </div>
             <p className="hint">
-              Optioneel — blokkeert afronden niet. App-type: private/public met OAuth + PKCE (scope{" "}
-              <code>design:content:read</code>). Zonder koppeling blijft PDF-import beschikbaar.
+              Optioneel — blokkeert afronden niet. <strong>Link bewaren</strong> onthoudt alleen het
+              adres van het ontwerp. Daarmee haalt HAMSTER de tekst nog niet op.
             </p>
             <p className="hint">
               {canvaConnect?.connected
-                ? `Canva-account gekoppeld${canvaConnect.refresh_available ? " · tokenvernieuwing actief" : ""}.`
-                : canvaConnect?.app_configured
-                  ? "Canva-app staat klaar — koppel een Canva-gebruiker die het ontwerp mag openen."
-                  : canvaConnect?.admin_steps_nl ||
-                    "Canva-beheerder moet eerst een private/public Connect-app en credentials in Render zetten."}
+                ? "Canva is gekoppeld. Je kunt voorstellen ophalen uit het ontwerp."
+                : "Directe import is nu niet beschikbaar. Gebruik hieronder ‘Voorstellen ophalen via PDF’."}
             </p>
             <div className="row-actions wrap">
               {canvaConnect?.connected ? (
@@ -1686,8 +1733,8 @@ export default function ClientSetupPage({
                   onClick={connectCanvaAccount}
                   title={
                     canvaConnect?.app_configured === false
-                      ? canvaConnect?.admin_steps_nl
-                      : "Start Canva OAuth (PKCE)"
+                      ? "Directe import is nog niet beschikbaar. Gebruik de PDF hieronder."
+                      : "Koppel je Canva-account om de tekst uit het ontwerp te halen."
                   }
                 >
                   {busy === "canva-oauth" ? "Bezig…" : "Canva-account koppelen"}
