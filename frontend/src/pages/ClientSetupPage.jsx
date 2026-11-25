@@ -1713,7 +1713,7 @@ export default function ClientSetupPage({
             <p className="hint">
               {canvaConnect?.connected
                 ? "Canva is gekoppeld. Je kunt voorstellen ophalen uit het ontwerp."
-                : "Directe import is nu niet beschikbaar. Gebruik hieronder ‘Voorstellen ophalen via PDF’."}
+                : "De tekst uit Canva ophalen kan nu niet. Kies hieronder een PDF van het ontwerp. De link zelf wordt alleen bewaard."}
             </p>
             <div className="row-actions wrap">
               {canvaConnect?.connected ? (
@@ -1737,7 +1737,11 @@ export default function ClientSetupPage({
                       : "Koppel je Canva-account om de tekst uit het ontwerp te halen."
                   }
                 >
-                  {busy === "canva-oauth" ? "Bezig…" : "Canva-account koppelen"}
+                  {busy === "canva-oauth"
+                    ? "Bezig…"
+                    : canvaConnect?.app_configured === false
+                      ? "Directe Canva-import niet beschikbaar"
+                      : "Canva-account koppelen"}
                 </button>
               )}
             </div>

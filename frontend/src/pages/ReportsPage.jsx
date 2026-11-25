@@ -350,7 +350,7 @@ export default function ReportsPage({
             <span className="report-list-period">{periodLabel(r)}</span>
             <span className={`report-status-badge is-${badge.code}`}>{badge.label}</span>
             {r.is_mock ? (
-              <span className="report-status-badge is-mock">Simulatie</span>
+              <span className="report-status-badge is-mock">Testresultaat, geen echt rapport</span>
             ) : null}
           </div>
           <div className="hint" style={{ marginTop: "0.25rem" }}>

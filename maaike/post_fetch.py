@@ -65,20 +65,38 @@ def fetch_client_posts(client_id: int, *, get_json=None) -> dict:
         client = get_client(conn, client_id)
         if client is None:
             raise MetaConnectError("Deze klant staat niet in de lijst.")
-        if not is_verified_link(client):
-            raise MetaConnectError(
-                "Vernieuwen is niet gelukt. Facebook en Instagram zijn niet gekoppeld, "
-                "dus nieuwe berichten kunnen niet worden opgehaald. "
-                "Bestaande berichten blijven zichtbaar. Koppel de accounts om te vernieuwen."
-            )
         secret = load_page_secret(conn, client_id)
+        verified = is_verified_link(client) or (
+            client.meta_status == "connected" and bool(secret)
+        )
+        if verified and secret and not client.meta_connected_at:
+            conn.execute(
+                "UPDATE clients SET meta_connected_at = ? WHERE id = ? AND meta_connected_at IS NULL",
+                (_now(), client_id),
+            )
+        if not verified:
+            page = client.meta_page_name or "onbekend"
+            ig = f"@{client.meta_ig_username}" if client.meta_ig_username else "onbekend"
+            if secret is None and (client.meta_page_name or client.meta_ig_username):
+                raise MetaConnectError(
+                    "Berichten bekijken kan. Ophalen is niet gelukt. "
+                    f"Facebook ({page}) en Instagram ({ig}) staan bekend, "
+                    "maar de opgeslagen Meta-toegang ontbreekt of is onvolledig. "
+                    "Koppel de accounts opnieuw. Bestaande berichten blijven zichtbaar."
+                )
+            raise MetaConnectError(
+                "Berichten bekijken kan. Ophalen is niet gelukt: "
+                "Facebook en Instagram zijn nog niet gekoppeld. "
+                "Bestaande berichten blijven zichtbaar."
+            )
+        if secret is None:
+            raise MetaConnectError(
+                "Account staat als gekoppeld, maar ophalen is niet gelukt: "
+                "er is geen opgeslagen toegang tot de Facebook-pagina. "
+                "Bestaande berichten blijven zichtbaar. Koppel opnieuw."
+            )
         page_name = client.meta_page_name or "Facebook"
         ig_name = f"@{client.meta_ig_username}" if client.meta_ig_username else "Instagram"
-    if secret is None:
-        raise MetaConnectError(
-            "Vernieuwen is niet gelukt: er is geen opgeslagen toegang tot de Facebook-pagina. "
-            "Bestaande berichten blijven zichtbaar. Koppel Facebook en Instagram opnieuw."
-        )
     page_id, ig_user_id, page_token = secret
     getter = get_json or graph_get
     version = graph_version()

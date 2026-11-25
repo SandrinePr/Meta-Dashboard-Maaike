@@ -146,6 +146,11 @@ class _HamsterAccessMiddleware(BaseHTTPMiddleware):
                     )
                 },
             )
+        if resolved.role == "guest" and path.startswith("/api/") and cleaned_public not in PUBLIC_PATHS and cleaned_public != "/api/session":
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Log in om klantgegevens te zien. De site zelf is wel te openen."},
+            )
         if resolved.role == "viewer" and path_requires_editor_or_admin(path, method):
             return JSONResponse(
                 status_code=403,

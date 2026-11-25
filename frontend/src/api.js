@@ -15,12 +15,23 @@ export function apiUrl(path) {
   return `${API_URL}${path}`;
 }
 
+export function storedAuthHeader() {
+  try {
+    const token = window.sessionStorage.getItem("hamster-auth");
+    return token ? { Authorization: `Basic ${token}` } : {};
+  } catch {
+    return {};
+  }
+}
+
 export async function api(path, { method = "GET", body, raw = false } = {}) {
   const isForm = typeof FormData !== "undefined" && body instanceof FormData;
+  const headers = { ...storedAuthHeader() };
+  if (!(body === undefined || isForm || raw)) headers["Content-Type"] = "application/json";
   const response = await fetch(apiUrl(path), {
     method,
     credentials: "include",
-    headers: body === undefined || isForm || raw ? undefined : { "Content-Type": "application/json" },
+    headers,
     body: body === undefined ? undefined : isForm || raw ? body : JSON.stringify(body),
   });
   const text = await response.text();

@@ -19,11 +19,11 @@ from dataclasses import dataclass
 from typing import Literal
 
 from fastapi import HTTPException, Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
-Role = Literal["admin", "editor", "viewer"]
+Role = Literal["admin", "editor", "viewer", "guest"]
 
-_VALID_ROLES = frozenset({"admin", "editor", "viewer"})
+_VALID_ROLES = frozenset({"admin", "editor", "viewer", "guest"})
 
 # Paths always open (health, OAuth callback, cron wake-up).
 PUBLIC_PATHS = frozenset(
@@ -116,18 +116,27 @@ def match_account(username: str, password: str, accounts: list[tuple[str, str, R
     return None
 
 
+def guest_identity(*, auth_enabled: bool) -> AuthIdentity:
+    """Someone who opened the site without a HAMSTER login."""
+    return AuthIdentity(
+        username="",
+        role="guest",
+        auth_enabled=auth_enabled,
+        role_enforced=auth_enabled,
+    )
+
+
 def resolve_identity(request: Request) -> AuthIdentity | Response:
-    """Return identity or a 401 Response when Basic Auth is required but missing/wrong."""
+    """Open the site without a browser login popup.
+
+    HTML and assets load for everyone. Client and admin APIs stay closed
+    until a valid HAMSTER login is sent. A missing login returns JSON 401
+    without WWW-Authenticate, so the browser does not show ‘Meld je aan’.
+    """
     accounts = load_auth_accounts()
     path = request.url.path.rstrip("/") or "/"
-    if path in PUBLIC_PATHS or path == "/api/health":
-        # Public routes still get a neutral identity for downstream code.
-        return AuthIdentity(
-            username="",
-            role=default_open_role(),
-            auth_enabled=bool(accounts),
-            role_enforced=False,
-        )
+    is_api = path.startswith("/api/")
+    public_api = path in PUBLIC_PATHS or path == "/api/health" or path == "/api/session"
 
     if not accounts:
         return AuthIdentity(
@@ -138,17 +147,19 @@ def resolve_identity(request: Request) -> AuthIdentity | Response:
         )
 
     parsed = parse_basic_auth(request.headers.get("authorization"))
-    if parsed:
-        identity = match_account(parsed[0], parsed[1], accounts)
-        if identity is not None:
-            return identity
+    identity = match_account(parsed[0], parsed[1], accounts) if parsed else None
 
-    return Response(
-        content="Authenticatie vereist.",
-        status_code=401,
-        headers={"WWW-Authenticate": 'Basic realm="HAMSTER"'},
-        media_type="text/plain",
-    )
+    if not is_api or public_api:
+        return identity or guest_identity(auth_enabled=True)
+
+    if identity is None:
+        return JSONResponse(
+            status_code=401,
+            content={
+                "detail": "Log in om klantgegevens te zien. De site zelf is wel te openen.",
+            },
+        )
+    return identity
 
 
 def path_requires_admin(path: str) -> bool:
@@ -219,10 +230,12 @@ def session_payload(identity: AuthIdentity) -> dict:
         "can_tech_admin": identity.role == "admin",
         "can_edit_clients": identity.role in {"admin", "editor"},
         "can_delete_clients": identity.role == "admin",
+        "login_required": identity.role == "guest",
         "labels": {
             "admin": "Technisch beheer",
             "editor": "Editor (Jet/Mo)",
             "viewer": "Gewone gebruiker",
+            "guest": "Niet ingelogd",
         },
         "note_nl": (
             "Rollen worden afgedwongen via HTTP Basic Auth (beheerder / editor / viewer)."
