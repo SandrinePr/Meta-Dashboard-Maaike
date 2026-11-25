@@ -167,6 +167,7 @@ export default function ClientSetupPage({
   const [importNote, setImportNote] = useState("");
   const [proposalDraft, setProposalDraft] = useState(null);
   const [canvaImportHint, setCanvaImportHint] = useState("");
+  const [canvaConnect, setCanvaConnect] = useState(null);
   const pdfInputRef = useRef(null);
   const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
   const [targetDraft, setTargetDraft] = useState({
@@ -357,6 +358,68 @@ export default function ClientSetupPage({
     // answers across Meta OAuth returns (metaChoice) and sibling reloads.
     reloadContent(activeId, { preserveDraft: true }).catch((exc) => reportError(exc.message));
   }, [activeId, metaChoice, popupReturn, refreshMeta, reloadContent, reportError, setPageIndex]);
+
+  const refreshCanvaConnect = useCallback(() => {
+    return api("/api/canva/status")
+      .then((payload) => {
+        setCanvaConnect(payload);
+        return payload;
+      })
+      .catch(() => {
+        setCanvaConnect(null);
+        return null;
+      });
+  }, []);
+
+  useEffect(() => {
+    refreshCanvaConnect();
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const canvaFlag = params.get("canva");
+      if (canvaFlag === "connected") {
+        setLocalNotice("Canva-account gekoppeld. Je kunt nu voorstellen ophalen uit een ontwerplink.");
+        refreshCanvaConnect();
+      } else if (canvaFlag === "denied" || canvaFlag === "error") {
+        setCanvaImportHint(
+          params.get("detail") ||
+            "Canva-koppeling mislukt of geweigerd. PDF-import blijft beschikbaar.",
+        );
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [refreshCanvaConnect]);
+
+  async function connectCanvaAccount() {
+    setBusy("canva-oauth");
+    setLocalError("");
+    try {
+      const started = await api("/api/canva/oauth/start", { method: "POST", body: {} });
+      if (started?.authorize_url) {
+        window.location.assign(started.authorize_url);
+        return;
+      }
+      setCanvaImportHint("Canva OAuth start gaf geen authorize_url.");
+    } catch (exc) {
+      setCanvaImportHint(exc.message || dutchSaveError(exc));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function disconnectCanvaAccount() {
+    setBusy("canva-oauth");
+    setLocalError("");
+    try {
+      const status = await api("/api/canva/oauth/disconnect", { method: "POST", body: {} });
+      setCanvaConnect(status);
+      setLocalNotice("Canva-koppeling verbroken. PDF-import blijft beschikbaar.");
+    } catch (exc) {
+      setLocalError(exc.message || dutchSaveError(exc));
+    } finally {
+      setBusy("");
+    }
+  }
 
   useEffect(() => {
     if (!popupReturn) return;
@@ -1594,10 +1657,43 @@ export default function ClientSetupPage({
               />
             </div>
             <p className="hint">
-              Optioneel — blokkeert afronden niet. Met Canva Connect (scope{" "}
-              <code>design:content:read</code>) haalt HAMSTER voorstellen uit het ontwerp; anders
-              blijft PDF-import hieronder beschikbaar.
+              Optioneel — blokkeert afronden niet. App-type: private/public met OAuth + PKCE (scope{" "}
+              <code>design:content:read</code>). Zonder koppeling blijft PDF-import beschikbaar.
             </p>
+            <p className="hint">
+              {canvaConnect?.connected
+                ? `Canva-account gekoppeld${canvaConnect.refresh_available ? " · tokenvernieuwing actief" : ""}.`
+                : canvaConnect?.app_configured
+                  ? "Canva-app staat klaar — koppel een Canva-gebruiker die het ontwerp mag openen."
+                  : canvaConnect?.admin_steps_nl ||
+                    "Canva-beheerder moet eerst een private/public Connect-app en credentials in Render zetten."}
+            </p>
+            <div className="row-actions wrap">
+              {canvaConnect?.connected ? (
+                <button
+                  className="secondary"
+                  type="button"
+                  disabled={busy === "canva-oauth"}
+                  onClick={disconnectCanvaAccount}
+                >
+                  {busy === "canva-oauth" ? "Bezig…" : "Canva ontkoppelen"}
+                </button>
+              ) : (
+                <button
+                  className="secondary"
+                  type="button"
+                  disabled={busy === "canva-oauth" || canvaConnect?.app_configured === false}
+                  onClick={connectCanvaAccount}
+                  title={
+                    canvaConnect?.app_configured === false
+                      ? canvaConnect?.admin_steps_nl
+                      : "Start Canva OAuth (PKCE)"
+                  }
+                >
+                  {busy === "canva-oauth" ? "Bezig…" : "Canva-account koppelen"}
+                </button>
+              )}
+            </div>
             <label>
               Canva-URL
               <input

@@ -1968,15 +1968,70 @@ def create_app() -> FastAPI:
             _require_client(conn, client_id)
             return strategy_overview(conn, client_id)
 
+    @app.get("/api/canva/status")
+    def canva_status() -> dict:
+        """Public status of Canva Connect (no tokens)."""
+        from maaike.canva_connect import canva_connect_status
+
+        with transaction() as conn:
+            return canva_connect_status(conn)
+
+    @app.post("/api/canva/oauth/start")
+    def canva_oauth_start() -> dict:
+        """Start PKCE OAuth for a private/public Canva Connect app."""
+        from maaike.canva_connect import CanvaAccessError, start_oauth
+
+        try:
+            with transaction() as conn:
+                return start_oauth(conn)
+        except CanvaAccessError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/canva/oauth/disconnect")
+    def canva_oauth_disconnect() -> dict:
+        from maaike.canva_connect import disconnect_oauth
+
+        with transaction() as conn:
+            return disconnect_oauth(conn)
+
+    @app.get("/api/canva/callback")
+    def canva_oauth_callback(request: Request):
+        """OAuth redirect target — exchanges code+PKCE verifier for tokens (server-side)."""
+        from maaike.canva_connect import CanvaAccessError, complete_oauth
+        from starlette.responses import RedirectResponse
+
+        settings_now: WebSettings = request.app.state.settings
+        error = request.query_params.get("error") or ""
+        state = request.query_params.get("state") or ""
+        code = request.query_params.get("code") or ""
+        front = settings_now.frontend_url.rstrip("/")
+        if error:
+            return RedirectResponse(
+                f"{front}/?canva=denied&detail={error}",
+                status_code=302,
+            )
+        try:
+            with transaction() as conn:
+                complete_oauth(conn, code=code, state=state)
+        except CanvaAccessError as exc:
+            from urllib.parse import quote
+
+            return RedirectResponse(
+                f"{front}/?canva=error&detail={quote(str(exc)[:240])}",
+                status_code=302,
+            )
+        return RedirectResponse(f"{front}/?canva=connected", status_code=302)
+
     @app.post("/api/clients/{client_id}/strategy/import/canva-preview")
     def strategy_canva_preview(client_id: int, body: dict) -> dict:
         """Propose empty-field strategy fills from a Canva design via Connect export (no paid AI)."""
         from maaike.canva_connect import CanvaAccessError
         from maaike.strategy_import import preview_canva_link
 
-        _ = client_id
         try:
-            return preview_canva_link(str((body or {}).get("url") or ""))
+            with transaction() as conn:
+                _require_client(conn, client_id)
+                return preview_canva_link(str((body or {}).get("url") or ""), conn=conn)
         except CanvaAccessError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:

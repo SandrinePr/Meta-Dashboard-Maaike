@@ -61,7 +61,14 @@ services:
         value: claude-sonnet-4-5
       - key: FIGMA_ACCESS_TOKEN
         sync: false
-      # Optional Canva Connect user token (design:content:read) for direct strategy import.
+      # Canva Connect private/public app (OAuth PKCE). Scope: design:content:read.
+      - key: CANVA_CLIENT_ID
+        sync: false
+      - key: CANVA_CLIENT_SECRET
+        sync: false
+      - key: CANVA_REDIRECT_URI
+        sync: false
+      # Optional emergency static token (no refresh) — prefer OAuth tokens in DB.
       - key: CANVA_ACCESS_TOKEN
         sync: false
       # Free-tier lasting storage: private HAMSTER GitHub Contents (no secrets in package)

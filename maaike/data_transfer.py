@@ -19,16 +19,24 @@ FORMAT_ID = "maaike-dashboard-backup"
 FORMAT_VERSION = 1
 
 # Never export these tables/columns
-SECRET_TABLES = frozenset({"client_meta_secrets"})
+SECRET_TABLES = frozenset(
+    {
+        "client_meta_secrets",
+        "canva_oauth_secrets",
+        "canva_oauth_pending",
+    }
+)
 SECRET_CLIENT_FIELDS = frozenset(
     {
         "user_access_token",
         "page_access_token",
         "access_token",
+        "refresh_token",
         "api_key",
         "ai_api_key",
         "password",
         "secret",
+        "code_verifier",
     }
 )
 
@@ -442,8 +450,9 @@ def validate_package(data: Any) -> dict[str, Any]:
             kl = key.lower()
             if kl in SECRET_CLIENT_FIELDS or any(part in kl for part in blocked_substrings):
                 raise ValueError(f"Geheime velden in import geweigerd: {key}")
-    if "client_meta_secrets" in data:
-        raise ValueError("client_meta_secrets mag niet in een importpakket zitten.")
+    for secret_table in SECRET_TABLES:
+        if secret_table in data:
+            raise ValueError(f"{secret_table} mag niet in een importpakket zitten.")
     return {
         "ok": True,
         "version": ver,

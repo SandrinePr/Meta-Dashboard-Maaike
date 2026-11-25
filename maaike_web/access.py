@@ -30,6 +30,7 @@ PUBLIC_PATHS = frozenset(
     {
         "/api/health",
         "/api/meta/callback",
+        "/api/canva/callback",
         "/api/report-planning/monthly-trend/trigger",
     }
 )

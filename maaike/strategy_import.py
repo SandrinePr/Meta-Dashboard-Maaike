@@ -186,22 +186,21 @@ def extract_pdf_text(file_bytes: bytes) -> str:
 def preview_canva_link(
     url: str,
     *,
+    conn=None,
     pdf_bytes: bytes | None = None,
     access_token: str | None = None,
 ) -> dict[str, Any]:
     """Preview strategy proposals from a Canva design URL.
 
-    When Canva Connect credentials are available (CANVA_ACCESS_TOKEN or access_token),
-    exports the design as PDF via the official API and maps text like PDF-import.
-    Without access, returns a clear requirements note and keeps the PDF-upload path.
+    Uses Canva Connect OAuth tokens (with refresh) or an explicit access_token /
+    pdf_bytes override. Without access, returns clear admin steps and keeps PDF upload.
     """
     from maaike.canva_connect import (
-        ACCESS_REQUIREMENTS_NL,
         CanvaAccessError,
-        canva_access_token,
         canva_connect_status,
         export_design_pdf_bytes,
         extract_design_id,
+        get_valid_access_token,
     )
 
     cleaned = (url or "").strip()
@@ -213,13 +212,22 @@ def preview_canva_link(
         raise ValueError("Dit lijkt geen Canva-link (canva.com).")
 
     design_id = extract_design_id(cleaned)
-    status = canva_connect_status()
-    token = (access_token or canva_access_token() or "").strip()
+    status = canva_connect_status(conn)
+    token = ""
+    token_error = ""
+    if pdf_bytes is None:
+        try:
+            token = get_valid_access_token(conn, access_token=access_token)
+        except CanvaAccessError as exc:
+            token_error = str(exc)
+    else:
+        token = (access_token or "").strip()
+
     base_meta = {
         "source_kind": "canva",
         "canva_url": cleaned,
         "design_id": design_id,
-        "link_import_available": bool(token) or pdf_bytes is not None,
+        "link_import_available": bool(token) or pdf_bytes is not None or status.get("link_import_available"),
         "access": status,
         "proposed": {
             "start_answers": {},
@@ -232,20 +240,23 @@ def preview_canva_link(
     }
 
     if pdf_bytes is None and not token:
+        note = token_error or status.get("requirements_nl") or "Canva-koppeling ontbreekt."
         return {
             **base_meta,
             "readable": False,
             "content_extracted": False,
-            "note": ACCESS_REQUIREMENTS_NL,
+            "note": note,
             "open_questions": [
-                ACCESS_REQUIREMENTS_NL,
+                note,
                 "PDF-route blijft beschikbaar: exporteer het ontwerp als tekst-PDF en gebruik ‘Voorstellen ophalen via PDF’.",
             ],
         }
 
     try:
-        raw = pdf_bytes if pdf_bytes is not None else export_design_pdf_bytes(
-            design_id, token=token
+        raw = (
+            pdf_bytes
+            if pdf_bytes is not None
+            else export_design_pdf_bytes(design_id, token=token)
         )
     except CanvaAccessError:
         raise
