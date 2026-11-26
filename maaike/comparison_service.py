@@ -97,13 +97,26 @@ def _meta_discovery_status(conn, client) -> dict:
     has_ig_handle_or_id = bool(client.meta_ig_username or (secret is not None and secret[1]))
     ig_connected = bool(fb_connected and has_ig_handle_or_id and has_ig_secret)
     ready = bool(fb_connected and ig_connected)
+    if ready:
+        message = None
+        reason = None
+    elif fb_connected and not has_ig_secret:
+        message = (
+            "Het account staat als gekoppeld, maar de toestemming om posts van concurrenten op te halen ontbreekt. "
+            "Koppel Facebook en Instagram opnieuw."
+        )
+        reason = "permission"
+    else:
+        message = META_CONNECT_REQUIRED_MESSAGE
+        reason = "not_linked"
     return {
         "connected": ready,
         "facebook_connected": fb_connected,
         "facebook_page_name": client.meta_page_name if fb_connected else None,
         "instagram_connected": ig_connected,
         "instagram_username": client.meta_ig_username if ig_connected else None,
-        "missing_message": None if ready else META_CONNECT_REQUIRED_MESSAGE,
+        "missing_message": message,
+        "reason": reason,
     }
 
 

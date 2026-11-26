@@ -96,21 +96,17 @@ export default function ClientsPage({
                 <div className="client-list-main">
                   <strong>{item.name}</strong>
                   <span className="muted">
-                    {connected
-                      ? `Gekoppeld${item.page_name ? ` · ${item.page_name}` : ""}${
-                          item.ig_username ? ` · @${item.ig_username}` : ""
-                        }`
-                      : "Nog niet gekoppeld"}
+                    {item.status_label || (connected ? "Gekoppeld" : "Nog niet gekoppeld")}
                     {isSelected ? " · geselecteerd" : ""}
                   </span>
                 </div>
                 <div className="row-actions client-list-actions">
                   <button className="primary" type="button" onClick={() => onOpenClient(item)}>
-                    Openen
+                    Open dashboard
                   </button>
                   {canEdit ? (
                     <button className="secondary" type="button" onClick={() => onEditClient(item)}>
-                      Bewerken
+                      Klant inrichten
                     </button>
                   ) : null}
                   {canDelete ? (
@@ -123,7 +119,7 @@ export default function ClientsPage({
                         setConfirmClient(item);
                       }}
                     >
-                      Verwijderen
+                      Verwijder klant
                     </button>
                   ) : null}
                 </div>

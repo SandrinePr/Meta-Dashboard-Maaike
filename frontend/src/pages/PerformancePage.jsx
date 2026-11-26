@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
-import ResultCard from "../components/ResultCard.jsx";
+import { BarChart } from "../components/SimpleCharts.jsx";
+import { formatCount, monthBounds, numericMetric, postInteractions, postIso, postKind, postPlatform } from "../postMetrics.js";
 
 const DUTCH_MONTHS = [
   "januari",
@@ -17,14 +18,6 @@ const DUTCH_MONTHS = [
   "december",
 ];
 
-const METRIC_TITLES_NL = {
-  views: "Weergaven",
-  likes: "Likes",
-  comments: "Reacties",
-  saves: "Opgeslagen",
-  shares: "Gedeeld",
-};
-
 function formatMonthNl(year, month) {
   if (!year || !month) return "";
   const m = DUTCH_MONTHS[Number(month) - 1] || String(month);
@@ -39,6 +32,7 @@ export default function PerformancePage({
   onOpenCompetitors,
   onOpenConnect,
   onSynced,
+  onOpenFiltered,
   selection: controlledSelection,
   onSelectionChange,
 }) {
@@ -51,6 +45,7 @@ export default function PerformancePage({
   const [adminError, setAdminError] = useState("");
   const [notice, setNotice] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [allPosts, setAllPosts] = useState([]);
 
   const selection =
     controlledSelection !== undefined && controlledSelection !== null
@@ -127,6 +122,20 @@ export default function PerformancePage({
     };
   }, [client.id, selection, platformsKey, monthsSpan]);
 
+  useEffect(() => {
+    let cancelled = false;
+    api(`/api/clients/${client.id}/posts`)
+      .then((data) => {
+        if (!cancelled) setAllPosts(data?.posts || []);
+      })
+      .catch(() => {
+        if (!cancelled) setAllPosts([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client.id, payload]);
+
   async function refreshFigures() {
     const targetClientId = client.id;
     setRefreshing(true);
@@ -159,35 +168,13 @@ export default function PerformancePage({
 
   return (
     <div className="stack">
-      <section className="card stack" style={{ gap: "0.5rem" }}>
-        <div
-          className="row-actions wrap"
-          style={{ justifyContent: "space-between", alignItems: "center" }}
-        >
-          <div>
-            <strong>Resultaten van {client.name}</strong>
-            <p className="hint" style={{ margin: "0.2rem 0 0" }}>
-              Hier staan uitsluitend de eigen Instagram- en Facebook-cijfers van{" "}
-              <strong>{client.name}</strong>. Cijfers en voorbeelden van andere bedrijven bekijk je
-              apart bij <strong>Concurrenten</strong>.
-            </p>
-          </div>
-          {onOpenCompetitors ? (
-            <button className="secondary" type="button" onClick={onOpenCompetitors}>
-              Naar Concurrenten
-            </button>
-          ) : null}
-        </div>
-      </section>
-
       {error ? (
         <div className="stack">
           <p className="banner error">{error}</p>
           {adminError ? (
             <details>
               <summary className="hint" style={{ cursor: "pointer" }}>
-                Technische foutdetails (alleen voor beheer)
-              </summary>
+                Technische foutdetails              </summary>
               <pre className="hint" style={{ whiteSpace: "pre-wrap" }}>
                 {adminError}
               </pre>
@@ -285,60 +272,140 @@ export default function PerformancePage({
 
           {payload.post_count === 0 ? (
             <p className="banner">
-              Geen berichten van {client.name} gevonden in{" "}
+              Geen posts in{" "}
               <strong>
                 {payload.selected
                   ? formatMonthNl(payload.selected.year, payload.selected.month)
                   : "deze periode"}
               </strong>
-              . Kies een andere maand of haal nieuwe berichten op.
+              . Kies een andere maand.
             </p>
           ) : (
-            <p className="hint">
-              Top 3 eigen berichten van <strong>{client.name}</strong> op basis van{" "}
-              <strong>{payload.post_count}</strong>{" "}
-              {payload.post_count === 1 ? "bericht" : "berichten"} in de gekozen periode. Klik op{" "}
-              <strong>Open in Alle berichten</strong> om de indeling of feedback bij een bericht te
-              bekijken.
-            </p>
+            <p className="hint">{payload.post_count} posts in deze periode.</p>
           )}
 
           {notice ? <p className="banner">{notice}</p> : null}
 
-          {(payload.sections || []).map((section, index) => {
-            const metricTitle = METRIC_TITLES_NL[section.metric] || section.label;
-            return (
-              <section key={section.metric} className="stack">
-                {index > 0 ? <hr className="rro-perf-section-divider" /> : null}
-                <h3 className="rro-perf-section-header">{metricTitle} · top 3</h3>
-                {!section.posts.length ? (
-                  <div className="banner">
-                    Geen berichten met {metricTitle.toLowerCase()} in deze periode.
-                  </div>
-                ) : (
-                  <div className="results-list">
-                    {section.posts.map((post) => (
-                      <ResultCard
-                        key={`${section.metric}-${post.id}`}
-                        post={post}
-                        highlightMetric={section.metric}
-                        rankBanner={
-                          <div className="rro-perf-rank-banner">
-                            <span className="rro-perf-rank-badge">#{post.rank}</span>
-                            {` · ${metricTitle}: `}
-                            <strong>{post.metric_value_label ?? post.metric_value}</strong>
-                          </div>
-                        }
-                        onOpenPost={openPost}
-                      />
-                    ))}
-                  </div>
-                )}
-              </section>
-            );
-          })}
+          {(payload.sections || []).length || allPosts.length ? (
+            <ResultsCharts
+              posts={allPosts}
+              selection={selection || (payload.selected ? `${payload.selected.year}-${String(payload.selected.month).padStart(2, "0")}` : "")}
+              monthsSpan={monthsSpan}
+              instagram={instagram}
+              facebook={facebook}
+              onOpenPost={openPost}
+              onOpenFiltered={onOpenFiltered}
+            />
+          ) : null}
         </>
       ) : null}
+    </div>
+  );
+}
+
+function spanBounds(yyyyMm, span) {
+  const end = monthBounds(yyyyMm);
+  if (!end.from || span <= 1) return end;
+  const [y, m] = yyyyMm.split("-").map(Number);
+  const start = new Date(y, m - span, 1);
+  const from = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-01`;
+  return { from, to: end.to };
+}
+
+function averageOf(rows) {
+  const values = rows.map(postInteractions).filter((value) => value != null);
+  if (!values.length) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function channelAllowed(label, instagram, facebook) {
+  const name = label.toLowerCase();
+  if (name.includes("instagram")) return instagram;
+  if (name.includes("facebook")) return facebook;
+  return true;
+}
+
+function ResultsCharts({ posts, selection, monthsSpan, instagram, facebook, onOpenPost, onOpenFiltered }) {
+  const bounds = spanBounds(selection, monthsSpan);
+  const inPeriod = (posts || []).filter((post) => {
+    const iso = postIso(post);
+    const label = postPlatform(post);
+    if (!iso || !bounds.from || iso < bounds.from || iso > bounds.to) return false;
+    return channelAllowed(label, instagram, facebook);
+  });
+  const channels = [...new Set(inPeriod.map(postPlatform).filter(Boolean))];
+  const kinds = [...new Set(inPeriod.map(postKind).filter(Boolean))];
+  const best = [...inPeriod]
+    .filter((post) => postInteractions(post) != null)
+    .sort((a, b) => postInteractions(b) - postInteractions(a))
+    .slice(0, 5);
+
+  function openChannel(row) {
+    onOpenFiltered?.({ platform: row.label, from: bounds.from, to: bounds.to, q: "" });
+  }
+
+  function openKind(row) {
+    onOpenFiltered?.({ platform: "", contentSoort: row.label, from: bounds.from, to: bounds.to, q: "" });
+  }
+
+  return (
+    <div className="stack">
+      <div className="chart-grid">
+        <BarChart
+          title="Kanalen"
+          hint="Gemiddelde interacties per post. Klik een kanaal voor die posts."
+          rows={channels.map((label) => ({
+            label,
+            value: averageOf(inPeriod.filter((post) => postPlatform(post) === label)),
+          }))}
+          onPick={openChannel}
+        />
+        <BarChart
+          title="Soorten posts"
+          hint="Gemiddelde interacties per post."
+          rows={kinds.map((label) => ({
+            label,
+            value: averageOf(inPeriod.filter((post) => postKind(post) === label)),
+          }))}
+          onPick={openKind}
+        />
+      </div>
+      <section className="card stack">
+        <h3>Best presterende posts</h3>
+        <p className="hint">Gesorteerd op interacties in deze periode.</p>
+        {best.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Post</th>
+                  <th>Kanaal</th>
+                  <th>Interacties</th>
+                  <th>Bereik</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {best.map((post) => (
+                  <tr key={post.id}>
+                    <td className="cell-clip">{post.caption || post.cells?.Tekst || post.permalink || "—"}</td>
+                    <td>{postPlatform(post) || "–"}</td>
+                    <td>{formatCount(postInteractions(post))}</td>
+                    <td>{formatCount(numericMetric(post, "reach"))}</td>
+                    <td>
+                      <button className="secondary" type="button" onClick={() => onOpenPost?.(post.id)}>
+                        Bekijk post
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="hint">Geen posts met interacties in deze periode.</p>
+        )}
+      </section>
     </div>
   );
 }

@@ -126,13 +126,13 @@ export default function ClientPromptsPanel({
                 ? "Opslaan mislukt"
                 : canEdit
                   ? "Wijzigingen worden automatisch bewaard"
-                  : "Alleen lezen"}
+                  : "Wijzigingen worden automatisch bewaard"}
         </span>
       </div>
       <p className="banner">
         Deze prompts gelden voor <strong>{client.name}</strong>. Wissel links van klant om prompts
         van een andere klant te zien. Algemene AI-prompts (voor alle klanten) staan bij{" "}
-        <strong>Technisch beheer → Prompts</strong> (alleen beheerder).
+        <strong>Technisch beheer → Prompts</strong>.
       </p>
       <p className="hint">
         Zelfde velden en opslag als bij <strong>Klant inrichten → Klantprompts</strong>.

@@ -51,9 +51,9 @@ export default function TechAdminPage({
   return (
     <div className="stack">
       <p className="banner">
-        <strong>Technisch beheer</strong> — alleen voor beheerders. Hier staan API-status,
-        technische koppelingen, prompts, planning, back-up en diagnose. Editors (Jet/Mo) werken via{" "}
-        <strong>Instellingen</strong> en <strong>Klant inrichten</strong>.
+        <strong>Technisch beheer</strong> staat apart van de dagelijkse schermen. Hier staan
+        API-instellingen, planning, back-ups en diagnose. Klantgegevens blijven in{" "}
+        <strong>Klant inrichten</strong>.
       </p>
       <p className="hint">
         Facebook en Instagram koppelen blijft in <strong>Klant inrichten</strong>

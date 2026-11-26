@@ -310,6 +310,11 @@ def prepare_post_analysis(
         "Antwoord uitsluitend als JSON met keys: insight, action, rating, notes.\n\n"
         + json.dumps(post_snapshot, ensure_ascii=False)
     )
+    instruction = str(
+        (post_snapshot.get("strategy_summary") or {}).get("feedback_post_instruction") or ""
+    ).strip()
+    if instruction:
+        user_text = f"Klantinstructie voor feedback op posts:\n{instruction}\n\n" + user_text
 
     # Cost estimate only — not an execute. Claude text rates are a ballpark.
     image_n = len(media_prep.get("images_for_model") or [])

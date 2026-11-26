@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.js";
 import NextStepBanner from "./components/NextStepBanner.jsx";
+import StartPage from "./pages/StartPage.jsx";
 import { subscribeMetaOauth } from "./oauthBridge.js";
 import ClientsPage from "./pages/ClientsPage.jsx";
 import ClientSetupPage from "./pages/ClientSetupPage.jsx";
@@ -16,7 +17,7 @@ const APP_NAME = "HAMSTER";
 /** Daily work for Jet/Mo after choosing a client (Maaike point 5). */
 const DAILY_NAV = [
   ["start", "Start"],
-  ["social_posts", "Berichten"],
+  ["social_posts", "Posts"],
   ["results", "Resultaten"],
   ["comparison", "Concurrenten"],
   ["reports_analysis", "Rapporten"],
@@ -27,7 +28,7 @@ const TITLES = {
   strategy: "Doelen en strategie",
   reports_analysis: "Rapporten",
   comparison: "Concurrenten",
-  social_posts: "Socialmediaberichten",
+  social_posts: "Posts",
   results: "Resultaten",
   settings: "Instellingen",
   tech_admin: "Technisch beheer",
@@ -42,27 +43,16 @@ const SETTINGS_TABS = new Set(["home", "legend", "prompts", "ai", "planning", "b
 const TECH_TABS = new Set(["status", "prompts", "planning", "backup", "trial"]);
 const SOCIAL_TABS = new Set(["all_posts", "performance"]);
 
-function navPagesForRole(role) {
-  if (role === "viewer" || role === "guest") return [...DAILY_NAV];
-  if (role === "editor") {
-    return [
-      ["client_settings", "Klanten"],
-      ["client_setup", "Klant inrichten"],
-      ["comparison", "Concurrenten"],
-    ];
-  }
-  return [
-    ["tech_admin", "Technisch beheer"],
-    ["client_settings", "Klanten"],
-    ...DAILY_NAV.filter(([id]) => id !== "start"),
-  ];
-}
-
-function roleLabel(session) {
-  const role = session?.role;
-  if (!role) return "Rol laden…";
-  return session?.labels?.[role] || role;
-}
+const NAV = [
+  ["start", "Start"],
+  ["social_posts", "Posts"],
+  ["results", "Resultaten"],
+  ["comparison", "Concurrenten"],
+  ["reports_analysis", "Rapporten"],
+  ["client_setup", "Klant inrichten"],
+  ["client_settings", "Klanten"],
+  ["tech_admin", "Technisch beheer"],
+];
 
 // Capture deep-link query once at module load so React StrictMode remounts still
 // see ?page=/client=/post= after the first effect clears the address bar.
@@ -254,10 +244,26 @@ export default function App() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [theme, setTheme] = useState(() => {
+    try {
+      return window.localStorage.getItem("hamster-theme") === "light" ? "light" : "dark";
+    } catch {
+      return "dark";
+    }
+  });
+  useEffect(() => {
+    document.body.classList.toggle("theme-light", theme === "light");
+    try {
+      window.localStorage.setItem("hamster-theme", theme);
+    } catch {
+      /* theme stays for this visit */
+    }
+  }, [theme]);
   const [metaChoice, setMetaChoice] = useState(false);
   const [metaError, setMetaError] = useState("");
   const [popupReturn, setPopupReturn] = useState(false);
   const [focusPostId, setFocusPostId] = useState(null);
+  const [postDrill, setPostDrill] = useState(null);
   const [setupIsNew, setSetupIsNew] = useState(false);
   const [totals, setTotals] = useState(null);
   const [syncing, setSyncing] = useState(false);
@@ -279,11 +285,9 @@ export default function App() {
   const selected = clients.find((item) => item.id === clientId) || null;
   // Until /api/session returns, treat as least privilege (no write affordances).
   const role = session?.role || "viewer";
-  const canEdit = Boolean(session?.can_edit_clients);
-  const canTechAdmin = Boolean(session?.can_tech_admin);
-  const isAdmin = role === "admin";
-  const isEditor = role === "editor" || isAdmin;
-  const navPages = session ? navPagesForRole(role) : [...DAILY_NAV];
+  const canEdit = true;
+  const canTechAdmin = true;
+  const navPages = NAV;
 
   const loadTotals = useCallback(async (id) => {
     if (!id) {
@@ -387,28 +391,11 @@ export default function App() {
   }, [loadClients, loadSession]);
 
   useEffect(() => {
-    if (!session) return;
-    if (page === "tech_admin" && session.role !== "admin") {
-      setPage(session.role === "editor" ? "settings" : "social_posts");
-      setSettingsTab("home");
-      setNotice(
-        session.role === "editor"
-          ? "Technisch beheer is alleen voor beheerders. Je bent doorgestuurd naar Instellingen."
-          : "Technisch beheer is alleen voor beheerders.",
-      );
-    }
-    if ((page === "settings" || page === "client_setup") && session.role === "viewer") {
-      setPage("social_posts");
-    }
-    // Point 4: editors set up goals/strategy/competitors/client prompts in Klant inrichten.
-    if (page === "strategy" && session.role === "editor") {
+    if (page === "strategy") {
       setSetupIsNew(false);
       setPage("client_setup");
-      setNotice(
-        "Doelen, strategie, concurrenten en klantprompts regel je in Klant inrichten.",
-      );
     }
-  }, [session, page]);
+  }, [page]);
 
   useEffect(() => {
     if (popupReturn) return undefined;
@@ -612,24 +599,6 @@ export default function App() {
       </button>
       <aside className={menuOpen ? "sidebar is-open" : "sidebar"}>
         <h2 className="app-brand">{APP_NAME}</h2>
-        <div
-          className="role-badge"
-          role="status"
-          aria-live="polite"
-          title={session?.note_nl || ""}
-        >
-          <span className="role-badge-label">Actieve rol</span>
-          <strong className="role-badge-value">{roleLabel(session)}</strong>
-          {session?.username ? (
-            <span className="role-badge-user">{session.username}</span>
-          ) : null}
-          {session && role === "viewer" ? (
-            <span className="role-badge-user">
-              Geen Instellingen/Prompts — log in als editor om klantprompts te bewerken.
-            </span>
-          ) : null}
-        </div>
-
         <div className="client-picker">
           <div className="client-picker-row">
             {clients.length ? (
@@ -705,9 +674,6 @@ export default function App() {
               </div>
             </div>
             {lastSyncMessage ? <p className="hint">{lastSyncMessage}</p> : null}
-            <p className="hint">
-              Ophalen of koppelen regel je via de vervolgstap bovenaan het dagelijkse scherm.
-            </p>
           </div>
         ) : null}
 
@@ -731,6 +697,22 @@ export default function App() {
             );
           })}
         </nav>
+        <div className="theme-switch" role="group" aria-label="Thema">
+          <button
+            type="button"
+            className={theme === "light" ? "is-on" : ""}
+            onClick={() => setTheme("light")}
+          >
+            Licht
+          </button>
+          <button
+            type="button"
+            className={theme === "dark" ? "is-on" : ""}
+            onClick={() => setTheme("dark")}
+          >
+            Donker
+          </button>
+        </div>
       </aside>
 
       <main className="main">
@@ -738,40 +720,11 @@ export default function App() {
           <h1 className="rro-page-title">
             {selected ? `${selected.name} · ${pageTitle}` : pageTitle}
           </h1>
-          <div className="rro-mobile-sync-hint">
-            Gebruik het menu links om van klant te wisselen of berichten op te halen — tik op{" "}
-            <strong>Menu</strong> op kleinere schermen.
-          </div>
-          {notice ? <p className="banner">{notice}</p> : null}
-          {error ? <p className="banner error">{error}</p> : null}
-
-          {selected && DAILY_PAGES.has(page) ? (
-            <NextStepBanner
-              key={`next-${selected.id}`}
-              client={selected}
-              role={role}
-              channelStatus={
-                (pageChannelStatus &&
-                Number(pageChannelStatus.client_id || selected.id) === Number(selected.id)
-                  ? pageChannelStatus
-                  : null) ||
-                (totals && Number(totals.client_id) === Number(selected.id)
-                  ? totals.channel_status || null
-                  : null)
-              }
-              channelLoading={totalsLoading && !pageChannelStatus}
-              channelError={totalsError || null}
-              syncing={syncing}
-              currentPage={page}
-              onOpenSetup={() => openClientSetup(selected)}
-              onFetchPosts={canEdit ? syncMeta : undefined}
-              onOpenResults={openResults}
-              onOpenPosts={() => {
-                setSocialTab("all_posts");
-                openPage("social_posts");
-              }}
-              onOpenReports={() => openPage("reports_analysis")}
-            />
+          {notice && page !== "social_posts" && page !== "comparison" ? (
+            <p className="banner">{notice}</p>
+          ) : null}
+          {error && page !== "social_posts" && page !== "comparison" ? (
+            <p className="banner error">{error}</p>
           ) : null}
 
           {page === "client_setup" && canEdit ? (
@@ -842,7 +795,7 @@ export default function App() {
             </div>
           ) : null}
 
-          {page === "strategy" && selected && isAdmin ? (
+          {page === "strategy" && selected ? (
             <StrategyPage
               key={`strategy-${selected.id}`}
               client={selected}
@@ -856,28 +809,8 @@ export default function App() {
               role={role}
               canEdit={canEdit}
               canTechAdmin={canTechAdmin}
-              onOpenStrategy={
-                canEdit
-                  ? () => {
-                      if (role === "editor") openClientSetup(selected);
-                      else if (isAdmin) {
-                        setStrategyTab("specialist");
-                        openPage("strategy");
-                      }
-                    }
-                  : undefined
-              }
-              onOpenFigmaPlanning={
-                canEdit
-                  ? () => {
-                      if (role === "editor") openClientSetup(selected);
-                      else if (isAdmin) {
-                        setStrategyTab("figma");
-                        openPage("strategy");
-                      }
-                    }
-                  : undefined
-              }
+              onOpenStrategy={() => openClientSetup(selected)}
+              onOpenFigmaPlanning={() => openClientSetup(selected)}
               onOpenSocialPosts={() => {
                 setSocialTab("all_posts");
                 openPage("social_posts");
@@ -894,11 +827,14 @@ export default function App() {
           ) : null}
           {page === "start" && selected ? (
             <section className="stack">
-              <h1 className="rro-page-title">{selected.name} · Start</h1>
-              <p className="hint">
-                Dit is je volgende taak voor <strong>{selected.name}</strong>. De rapportperiode loopt
-                van de 21e van de vorige maand tot en met de 20e van de rapportmaand.
-              </p>
+              <StartPage
+                client={selected}
+                onOpenPosts={(drill) => {
+                  setPostDrill({ ...drill, q: drill.q || "", token: Date.now() });
+                  setSocialTab("all_posts");
+                  openPage("social_posts");
+                }}
+              />
               <NextStepBanner
                 client={selected}
                 role={role}
@@ -910,14 +846,6 @@ export default function App() {
                 onOpenPosts={() => openPage("social_posts")}
                 onOpenReports={() => openPage("reports_analysis")}
               />
-              <div className="row-actions wrap">
-                <button className="primary" type="button" onClick={() => openPage("reports_analysis")}>
-                  Naar rapporten
-                </button>
-                <button className="secondary" type="button" onClick={() => openPage("social_posts")}>
-                  Berichten bekijken
-                </button>
-              </div>
             </section>
           ) : null}
           {(page === "social_posts" || page === "results") && selected ? (
@@ -950,6 +878,12 @@ export default function App() {
               }}
               periodSelection={socialPeriod}
               onPeriodChange={setSocialPeriod}
+              postDrill={postDrill}
+              onDrill={(drill) => {
+                setPostDrill({ ...drill, q: drill.q || "", token: Date.now() });
+                setSocialTab("all_posts");
+                setPage("social_posts");
+              }}
             />
           ) : null}
           {page === "comparison" && selected ? (
@@ -960,7 +894,7 @@ export default function App() {
               onOpenConnect={canEdit ? () => openClientSetup(selected) : undefined}
             />
           ) : null}
-          {page === "settings" && isEditor ? (
+          {page === "settings" ? (
             <SettingsHubPage
               client={selected}
               session={session}
@@ -976,7 +910,7 @@ export default function App() {
               }}
             />
           ) : null}
-          {page === "tech_admin" && isAdmin ? (
+          {page === "tech_admin" ? (
             <TechAdminPage
               client={selected}
               initialTab={techTab}

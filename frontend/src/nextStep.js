@@ -3,8 +3,8 @@
  * Pure helper so roles and client status stay easy to test.
  */
 
-export function canEditClient(role) {
-  return role === "admin" || role === "editor";
+export function canEditClient() {
+  return true;
 }
 
 /**
@@ -32,7 +32,7 @@ export function buildNextStep(input = {}) {
   const name = String(input.clientName || "deze klant").trim() || "deze klant";
   const channel = input.channelStatus || null;
   const strategy = input.strategy || null;
-  const editable = canEditClient(role);
+  const editable = canEditClient();
   const statusLoading = input.statusLoading !== false && !input.statusError;
   const statusError = input.statusError || null;
 
@@ -40,9 +40,9 @@ export function buildNextStep(input = {}) {
     return {
       title: `Status voor ${name} niet beschikbaar`,
       body:
-        "De stand van zaken kon niet worden opgehaald. Vernieuw de pagina of open Socialmediaberichten om te kijken wat er al staat.",
+        "De stand van zaken kon niet worden opgehaald. Vernieuw de pagina of open Posts.",
       action: "posts",
-      label: "Naar Socialmediaberichten",
+      label: "Open posts",
       tone: "warn",
     };
   }
@@ -59,9 +59,9 @@ export function buildNextStep(input = {}) {
     }
     return {
       title: `Status voor ${name} niet beschikbaar`,
-      body: "Er is geen actuele status. Open Socialmediaberichten of kies een andere klant.",
+      body: "Er is geen actuele status. Open Posts of kies een andere klant.",
       action: "posts",
-      label: "Naar Socialmediaberichten",
+      label: "Open posts",
       tone: "warn",
     };
   }
@@ -88,9 +88,9 @@ export function buildNextStep(input = {}) {
     }
     return {
       title: "Nog geen Meta-koppeling",
-      body: `Voor ${name} is Facebook/Instagram nog niet gekoppeld. Een editor (Jet/Mo) regelt dat via Klant inrichten. Je kunt wel bekijken wat er al staat.`,
+      body: `Voor ${name} is Facebook of Instagram nog niet gekoppeld. Dat regel je bij Klant inrichten. Je kunt wel bekijken wat er al staat.`,
       action: "posts",
-      label: "Naar Socialmediaberichten",
+      label: "Open posts",
       tone: "warn",
     };
   }
@@ -107,7 +107,7 @@ export function buildNextStep(input = {}) {
     }
     return {
       title: "Nog geen berichten",
-      body: `Voor ${name} staan nog geen berichten klaar. Vraag een editor om berichten op te halen, of bekijk Rapporten als die er al zijn.`,
+      body: `Voor ${name} staan nog geen berichten klaar. Haal de berichten op, of bekijk Rapporten als die er al zijn.`,
       action: "reports",
       label: "Naar Rapporten",
       tone: "info",
@@ -153,14 +153,14 @@ export function buildNextStep(input = {}) {
       title: channel.headline || "Je berichten zijn klaar om te bekijken",
       body: `Er staan berichten van ${name} klaar om te bekijken.`,
       action: "posts",
-      label: "Naar Socialmediaberichten",
+      label: "Open posts",
       tone: "ok",
     };
   }
 
   return {
     title: "Klaar voor dagelijks werk",
-    body: `Kies voor ${name} een onderdeel: Socialmediaberichten, Resultaten of Rapporten.`,
+    body: `Kies voor ${name} Posts, Resultaten of Rapporten.`,
     action: "results",
     label: "Naar Resultaten",
     tone: "ok",

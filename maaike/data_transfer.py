@@ -535,9 +535,14 @@ def preview_import(conn, data: dict[str, Any]) -> dict[str, Any]:
         },
         "overwrite_required_for_updates": True,
         "note": (
-            "Zonder overwrite=true worden bestaande klanten/formats/posts niet overschreven; "
-            "alleen ontbrekende records worden toegevoegd. Relaties lopen via klantnaam en "
-            "(platform, external_id)."
+            "Zonder overschrijven blijven bestaande klanten en posts staan. "
+            "Alleen wat nog ontbreekt wordt toegevoegd. "
+            + (
+                "Dit bestand bevat een klantnaam die hier nog niet staat. Importeren maakt dan een extra klant. "
+                "Gebruik dezelfde naam als de bestaande klant als je geen tweede klant wilt."
+                if sum(1 for a in actions["add"] if a["kind"] == "client")
+                else ""
+            )
         ),
     }
 

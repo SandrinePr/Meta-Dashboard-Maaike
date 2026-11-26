@@ -152,33 +152,21 @@ def resolve_identity(request: Request) -> AuthIdentity | Response:
         identity = match_account(parsed[0], parsed[1], accounts)
         if identity is not None:
             return identity
-    return open_user
+    return AuthIdentity(
+        username="open",
+        role="viewer",
+        auth_enabled=True,
+        role_enforced=True,
+    )
 
 
 def path_requires_admin(path: str) -> bool:
-    cleaned = path.rstrip("/") or "/"
-    if cleaned in _ADMIN_API_EXACT:
-        return True
-    for prefix in _ADMIN_API_PREFIXES:
-        if cleaned == prefix.rstrip("/") or cleaned.startswith(prefix):
-            return True
-    # AI trial + Claude analyse tooling
-    if "/ai-trial" in cleaned:
-        return True
-    if cleaned.endswith("/claude-analyze") or "/analysis/execute" in cleaned or "/analysis/mock" in cleaned:
-        return True
+    """Kept for callers. Feature access is no longer split by role."""
     return False
 
 
 def path_requires_editor_or_admin(path: str, method: str) -> bool:
-    """Mutations that viewers must not perform."""
-    method = method.upper()
-    if method in {"GET", "HEAD", "OPTIONS"}:
-        return False
-    cleaned = path.rstrip("/") or "/"
-    if cleaned.startswith("/api/"):
-        # Viewers may not mutate anything under /api except public cron (already open).
-        return True
+    """Kept for callers. Mutations are available to everyone inside the app."""
     return False
 
 
@@ -195,23 +183,13 @@ def identity_from_request(request: Request) -> AuthIdentity:
 
 
 def require_admin(request: Request) -> AuthIdentity:
-    identity = identity_from_request(request)
-    if identity.role != "admin":
-        raise HTTPException(
-            status_code=403,
-            detail="Dit scherm of deze actie is alleen voor technisch beheer. Vraag een beheerder om hulp.",
-        )
-    return identity
+    """App access is already resolved. Technisch beheer is not a separate role."""
+    return identity_from_request(request)
 
 
 def require_editor_or_admin(request: Request) -> AuthIdentity:
-    identity = identity_from_request(request)
-    if identity.role not in {"admin", "editor"}:
-        raise HTTPException(
-            status_code=403,
-            detail="Je hebt geen rechten voor deze actie. Vraag een editor of beheerder.",
-        )
-    return identity
+    """App access is already resolved. Editing is not a separate role."""
+    return identity_from_request(request)
 
 
 def session_payload(identity: AuthIdentity) -> dict:
@@ -219,24 +197,16 @@ def session_payload(identity: AuthIdentity) -> dict:
         "username": identity.username or None,
         "role": identity.role,
         "auth_enabled": identity.auth_enabled,
-        "role_enforced": identity.role_enforced,
-        "can_tech_admin": identity.role == "admin",
-        "can_edit_clients": identity.role in {"admin", "editor"},
-        "can_delete_clients": identity.role == "admin",
-        "login_required": identity.role == "guest",
+        "role_enforced": False,
+        "can_tech_admin": True,
+        "can_edit_clients": True,
+        "can_delete_clients": True,
+        "login_required": False,
         "labels": {
-            "admin": "Technisch beheer",
-            "editor": "Editor (Jet/Mo)",
-            "viewer": "Gewone gebruiker",
-            "guest": "Niet ingelogd",
+            "admin": "HAMSTER",
+            "editor": "HAMSTER",
+            "viewer": "HAMSTER",
+            "guest": "HAMSTER",
         },
-        "note_nl": (
-            "Rollen worden afgedwongen via HTTP Basic Auth (beheerder / editor / viewer)."
-            if identity.role_enforced
-            else (
-                "Let op: er is geen Basic Auth-wachtwoord gezet. Iedereen op dit netwerk heeft "
-                f"nu de standaardrol “{identity.role}” (MAAIKE_DEFAULT_ROLE). Zet "
-                "MAAIKE_BASIC_AUTH_PASSWORD (en optioneel MAAIKE_EDITOR_AUTH_PASSWORD) voor echte rolcontrole."
-            )
-        ),
+        "note_nl": "Iedereen in HAMSTER gebruikt dezelfde functies. Toegang tot de app zelf blijft apart.",
     }

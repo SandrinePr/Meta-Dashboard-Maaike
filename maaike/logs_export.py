@@ -105,7 +105,7 @@ def export_csv_bytes(posts: list[StoredPost]) -> bytes:
 def export_xlsx_bytes(posts: list[StoredPost]) -> bytes:
     wb = Workbook()
     ws = wb.active
-    ws.title = "Logs"
+    ws.title = "Post performance"
     ws.append(EXPORT_COLUMNS)
     for row in rows_for_export(posts):
         ws.append([row.get(col, "") for col in EXPORT_COLUMNS])

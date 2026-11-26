@@ -17,7 +17,7 @@ def build_next_step(
 ):
     """Python mirror of frontend/src/nextStep.js buildNextStep priority."""
     name = (client_name or "deze klant").strip() or "deze klant"
-    editable = role in {"admin", "editor"}
+    editable = True
     if not channel and status_error:
         return {"action": "posts", "tone": "warn"}
     if not channel:
@@ -55,7 +55,7 @@ def test_viewer_connect_is_read_only_cta():
         channel={"state": "connect_required"},
         strategy=None,
     )
-    assert step["action"] == "posts"
+    assert step["action"] == "setup"
 
 
 def test_editor_incomplete_strategy_leads_to_setup():

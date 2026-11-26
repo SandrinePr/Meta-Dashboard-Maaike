@@ -244,8 +244,7 @@ export default function PostAnalysisPanel({ clientId, postId, onError, onSaved }
 
       <details>
         <summary className="hint" style={{ cursor: "pointer" }}>
-          Technische AI-details (alleen voor beheer)
-        </summary>
+          Technische AI-details        </summary>
         <div className="stack" style={{ marginTop: "0.5rem", gap: "0.35rem" }}>
           <p className="hint" style={{ margin: 0 }}>
             Status koppeling: {claudeReady ? `Gereed (${claude.model || "—"})` : `Mist ${missingSetting}`} ·

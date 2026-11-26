@@ -226,7 +226,7 @@ export default function ResultCard({
             ) : null}
             {openPost ? (
               <button className="secondary" type="button" onClick={() => openPost(post.id)}>
-                Open in Alle berichten
+                Bekijk post
               </button>
             ) : null}
           </div>

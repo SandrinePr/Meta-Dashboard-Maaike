@@ -1,9 +1,11 @@
-"""Role gates for Technisch beheer (feedback points 3 & 6)."""
+"""Everyone inside HAMSTER can use the same functions.
+
+App access (Basic Auth accounts, or the open link) stays separate from feature use.
+"""
 
 from __future__ import annotations
 
 import base64
-import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -31,73 +33,48 @@ def role_client(tmp_path, monkeypatch):
         yield client
 
 
-def test_session_reports_role(role_client):
-    admin = role_client.get("/api/session", headers=_basic("admin", "admin-secret"))
-    assert admin.status_code == 200
-    body = admin.json()
-    assert body["role"] == "admin"
+def _assert_full_access(body: dict) -> None:
     assert body["can_tech_admin"] is True
-    assert body["role_enforced"] is True
-
-    editor = role_client.get("/api/session", headers=_basic("editor", "editor-secret"))
-    assert editor.status_code == 200
-    assert editor.json()["role"] == "editor"
-    assert editor.json()["can_tech_admin"] is False
-    assert editor.json()["can_edit_clients"] is True
-    assert editor.json()["can_delete_clients"] is False
-
-    viewer = role_client.get("/api/session", headers=_basic("viewer", "viewer-secret"))
-    assert viewer.status_code == 200
-    assert viewer.json()["role"] == "viewer"
-    assert viewer.json()["can_edit_clients"] is False
+    assert body["can_edit_clients"] is True
+    assert body["can_delete_clients"] is True
+    assert body["role_enforced"] is False
 
 
-def test_tech_apis_forbidden_for_editor_and_viewer(role_client):
-    for user, password in (("editor", "editor-secret"), ("viewer", "viewer-secret")):
+def test_every_account_has_the_same_functions(role_client):
+    for user, password, username in (
+        ("admin", "admin-secret", "admin"),
+        ("editor", "editor-secret", "editor"),
+        ("viewer", "viewer-secret", "viewer"),
+    ):
+        session = role_client.get("/api/session", headers=_basic(user, password))
+        assert session.status_code == 200
+        body = session.json()
+        assert body["username"] == username
+        _assert_full_access(body)
         headers = _basic(user, password)
-        assert role_client.get("/api/ai-status", headers=headers).status_code == 403
-        assert role_client.get("/api/prompt-settings", headers=headers).status_code == 403
-        assert role_client.get("/api/report-planning", headers=headers).status_code == 403
-        assert role_client.get("/api/export/package.json", headers=headers).status_code == 403
+        assert role_client.get("/api/ai-status", headers=headers).status_code == 200
+        assert role_client.get("/api/prompt-settings", headers=headers).status_code == 200
+        assert role_client.get("/api/report-planning", headers=headers).status_code == 200
+        created = role_client.post("/api/clients", headers=headers, json={"name": f"Roltest {user}"})
+        assert created.status_code == 201
+        payload = created.json()
+        client_id = payload.get("id") or payload.get("client_id") or (payload.get("client") or {}).get("id")
+        assert client_id
+        assert role_client.delete(f"/api/clients/{client_id}", headers=headers).status_code in {200, 204}
 
 
-def test_admin_can_open_tech_apis(role_client):
-    headers = _basic("admin", "admin-secret")
-    assert role_client.get("/api/ai-status", headers=headers).status_code == 200
-    assert role_client.get("/api/prompt-settings", headers=headers).status_code == 200
-
-
-def test_editor_can_list_clients_but_not_delete(role_client):
-    headers = _basic("editor", "editor-secret")
-    listed = role_client.get("/api/clients", headers=headers)
-    assert listed.status_code == 200
-    created = role_client.post("/api/clients", headers=headers, json={"name": "Roltest"})
-    assert created.status_code == 201
-    body = created.json()
-    client_id = body.get("id") or body.get("client_id") or (body.get("client") or {}).get("id")
-    assert client_id
-    deleted = role_client.delete(f"/api/clients/{client_id}", headers=headers)
-    assert deleted.status_code == 403
-
-
-def test_viewer_cannot_mutate(role_client):
-    headers = _basic("viewer", "viewer-secret")
-    assert role_client.get("/api/clients", headers=headers).status_code == 200
-    assert role_client.post("/api/clients", headers=headers, json={"name": "X"}).status_code == 403
-
-
-def test_link_opens_as_user_not_admin(role_client):
+def test_open_link_has_the_same_functions(role_client):
     session = role_client.get("/api/session")
     assert session.status_code == 200
     body = session.json()
-    assert body["role"] == "viewer"
-    assert body["can_tech_admin"] is False
-    assert body["can_edit_clients"] is False
-    assert role_client.get("/api/ai-status").status_code == 403
-    assert role_client.post("/api/clients", json={"name": "Niet toegestaan"}).status_code == 403
+    assert body["username"] == "open"
+    _assert_full_access(body)
+    assert role_client.get("/api/ai-status").status_code == 200
+    created = role_client.post("/api/clients", json={"name": "Open link"})
+    assert created.status_code == 201
 
 
-def test_open_mode_default_role_editor_blocks_tech(tmp_path, monkeypatch):
+def test_open_mode_without_passwords_keeps_full_functions(tmp_path, monkeypatch):
     db = tmp_path / "open.db"
     monkeypatch.setenv("MAAIKE_DATABASE_PATH", str(db))
     monkeypatch.setenv("MAAIKE_BASIC_AUTH_PASSWORD", "")
@@ -110,6 +87,6 @@ def test_open_mode_default_role_editor_blocks_tech(tmp_path, monkeypatch):
         session = client.get("/api/session")
         assert session.status_code == 200
         assert session.json()["role"] == "editor"
-        assert session.json()["role_enforced"] is False
-        assert client.get("/api/ai-status").status_code == 403
+        _assert_full_access(session.json())
+        assert client.get("/api/ai-status").status_code == 200
         assert client.get("/api/clients").status_code == 200

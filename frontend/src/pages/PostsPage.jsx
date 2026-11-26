@@ -1,19 +1,59 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, API_URL } from "../api.js";
+import { postIso, toIsoDate } from "../postMetrics.js";
 import PostAnalysisPanel from "../components/PostAnalysisPanel.jsx";
 import ResultCard from "../components/ResultCard.jsx";
 
 /** Normalize Publicatiedatum cells (ISO or DD-MM-YYYY) to YYYY-MM-DD for filters/sort. */
-function toIsoDate(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  const dmy = raw.match(/^(\d{1,2})-(\d{1,2})-(\d{4})/);
-  if (dmy) {
-    return `${dmy[3]}-${String(dmy[2]).padStart(2, "0")}-${String(dmy[1]).padStart(2, "0")}`;
-  }
-  return raw.slice(0, 10);
+function PostFeedback({ clientId, post, canEdit }) {
+  const [text, setText] = useState("");
+  const [canRequest, setCanRequest] = useState(false);
+  const [note, setNote] = useState("");
+  useEffect(() => {
+    if (!post) return undefined;
+    let cancelled = false;
+    setText("");
+    setCanRequest(false);
+    setNote("");
+    api(`/api/clients/${clientId}/posts/${post.id}/analysis-panel`)
+      .then((payload) => {
+        if (cancelled) return;
+        const draft = payload?.draft || {};
+        const stored = String(
+          draft.insight_text ||
+            payload?.excel_or_prior?.insight_text ||
+            post.log_insight ||
+            "",
+        ).trim();
+        setText(stored);
+        setCanRequest(Boolean(canEdit && payload?.claude?.configured));
+      })
+      .catch(() => {
+        if (!cancelled) setText(String(post?.log_insight || "").trim());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [clientId, post]);
+  if (!post) return null;
+  return (
+    <div className="card stack" style={{ marginTop: "0.75rem" }}>
+      <strong>Feedback bij deze post</strong>
+      <p style={{ margin: 0 }}>{text || "Nog geen feedback"}</p>
+      {canRequest ? (
+        <div className="row-actions wrap">
+          <button
+            className="secondary"
+            type="button"
+            onClick={() => setNote("Feedback aanvragen start geen betaalde aanroep tijdens deze lokale test.")}
+          >
+            Feedback aanvragen
+          </button>
+          {note ? <span className="hint">{note}</span> : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function dutchUnsetLabel(label) {
@@ -21,13 +61,35 @@ function dutchUnsetLabel(label) {
   return label;
 }
 
+function metricValue(post, name) {
+  const metric = post?.metrics?.[name];
+  if (metric && typeof metric === "object" && Object.prototype.hasOwnProperty.call(metric, "value")) {
+    return metric.value;
+  }
+  return post?.[name];
+}
+
+function metricText(value) {
+  if (value === 0 || value === "0") return "0";
+  if (value == null || value === "") return "—";
+  return String(value);
+}
+
 export default function PostsPage({
   client,
+  canEdit = false,
+  onFetchPosts,
+  fetchingPosts = false,
+  fetchError = "",
+  fetchNotice = "",
   focusPostId,
   focusSeq = 0,
   onClearFocus,
   initialDateFrom = "",
   initialDateTo = "",
+  initialPlatform = "",
+  initialQuery = "",
+  initialContentSoort = "",
   reloadToken = 0,
   missingFilterSignal = 0,
   onOpenConnect,
@@ -43,14 +105,12 @@ export default function PostsPage({
   const [preview, setPreview] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [importExportOpen, setImportExportOpen] = useState(false);
-  const [draftQuery, setDraftQuery] = useState("");
-  const [filtersOpen, setFiltersOpen] = useState(
-    typeof window !== "undefined" ? window.matchMedia("(min-width: 900px)").matches : true,
-  );
+  const [draftQuery, setDraftQuery] = useState(initialQuery || "");
+  const [filtersOpen] = useState(true);
   const [filters, setFilters] = useState({
-    q: "",
-    platform: "",
-    content_soort: "",
+    q: initialQuery || "",
+    platform: initialPlatform || "",
+    content_soort: initialContentSoort || "",
     format: "",
     pillar: "",
     date_from: initialDateFrom || "",
@@ -61,6 +121,7 @@ export default function PostsPage({
   const [contentMatchIds, setContentMatchIds] = useState(null);
   const [contentMatchNote, setContentMatchNote] = useState("");
   const [expandedPostId, setExpandedPostId] = useState(focusPostId ? Number(focusPostId) : null);
+  const [feedbackPostId, setFeedbackPostId] = useState(null);
 
   const reload = useCallback(
     async (guard = () => true) => {
@@ -84,13 +145,13 @@ export default function PostsPage({
     setAdminError("");
     setPreview(null);
     setImportExportOpen(false);
-    setDraftQuery("");
+    setDraftQuery(initialQuery || "");
     setContentMatchIds(null);
     setContentMatchNote("");
     setFilters({
-      q: "",
-      platform: "",
-      content_soort: "",
+      q: initialQuery || "",
+      platform: initialPlatform || "",
+      content_soort: initialContentSoort || "",
       format: "",
       pillar: "",
       date_from: initialDateFrom || "",
@@ -210,10 +271,8 @@ export default function PostsPage({
           .toLowerCase();
         if (!hay.includes(q)) return false;
       }
-      if (
-        filters.platform &&
-        !String(cells.Platform || "").toLowerCase().includes(filters.platform.toLowerCase())
-      ) {
+      const platformText = String(cells.Platform || post.platform_label || post.platform || "");
+      if (filters.platform && !platformText.toLowerCase().includes(filters.platform.toLowerCase())) {
         return false;
       }
       if (
@@ -244,7 +303,7 @@ export default function PostsPage({
       if (filters.missing === "format" && !missing.format) return false;
       if (filters.missing === "pillar" && !missing.pillar) return false;
       if (filters.missing === "hook" && !missing.hook) return false;
-      const iso = toIsoDate(cells.Publicatiedatum);
+      const iso = postIso(post) || toIsoDate(cells.Publicatiedatum);
       if (filters.date_from && iso && iso < filters.date_from) return false;
       if (filters.date_to && iso && iso > filters.date_to) return false;
       return true;
@@ -352,8 +411,7 @@ export default function PostsPage({
         {adminError ? (
           <details>
             <summary className="hint" style={{ cursor: "pointer" }}>
-              Technische foutdetails (alleen voor beheer)
-            </summary>
+              Technische foutdetails            </summary>
             <pre className="hint" style={{ whiteSpace: "pre-wrap" }}>
               {adminError}
             </pre>
@@ -369,7 +427,7 @@ export default function PostsPage({
   const unsetText = dutchUnsetLabel(overview.unset_label);
 
   return (
-    <div className="stack">
+    <div className="stack posts-page">
       {/* Uitleg bij Alle berichten voor Jet of Mo (punt 18) */}
       <section className="card stack" style={{ gap: "0.65rem" }}>
         <div
@@ -377,17 +435,14 @@ export default function PostsPage({
           style={{ justifyContent: "space-between", alignItems: "flex-start" }}
         >
           <div className="stack" style={{ gap: "0.3rem", maxWidth: "46rem" }}>
-            <h3 style={{ margin: 0 }}>Alle berichten</h3>
             <p className="hint" style={{ margin: 0 }}>
-              Hier staan de opgehaalde berichten van <strong>{client.name}</strong>.{" "}
-              <strong>Jet of Mo</strong> kan hier per bericht het contentformat, de contentpijler,
-              de hook en een Figma-link invullen, beelden toevoegen of een kort inzicht bewaren. Je
-              kunt hieronder ook zoeken, filteren of het overzicht downloaden in Excel of CSV.
+              {filteredPosts.length}
+              {filtersActive ? ` van ${totalPosts}` : ""} posts
             </p>
           </div>
           <div className="row-actions wrap">
-            <button className="secondary" type="button" onClick={() => setShowAdd(true)}>
-              Bericht handmatig toevoegen
+            <button className="primary" type="button" onClick={() => setShowAdd(true)}>
+              Post toevoegen
             </button>
             {showImportExportButton ? (
               <button
@@ -395,16 +450,24 @@ export default function PostsPage({
                 type="button"
                 onClick={() => setImportExportOpen((open) => !open)}
               >
-                Excel inlezen of downloaden
+                Excel
               </button>
             ) : null}
           </div>
         </div>
 
-        {periodHint ? <p className="hint" style={{ margin: 0 }}>{periodHint}</p> : null}
+        {onFetchPosts ? (
+          <div className="row-actions wrap" style={{ alignItems: "center" }}>
+            <button className="primary" type="button" disabled={fetchingPosts} onClick={onFetchPosts}>
+              {fetchingPosts ? "Posts ophalen…" : "Posts ophalen"}
+            </button>
+            {fetchError ? <p className="banner error" style={{ margin: 0 }}>{fetchError}</p> : null}
+            {fetchNotice ? <p className="hint" style={{ margin: 0 }}>{fetchNotice}</p> : null}
+          </div>
+        ) : null}
 
         <p style={{ margin: 0 }}>
-          <strong>Totaal eigen berichten van {client.name}:</strong> {totalPosts}
+          <strong>Totaal posts van {client.name}:</strong> {totalPosts}
           {platformAvailability.length ? (
             <>
               {" "}
@@ -506,11 +569,21 @@ export default function PostsPage({
             className="row-actions wrap"
             style={{ justifyContent: "space-between", alignItems: "center" }}
           >
-            <h3 style={{ margin: 0 }}>
-              <button type="button" className="linkish" onClick={() => setFiltersOpen((open) => !open)}>
-                {filtersOpen ? "Verberg filters" : "Toon filters"}
-              </button>
-            </h3>
+            <div className="filter-chips" aria-label="Kanaal">
+              {[
+                ["", "Alle"],
+                ...platformAvailability.map(([label]) => [label, label]),
+              ].map(([value, label]) => (
+                <button
+                  key={label}
+                  type="button"
+                  className={filters.platform.toLowerCase() === value.toLowerCase() ? "chip is-on" : "chip"}
+                  onClick={() => setFilters({ ...filters, platform: value })}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             {filtersActive ? (
               <button className="secondary" type="button" onClick={clearAllFilters}>
                 Alle filters wissen (toon alle {totalPosts} berichten)
@@ -660,8 +733,7 @@ export default function PostsPage({
           {adminError ? (
             <details>
               <summary className="hint" style={{ cursor: "pointer" }}>
-                Technische foutdetails (alleen voor beheer)
-              </summary>
+                Technische foutdetails              </summary>
               <pre className="hint" style={{ whiteSpace: "pre-wrap" }}>
                 {adminError}
               </pre>
@@ -676,12 +748,8 @@ export default function PostsPage({
         <section className="card stack" style={{ gap: "0.6rem" }}>
           {channelState === "connect_required" ? (
             <>
-              <strong>Koppel eerst je accounts voor {client.name}</strong>
-              <p style={{ margin: 0 }}>
-                Er zijn nog geen berichten om te tonen omdat Facebook en Instagram nog niet zijn
-                gekoppeld voor {client.name}. Koppel eerst de accounts via de knop bovenaan, of voeg
-                alvast handmatig een bericht of Excel-bestand toe.
-              </p>
+              <strong>Nog geen posts voor {client.name}</strong>
+              <p style={{ margin: 0 }}>Koppel eerst Facebook en Instagram, of voeg zelf een post toe.</p>
               <div className="row-actions wrap">
                 {onOpenConnect ? (
                   <button className="primary" type="button" onClick={onOpenConnect}>
@@ -689,49 +757,78 @@ export default function PostsPage({
                   </button>
                 ) : null}
                 <button className="secondary" type="button" onClick={() => setShowAdd(true)}>
-                  Bericht handmatig toevoegen
+                  Post toevoegen
                 </button>
               </div>
             </>
           ) : (
             <>
-              <strong>Haal je eerste berichten op voor {client.name}</strong>
-              <p style={{ margin: 0 }}>
-                Facebook en Instagram zijn gekoppeld, maar er zijn nog geen berichten opgehaald voor{" "}
-                {client.name}. Gebruik de knop <strong>Eerste berichten ophalen</strong> bovenaan dit
-                scherm om te beginnen.
-              </p>
+              <strong>Nog geen posts voor {client.name}</strong>
+              <p style={{ margin: 0 }}>Haal de posts op met de knop hierboven.</p>
             </>
           )}
         </section>
       ) : filteredPosts.length > 0 ? (
-        <div className="results-list logs-cards">
-          {filteredPosts.map((post) => (
-            <LogPostCard
-              key={post.id}
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Datum</th>
+                <th>Kanaal</th>
+                <th>Post</th>
+                <th>Format</th>
+                <th>Pijler</th>
+                <th>Hook</th>
+                <th>Bereik</th>
+                <th>Interacties</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredPosts.map((post) => {
+                const cells = post.cells || {};
+                const interactions = ["likes", "comments", "shares", "saves"]
+                  .map((name) => metricValue(post, name))
+                  .map((value) => (value == null || value === "" ? null : Number(value)))
+                  .filter((value) => Number.isFinite(value));
+                const caption = post.caption || cells.Tekst || post.permalink || "—";
+                return (
+                  <tr key={post.id}>
+                    <td>{post.published_label || cells.Publicatiedatum || "—"}</td>
+                    <td>{post.platform_label || cells.Platform || post.platform || "—"}</td>
+                    <td className="cell-clip">{caption}</td>
+                    <td>{cells.Contentformat && cells.Contentformat !== "not set" ? cells.Contentformat : "—"}</td>
+                    <td>{cells.Contentpijler && cells.Contentpijler !== "not set" ? cells.Contentpijler : "—"}</td>
+                    <td>{post.hook || cells.Hook || "—"}</td>
+                    <td>{metricText(metricValue(post, "reach"))}</td>
+                    <td>{interactions.length ? interactions.reduce((sum, value) => sum + value, 0) : "—"}</td>
+                    <td>
+                      <button
+                        className="linkish"
+                        type="button"
+                        onClick={() => setFeedbackPostId((current) => (current === post.id ? null : post.id))}
+                      >
+                        Bekijk feedback
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {feedbackPostId ? (
+            <PostFeedback
               clientId={client.id}
-              post={post}
-              query={filters.q}
-              formats={overview.formats}
-              pillars={overview.pillars}
-              hooks={overview.hooks || []}
-              unsetLabel={unsetText}
-              focused={Number(focusPostId) === Number(post.id) || Number(expandedPostId) === Number(post.id)}
-              onSaved={async () => {
-                await reload();
-                await onPostsChanged?.();
-                setNotice("Wijzigingen bij dit bericht zijn opgeslagen.");
-              }}
-              onError={(msg) => setError(msg == null ? "" : msg)}
+              post={filteredPosts.find((post) => post.id === feedbackPostId)}
+              canEdit={canEdit}
             />
-          ))}
+          ) : null}
         </div>
       ) : (
         <section className="card stack" style={{ gap: "0.6rem" }}>
-          <strong>Geen berichten binnen deze filters</strong>
+          <strong>Geen posts bij deze zoekopdracht</strong>
           <p style={{ margin: 0 }}>
-            Er staan wel {totalPosts} berichten voor {client.name}, maar geen enkel bericht valt
-            binnen de gekozen datum of zoekopdracht.
+            Er zijn {totalPosts} posts. Wis de filters om ze weer te zien.
           </p>
           <div>
             <button className="primary" type="button" onClick={clearAllFilters}>
@@ -744,8 +841,7 @@ export default function PostsPage({
       {/* Technische en beheeropties alleen open te klappen voor beheer (punt 17) */}
       <details className="card">
         <summary style={{ cursor: "pointer", fontWeight: 600 }}>
-          Beheer &amp; technische controle (alleen voor beheer)
-        </summary>
+          Beheer &amp; technische controle        </summary>
         <div className="stack" style={{ marginTop: "0.85rem" }}>
           <RatingSettingsPanel
             client={client}

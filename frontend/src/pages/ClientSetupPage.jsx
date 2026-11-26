@@ -66,6 +66,12 @@ function mergeAnswersPreferLocal(serverAnswers, localAnswers) {
   return merged;
 }
 
+function fillHint(label) {
+  const text = String(label || "dit veld").trim();
+  const lower = text.charAt(0).toLowerCase() + text.slice(1);
+  return lower.startsWith("de ") ? `Vul ${lower} in` : `Vul de ${lower} in`;
+}
+
 function dutchSaveError(exc) {
   const raw = String(exc?.message || exc || "").trim();
   if (!raw) return "Opslaan lukte niet";
@@ -787,23 +793,32 @@ export default function ClientSetupPage({
       await loadClients();
       chooseClient(created.id);
       setStep(2);
-      if (created?.persist && created.persist.durable !== true) {
-        dirtyRef.current = true;
-        persistClientDraft(created.id);
-        setSaveStatus("error");
-        const msg =
-          created.persist.error ||
-          "Klant staat lokaal, maar externe opslag bevestigde niet. Probeer opnieuw op te slaan.";
-        setLocalError(msg);
-        onError(msg);
+      setSaveStatus("saved");
+      const notice = created.already_exists
+        ? `“${created.name}” stond er al. Je gaat verder met die klant.`
+        : `“${created.name}” is aangemaakt.`;
+      setLocalNotice(notice);
+      onNotice(notice);
+    } catch (exc) {
+      const existing = await loadClients().catch(() => []);
+      const trimmed = String(nameDraftRef.current || name || "").trim();
+      const match = (existing || []).find(
+        (item) => String(item.name || "").trim().toLowerCase() === trimmed.toLowerCase(),
+      );
+      if (match) {
+        setClientId(match.id);
+        chooseClient(match.id);
+        setStep(2);
+        setSaveStatus("saved");
+        const notice = `“${match.name}” is aangemaakt. Je gaat verder met die klant.`;
+        setLocalNotice(notice);
+        onNotice(notice);
+        setLocalError("");
+        onError("");
         return;
       }
-      setSaveStatus("saved");
-      setLocalNotice(`Klant “${created.name}” is aangemaakt. Gegevens worden automatisch bewaard.`);
-      onNotice(`Klant “${created.name}” is aangemaakt.`);
-    } catch (exc) {
-      setLocalError(dutchSaveError(exc));
-      onError(dutchSaveError(exc));
+      setLocalError("De klant kon niet worden aangemaakt. Probeer het nog eens.");
+      onError("De klant kon niet worden aangemaakt. Probeer het nog eens.");
     } finally {
       setBusy("");
     }
@@ -1341,13 +1356,7 @@ export default function ClientSetupPage({
       {step === 1 ? (
         <section className="card stack">
           <h3>1. Klantnaam</h3>
-          <p className="hint">
-            <strong>Jij doet:</strong> vul de officiële klantnaam in.
-            <br />
-            <strong>HAMSTER doet:</strong> bewaart de naam automatisch zodra je stopt met typen.
-            <br />
-            <strong>Nog nodig:</strong> een unieke naam.
-          </p>
+          <p className="hint">Vul de klantnaam in. De naam wordt bewaard zodra je stopt met typen.</p>
           <StatusPill kind={nameOk ? "ready" : "todo"} label={nameOk ? "Klaar" : "Nog invullen"} />
           <form className="form-grid" onSubmit={createClient}>
             <label>
@@ -1369,6 +1378,9 @@ export default function ClientSetupPage({
                 autoComplete="organization"
                 placeholder="Bijvoorbeeld BBQube"
               />
+              {!name.trim() ? (
+                <span className="hint">Vul een klantnaam in om verder te gaan.</span>
+              ) : null}
             </label>
             {!activeId ? (
               <button className="primary" type="submit" disabled={busy === "name" || !name.trim()}>
@@ -1459,16 +1471,16 @@ export default function ClientSetupPage({
             </p>
             <nav className="row-actions wrap" aria-label="Onderdelen inrichting">
               <a className="secondary" href="#setup-client-prompts" style={{ textDecoration: "none" }}>
-                Klantprompts
+                AI-instructies
+              </a>
+              <a className="secondary" href="#setup-planning" style={{ textDecoration: "none" }}>
+                Planning & ontwerpen
               </a>
               <a className="secondary" href="#setup-strategy" style={{ textDecoration: "none" }}>
                 Strategie
               </a>
               <a className="secondary" href="#setup-targets" style={{ textDecoration: "none" }}>
                 Doelen
-              </a>
-              <a className="secondary" href="#setup-links" style={{ textDecoration: "none" }}>
-                Links
               </a>
               <a className="secondary" href="#setup-competitors" style={{ textDecoration: "none" }}>
                 Concurrenten
@@ -1479,7 +1491,7 @@ export default function ClientSetupPage({
           <section className="card stack" id="setup-client-prompts">
             <div className="setup-block-head">
               <h4>
-                Klantprompts{" "}
+                AI-instructies{" "}
                 <span className="badge badge-active">
                   Alleen {name || client?.name || "deze klant"}
                 </span>
@@ -1502,9 +1514,21 @@ export default function ClientSetupPage({
               />
             </div>
             <p className="hint">
-              Tone of voice en kernbeschrijvingen die HAMSTER meeneemt als context bij AI voor
-              deze klant. Dit is geen systeemprompt — die blijven centraal bij Technisch beheer.
+              Deze instructies gelden alleen voor deze klant en worden meegenomen bij feedback op posts.
+              Technische API-sleutels blijven bij Technisch beheer.
             </p>
+            <label>
+              Instructie voor feedback op posts <span className="muted">optioneel</span>
+              <textarea
+                rows={3}
+                value={answers.feedback_post_instruction || ""}
+                onChange={(e) => setAnswer("feedback_post_instruction", e.target.value)}
+                onBlur={() => {
+                  flushAutosave().catch(() => {});
+                }}
+                placeholder="Bijvoorbeeld: beoordeel de openingszin en geef één concrete verbetering."
+              />
+            </label>
             {questions
               .filter((question) => CLIENT_PROMPT_KEYS.has(question.key))
               .map((question) => {
@@ -1518,7 +1542,7 @@ export default function ClientSetupPage({
                     ) : (
                       <span className="muted">optioneel</span>
                     )}
-                    {open ? <span className="setup-inline-todo"> · Nog invullen</span> : null}
+                    {open ? <span className="setup-inline-todo"> · {fillHint(question.label)}</span> : null}
                     <textarea
                       rows={3}
                       value={answers[question.key] || ""}
@@ -1622,7 +1646,7 @@ export default function ClientSetupPage({
                     ) : (
                       <span className="muted">optioneel</span>
                     )}
-                    {open ? <span className="setup-inline-todo"> · Nog invullen</span> : null}
+                    {open ? <span className="setup-inline-todo"> · {fillHint(question.label)}</span> : null}
                     <textarea
                       rows={3}
                       value={answers[question.key] || ""}
@@ -1698,9 +1722,10 @@ export default function ClientSetupPage({
             </button>
           </section>
 
-          <section className="card stack" id="setup-links">
+          <section className="card stack" id="setup-planning">
+            <h4>Planning & ontwerpen</h4>
             <div className="setup-block-head">
-              <h4>Canva-link</h4>
+              <h4>{canvaFilled ? "Canva-link" : "Canva-link toevoegen"}</h4>
               <StatusPill
                 kind={canvaFilled ? "ready" : "optional"}
                 label={canvaFilled ? "Klaar" : "Optioneel"}
@@ -1897,7 +1922,7 @@ export default function ClientSetupPage({
 
           <section className="card stack">
             <div className="setup-block-head">
-              <h4>Figma-link</h4>
+              <h4>{figmaFilled ? "Figma-link" : "Figma-link toevoegen"}</h4>
               <StatusPill
                 kind={figmaFilled ? "ready" : "optional"}
                 label={figmaFilled ? "Klaar" : "Optioneel"}

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
+import { BarChart } from "../components/SimpleCharts.jsx";
 
 const META_MISSING_STEP =
   "Koppel eerst het Facebook- en Instagram-account van deze klant om berichten van concurrenten op te halen.";
@@ -368,14 +369,18 @@ export default function ComparisonPage({ client, onOpenConnect, canEdit = true }
           >
             <div className="stack" style={{ gap: "0.25rem", maxWidth: "44rem" }}>
               <strong style={{ fontSize: "1.05rem", color: "#fde68a" }}>
-                Accountkoppeling nodig voor {client.name}
+                {state.meta_connection?.reason === "permission"
+                  ? "Toestemming ontbreekt"
+                  : `Account nog niet gekoppeld voor ${client.name}`}
               </strong>
               <p style={{ margin: 0 }}>
                 {state.meta_connection?.missing_message || META_MISSING_STEP}
               </p>
+              {state.meta_connection?.reason === "permission" ? null : (
               <span className="hint" style={{ margin: 0 }}>
-                Je kunt hieronder alvast concurrenten op de lijst zetten. Zodra Facebook en Instagram gekoppeld zijn, kun je hun berichten direct ophalen.
+                Je kunt alvast een concurrent op de lijst zetten.
               </span>
+              )}
             </div>
             {onOpenConnect ? (
               <button className="primary" type="button" onClick={() => onOpenConnect()}>
@@ -402,13 +407,8 @@ export default function ComparisonPage({ client, onOpenConnect, canEdit = true }
         >
           <div className="stack" style={{ gap: "0.3rem", maxWidth: "44rem" }}>
             <strong style={{ fontSize: "1.1rem" }}>Concurrenten van {client.name}</strong>
-            <p style={{ margin: 0 }}>
-              {state.refresh?.explanation ||
-                "Haalt de nieuwste openbare Instagram-berichten, likes en reacties van je ingestelde concurrenten op."}
-            </p>
+            {metaConnected ? (
             <span className="hint" style={{ margin: 0 }}>
-              {metaConnected ? (
-                <>
                   Gekoppeld account:{" "}
                   <strong>
                     {state.meta_connection?.facebook_page_name || client.name}
@@ -417,11 +417,8 @@ export default function ComparisonPage({ client, onOpenConnect, canEdit = true }
                       : ""}
                   </strong>
                   {state.period_label ? ` · Vergelijkingsperiode: ${state.period_label}` : ""}
-                </>
-              ) : (
-                "Berichten ophalen wordt beschikbaar zodra Facebook en Instagram voor deze klant zijn gekoppeld."
-              )}
             </span>
+            ) : null}
           </div>
 
           {canEdit ? (
@@ -432,11 +429,11 @@ export default function ComparisonPage({ client, onOpenConnect, canEdit = true }
             onClick={fetchAllCompetitors}
           >
             {isFetchingAny
-              ? "Berichten van concurrenten ophalen…"
-              : "Berichten van concurrenten ophalen"}
+              ? "Posts ophalen…"
+              : "Posts ophalen"}
           </button>
           ) : (
-            <p className="hint">Berichten van concurrenten ophalen doet een editor. Jij kunt de lijst bekijken.</p>
+            <p className="hint">Posts ophalen is nu niet beschikbaar.</p>
           )}
         </div>
 
@@ -495,8 +492,7 @@ export default function ComparisonPage({ client, onOpenConnect, canEdit = true }
         {adminErrorDetail ? (
           <details>
             <summary className="hint" style={{ cursor: "pointer" }}>
-              Technische foutdetails (alleen voor beheer)
-            </summary>
+              Technische foutdetails            </summary>
             <pre
               className="hint"
               style={{
@@ -522,11 +518,8 @@ export default function ComparisonPage({ client, onOpenConnect, canEdit = true }
         >
           <div>
             <h3 style={{ margin: 0 }}>
-              Ingestelde concurrenten ({state.competitors.length} van maximaal 10)
+              Concurrenten ({state.competitors.length} van 10)
             </h3>
-            <p className="hint" style={{ margin: "0.2rem 0 0" }}>
-              Hier zie je voor <strong>{client.name}</strong> per concurrent of er al berichten klaarstaan, wanneer het ophalen voor het laatst is gelukt en of er nog actie nodig is.
-            </p>
           </div>
           {canEdit && !adding ? (
             <button
@@ -666,8 +659,7 @@ export default function ComparisonPage({ client, onOpenConnect, canEdit = true }
                     {row.admin_error_detail ? (
                       <details>
                         <summary className="hint" style={{ cursor: "pointer" }}>
-                          Technische foutdetails voor @{name} (alleen voor beheer)
-                        </summary>
+                          Technische foutdetails voor @{name}                        </summary>
                         <pre
                           className="hint"
                           style={{
@@ -745,98 +737,25 @@ export default function ComparisonPage({ client, onOpenConnect, canEdit = true }
                   : "Nog geen vaste dag ingesteld"}
               </span>
             </div>
-            <p className="hint" style={{ margin: 0 }}>
-              Zo weet Jet of Mo precies wanneer de concurrentencheck voor <strong>{client.name}</strong> gepland staat, wat automatisch op de achtergrond gebeurt en wat je zelf nakijkt.
-            </p>
+            {weeklyPlan.enabled ? (
+              <p className="hint" style={{ margin: 0 }}>
+                Volgend ophaalmoment: elke {weeklyPlan.weekday_label || "maandag"} om {weeklyPlan.time || "09:00"}.
+              </p>
+            ) : null}
           </div>
 
+          {canEdit ? (
           <button
             className="secondary"
             type="button"
             onClick={() => setWeeklyOpen((open) => !open)}
           >
-            {weeklyOpen ? "Planning sluiten" : "Planning & verantwoordelijke"}
+            {weeklyOpen ? "Planning sluiten" : "Planning instellen"}
           </button>
+          ) : null}
         </div>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-            gap: "0.75rem",
-          }}
-        >
-          <div
-            className="stack"
-            style={{
-              padding: "0.8rem",
-              borderRadius: "8px",
-              background: "rgba(255, 255, 255, 0.03)",
-              border: "1px solid rgba(255, 255, 255, 0.12)",
-              gap: "0.35rem",
-            }}
-          >
-            <strong>1. Wanneer staat dit gepland?</strong>
-            <p style={{ margin: 0, fontSize: "0.92rem" }}>
-              {weeklyPlan.schedule_summary ||
-                "Nog geen vast controlemoment ingepland. Stel een vaste dag en tijd in via ‘Planning & verantwoordelijke’."}
-            </p>
-            {weeklyPlan.note ? (
-              <p className="hint" style={{ margin: 0 }}>
-                Werkafspraak: <strong>{weeklyPlan.note}</strong>
-              </p>
-            ) : null}
-          </div>
-
-          <div
-            className="stack"
-            style={{
-              padding: "0.8rem",
-              borderRadius: "8px",
-              background: "rgba(255, 255, 255, 0.03)",
-              border: "1px solid rgba(255, 255, 255, 0.12)",
-              gap: "0.35rem",
-            }}
-          >
-            <strong>2. Automatisch of handmatig?</strong>
-            <p style={{ margin: 0, fontSize: "0.92rem" }}>
-              <strong>Ophalen (automatisch):</strong>{" "}
-              {weeklyPlan.background_fetch_summary ||
-                "Buiten werktijd (ma–vr na 18:00 en in het weekend) werkt HAMSTER elk uur automatisch één concurrent bij."}
-            </p>
-            <p className="hint" style={{ margin: 0 }}>
-              <strong>De controle zelf (handmatig):</strong>{" "}
-              {weeklyPlan.manual_check_summary ||
-                "Het bekijken en vergelijken van de cijfers doe je zelf op het geplande moment."}
-            </p>
-          </div>
-
-          <div
-            className="stack"
-            style={{
-              padding: "0.8rem",
-              borderRadius: "8px",
-              background: "rgba(255, 255, 255, 0.03)",
-              border: "1px solid rgba(255, 255, 255, 0.12)",
-              gap: "0.35rem",
-            }}
-          >
-            <strong>3. Wat doe je zelf?</strong>
-            <ol style={{ margin: 0, paddingLeft: "1.2rem", fontSize: "0.9rem" }}>
-              {(weeklyPlan.user_steps || [
-                "Controleer of bij elke concurrent recente berichten klaarstaan.",
-                "Klik zo nodig op ‘Berichten van concurrenten ophalen’.",
-                "Vergelijk hieronder bij Prestaties en Contentmix wat opvalt.",
-              ]).map((step) => (
-                <li key={step} style={{ marginBottom: "0.2rem" }}>
-                  {step}
-                </li>
-              ))}
-            </ol>
-          </div>
-        </div>
-
-        {weeklyOpen ? (
+        {canEdit && weeklyOpen ? (
           <WeeklyPlanEditor
             plan={weeklyPlan}
             busy={busy === "weekly"}
@@ -919,6 +838,39 @@ export default function ComparisonPage({ client, onOpenConnect, canEdit = true }
               </>
             ) : null}
           </div>
+        </div>
+
+        <div className="chart-grid">
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Account</th>
+                  <th>Posts</th>
+                  <th>Gemiddelde interacties per post</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(state.account_rows || []).map((row) => (
+                  <tr key={`avg-${row.role}-${row.username}`}>
+                    <td>
+                      <strong>{row.role === "own" ? `${client.name} (eigen)` : row.display_name}</strong>
+                    </td>
+                    <td>{row.posts_in_period == null ? "–" : fmt(row.posts_in_period)}</td>
+                    <td>{row.interaction_avg == null ? "–" : fmtAvg(row.interaction_avg)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <BarChart
+            title="Gemiddelde interacties per post"
+            hint={state.period_label ? `Zelfde periode: ${state.period_label}` : "Zelfde periode voor klant en concurrenten."}
+            rows={(state.account_rows || []).map((row) => ({
+              label: row.role === "own" ? `${client.name} (eigen)` : row.display_name,
+              value: row.interaction_avg == null ? null : Number(row.interaction_avg),
+            }))}
+          />
         </div>
 
         <div className="table-wrap">
@@ -1118,7 +1070,7 @@ function WeeklyPlanEditor({ plan, busy, onSave }) {
           <input
             value={responsibleName}
             onChange={(e) => setResponsibleName(e.target.value)}
-            placeholder="bijv. Jet of Mo"
+            placeholder="naam van de verantwoordelijke"
           />
         </label>
       </div>

@@ -69,8 +69,11 @@ button {
   position: sticky;
   top: 0;
   align-self: start;
+  height: 100vh;
   max-height: 100vh;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
   padding: 1.5rem 2rem 2rem;
   background: $sidebar;
   color: $text;
@@ -140,6 +143,30 @@ button {
   flex-direction: column;
   gap: 0.5rem;
   margin-top: 1rem;
+  flex: 1;
+}
+
+.theme-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem;
+  margin-top: auto;
+  padding-top: 1rem;
+
+  button {
+    border: 1px solid rgba(242, 240, 236, 0.25);
+    background: transparent;
+    color: #f2f0ec;
+    border-radius: 999px;
+    min-height: 36px;
+    font-weight: 700;
+  }
+
+  button.is-on {
+    background: #b87844;
+    border-color: #b87844;
+    color: #fff;
+  }
 }
 
 .nav-button,
@@ -2387,7 +2414,11 @@ a.button.secondary {
 
   .menu-toggle {
     display: inline-flex;
-    margin: 0.75rem 0.75rem 0;
+    position: fixed;
+    z-index: 30;
+    top: 0.6rem;
+    right: 0.6rem;
+    margin: 0;
   }
 
   .sidebar {
@@ -2458,5 +2489,210 @@ a.button.secondary {
 @media (max-width: 520px) {
   .account-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+.panel:has(.posts-page),
+.panel:has(.comparison-page),
+.panel:has(.reports-page) {
+  max-width: 1180px;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.stat-tile {
+  background: #fff;
+  border: 1px solid #cdc5b4;
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+
+  span {
+    display: block;
+    font-size: 0.85rem;
+  }
+
+  strong {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 1.45rem;
+  }
+}
+
+body:not(.theme-light) .stat-tile {
+  background: #232e3b;
+  border-color: rgba(242, 240, 236, 0.12);
+  color: #f2f0ec;
+}
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+
+.chart-card svg {
+  width: 100%;
+  height: auto;
+}
+
+.bar-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.bar-row {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr auto;
+  gap: 0.55rem;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  padding: 0;
+  min-height: 32px;
+}
+
+button.bar-row {
+  cursor: pointer;
+}
+
+.bar-track {
+  display: block;
+  height: 12px;
+  border-radius: 999px;
+  background: #cdc5b4;
+  overflow: hidden;
+}
+
+.bar-fill {
+  display: block;
+  height: 100%;
+  background: #b87844;
+  border-radius: 999px;
+}
+
+@media (max-width: 800px) {
+  .stat-grid,
+  .chart-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .bar-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .bar-track {
+    grid-column: 1 / -1;
+  }
+}
+
+body.theme-light {
+  background: #e8e2d8;
+  color: #101c2c;
+
+  .main {
+    background: #e8e2d8;
+  }
+
+  .panel {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    color: #101c2c;
+  }
+
+  .card,
+  .table-wrap,
+  table,
+  .banner {
+    background: #fff;
+    color: #101c2c;
+    border-color: #cdc5b4;
+  }
+
+  th,
+  td {
+    color: #101c2c;
+    border-color: #cdc5b4;
+  }
+
+  th {
+    background: #cdc5b4;
+  }
+
+  tr:hover td,
+  tr.is-focused td,
+  tr.is-focused td button.linkish,
+  tr:hover td button.linkish {
+    color: #101c2c;
+    background: #f3efe6;
+  }
+
+  .main button.linkish,
+  .main button.linkish:hover,
+  .main a:not(.primary):not(.secondary) {
+    color: #101c2c;
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
+  }
+
+  .hint,
+  .muted {
+    color: #4a453c;
+  }
+
+  .sidebar,
+  .sidebar .hint,
+  .sidebar .muted,
+  .sidebar a {
+    color: #f2f0ec;
+  }
+
+  .sidebar .hint,
+  .sidebar .muted {
+    color: rgba(242, 240, 236, 0.72);
+  }
+
+  h1,
+  .rro-page-title,
+  h2,
+  h3,
+  h4,
+  strong {
+    color: #101c2c;
+  }
+
+  input,
+  select,
+  textarea {
+    background: #fff;
+    color: #101c2c;
+    border-color: #cdc5b4;
+  }
+
+  .secondary,
+  .chip {
+    background: #cdc5b4;
+    color: #101c2c;
+    border-color: #cdc5b4;
+  }
+
+  .chip.is-on,
+  .primary {
+    background: #b87844;
+    color: #fff;
+    border-color: #b87844;
+  }
+
+  .sidebar {
+    background: #101c2c;
+    color: #f2f0ec;
   }
 }

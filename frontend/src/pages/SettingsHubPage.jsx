@@ -18,10 +18,6 @@ export default function SettingsHubPage({
   onOpenTechAdmin,
   onOpenClients,
 }) {
-  const role = session?.role || "viewer";
-  const isAdmin = role === "admin";
-  const isEditor = role === "editor" || isAdmin;
-  const isViewer = role === "viewer";
   const allowedTabs = new Set(["home", "legend", "prompts", "planning"]);
   const [tab, setTab] = useState(allowedTabs.has(initialTab) ? initialTab : "home");
 
@@ -34,29 +30,12 @@ export default function SettingsHubPage({
     onTabChange?.(next);
   }
 
-  if (isViewer) {
-    return (
-      <div className="stack">
-        <p className="banner">
-          Als gewone gebruiker bekijk je vooral rapporten en berichten. Instellingen en klantprompts
-          wijzigen mag alleen een editor (Jet/Mo) of beheerder.
-        </p>
-        {!session?.role_enforced ? (
-          <p className="hint">{session?.note_nl}</p>
-        ) : null}
-      </div>
-    );
-  }
-
   return (
     <div className="stack">
       <p className="banner">
-        <strong>Wie hoort hier?</strong> Jet en Mo (editors) openen{" "}
-        <strong>Prompts</strong> voor de klantprompts van de geselecteerde klant, en{" "}
-        <strong>Klant inrichten</strong> voor doelen, strategie, links en concurrenten. Algemene
-        AI-prompts blijven bij <strong>Technisch beheer → Prompts</strong> (alleen beheerder).
+        Klantprompts horen bij de geselecteerde klant. Algemene AI-prompts, planning en back-ups
+        staan bij <strong>Technisch beheer</strong>.
       </p>
-      {!session?.role_enforced ? <p className="hint">{session?.note_nl}</p> : null}
 
       <div className="subnav-tabs" role="tablist" aria-label="Instellingen">
         <button
@@ -102,7 +81,7 @@ export default function SettingsHubPage({
       {tab === "home" ? (
         <div className="stack">
           <section className="card stack">
-            <h3 style={{ marginTop: 0 }}>Voor editors (Jet &amp; Mo)</h3>
+            <h3 style={{ marginTop: 0 }}>Klant en prompts</h3>
             <p className="hint">
               Wat je hier doet: klantprompts bekijken en aanpassen, klantgegevens bijwerken, Meta
               koppelen, en de legenda per klant beheren.
@@ -111,7 +90,7 @@ export default function SettingsHubPage({
               <button
                 className="primary"
                 type="button"
-                disabled={!isEditor || !client}
+                disabled={!client}
                 onClick={() => selectTab("prompts")}
               >
                 {client ? `Prompts · ${client.name}` : "Prompts"}
@@ -119,7 +98,7 @@ export default function SettingsHubPage({
               <button
                 className="secondary"
                 type="button"
-                disabled={!isEditor}
+                disabled={false}
                 onClick={() => onOpenClientSetup?.(client || null)}
               >
                 {client ? `Klant inrichten · ${client.name}` : "Klant inrichten"}
@@ -160,19 +139,11 @@ export default function SettingsHubPage({
                 <strong>Socialmediaberichten / Resultaten / Rapporten</strong> — dagelijks werk in
                 het menu links.
               </li>
-              {isAdmin ? (
-                <li>
-                  <strong>Technisch beheer → Prompts</strong> — algemene AI-prompts voor alle
-                  klanten (alleen beheerder).
-                </li>
-              ) : (
-                <li>
-                  <strong>Technisch beheer</strong> — niet zichtbaar voor editors; algemene prompts
-                  vraagt u aan een beheerder.
-                </li>
-              )}
+              <li>
+                <strong>Technisch beheer → Prompts</strong> — algemene AI-prompts voor alle klanten.
+              </li>
             </ul>
-            {isAdmin && onOpenTechAdmin ? (
+            {onOpenTechAdmin ? (
               <div className="row-actions">
                 <button className="secondary" type="button" onClick={() => onOpenTechAdmin()}>
                   Ga naar Technisch beheer
@@ -193,7 +164,7 @@ export default function SettingsHubPage({
           <ClientPromptsPanel
             key={`settings-prompts-${client?.id || "none"}`}
             client={client}
-            canEdit={isEditor}
+            canEdit
             onNotice={onNotice}
             onError={onError}
           />

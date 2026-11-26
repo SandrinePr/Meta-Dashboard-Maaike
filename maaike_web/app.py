@@ -82,6 +82,7 @@ from maaike.repository import (
     list_hooks,
     list_pillars,
     list_posts,
+    load_page_secret,
     rename_client,
     save_editorial,
     update_format,
@@ -111,20 +112,14 @@ _PROCESS_STARTED_AT = datetime.now(tz=timezone.utc).isoformat()
 
 
 class _HamsterAccessMiddleware(BaseHTTPMiddleware):
-    """HTTP Basic Auth with admin / editor / viewer roles + API path guards.
+    """Resolve who opened the app. Feature use is the same for every identity.
 
     /api/health stays open for Render. Meta OAuth callback stays open so Facebook
-    can redirect back. Technical admin APIs return 403 for non-admins even when
-    the caller authenticated as editor/viewer.
+    can redirect back.
     """
 
     async def dispatch(self, request: Request, call_next):
-        from maaike_web.access import (
-            PUBLIC_PATHS,
-            path_requires_admin,
-            path_requires_editor_or_admin,
-            resolve_identity,
-        )
+        from maaike_web.access import PUBLIC_PATHS, resolve_identity
 
         resolved = resolve_identity(request)
         if isinstance(resolved, Response):
@@ -132,42 +127,9 @@ class _HamsterAccessMiddleware(BaseHTTPMiddleware):
         request.state.identity = resolved
 
         path = request.url.path
-        method = request.method.upper()
         cleaned_public = path.rstrip("/") or "/"
         if cleaned_public in PUBLIC_PATHS or cleaned_public == "/api/health":
             return await call_next(request)
-        if path_requires_admin(path) and resolved.role != "admin":
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "detail": (
-                        "Dit scherm of deze actie is alleen voor technisch beheer. "
-                        "Vraag een beheerder om hulp."
-                    )
-                },
-            )
-        if resolved.role == "viewer" and path_requires_editor_or_admin(path, method):
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "detail": (
-                        "Je hebt geen rechten voor deze actie. "
-                        "Vraag een editor of beheerder."
-                    )
-                },
-            )
-        # Client delete is admin-only even for editors.
-        cleaned = path.rstrip("/")
-        if (
-            method == "DELETE"
-            and cleaned.startswith("/api/clients/")
-            and cleaned.count("/") == 3
-            and resolved.role != "admin"
-        ):
-            return JSONResponse(
-                status_code=403,
-                content={"detail": "Klanten verwijderen mag alleen technisch beheer."},
-            )
         return await call_next(request)
 
 
@@ -286,7 +248,7 @@ def create_app() -> FastAPI:
         if isinstance(exc, HTTPException):
             detail = exc.detail if isinstance(exc.detail, str) else "De aanvraag is mislukt."
             return JSONResponse(status_code=exc.status_code, content={"detail": detail})
-        return JSONResponse(status_code=500, content={"detail": "Er ging iets mis. Probeer het opnieuw of vraag een beheerder."})
+        return JSONResponse(status_code=500, content={"detail": "Er ging iets mis. Probeer het opnieuw."})
 
     @app.get("/api/session")
     def session_info(request: Request) -> dict:
@@ -1121,24 +1083,46 @@ def create_app() -> FastAPI:
     def read_clients() -> dict:
         with transaction() as conn:
             clients = list_clients(conn)
+            payload = []
+            for client in clients:
+                item = _client_out(client)
+                if item["connected"] and load_page_secret(conn, client.client_id) is None:
+                    item["connected"] = False
+                    item["status_label"] = (
+                        "Gekoppeld zonder toestemming om posts van concurrenten op te halen"
+                    )
+                payload.append(item)
         return {
             "database_name": database_path().name,
-            "clients": [_client_out(client) for client in clients],
+            "clients": payload,
         }
 
     @app.post("/api/clients", status_code=201)
     def create_client(body: NameBody) -> dict:
+        from maaike.repository import DuplicateClientName
+
         try:
             with transaction() as conn:
                 client_id = add_client(conn, body.name)
                 client = get_client(conn, client_id)
                 persist = _safe_persist_push(conn)
+                already = False
+        except DuplicateClientName:
+            with transaction() as conn:
+                wanted = body.name.strip().casefold()
+                client = next(
+                    (item for item in list_clients(conn) if item.name.strip().casefold() == wanted),
+                    None,
+                )
+                persist = {"pushed": False, "durable": True, "reason": "already_exists"}
+                already = True
         except ClientInputError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if client is None:
             raise HTTPException(status_code=400, detail="De klant kon niet worden toegevoegd.")
         payload = _client_out(client)
         payload["persist"] = persist
+        payload["already_exists"] = already
         return payload
 
     @app.patch("/api/clients/{client_id}")
@@ -2443,7 +2427,7 @@ def create_app() -> FastAPI:
         if not info.ready or not info.redirect_uri:
             raise HTTPException(
                 status_code=400,
-                detail="Meta-login is nog niet ingesteld. Vraag een beheerder om de configuratie te controleren.",
+                detail="Meta-login is nog niet ingesteld. Controleer de configuratie.",
             )
         state = arm_login(session_id, client.client_id, info.redirect_uri, popup=popup)
         try:
@@ -2878,7 +2862,7 @@ def _meta_out(client: Client, settings: WebSettings) -> dict:
     user_notes: list[str] = []
     if not info.ready:
         user_notes.append(
-            "Meta-login is nog niet klaar. Vraag een beheerder om de app-instellingen te controleren."
+            "Meta-login is nog niet klaar. Controleer de app-instellingen."
         )
     elif connected:
         user_notes.append("Je kunt de koppeling controleren of opnieuw koppelen.")
@@ -2901,7 +2885,7 @@ def _meta_out(client: Client, settings: WebSettings) -> dict:
         {
             "ready": info.ready,
             "missing": [
-                "Meta-login is nog niet ingesteld. Vraag een beheerder om hulp."
+                "Meta-login is nog niet ingesteld."
             ]
             if info.missing
             else [],
@@ -2915,14 +2899,8 @@ def _meta_out(client: Client, settings: WebSettings) -> dict:
 
 
 def _attach_meta_admin(payload: dict, request: Request | None = None) -> dict:
-    """Add technical Meta notes only for admin callers."""
-    from maaike_web.access import identity_from_request
-
+    """Add technical Meta notes for everyone who can open the app."""
     if request is None:
-        return payload
-    identity = identity_from_request(request)
-    if identity.role != "admin":
-        payload.pop("admin", None)
         return payload
     settings = load_settings()
     info = readiness(settings.oauth_redirect_uri)

@@ -423,10 +423,9 @@ export default function ReportsPage({
           <section className="card stack">
             <div className="search-form-header">
               <div>
-                <h3 style={{ margin: 0 }}>Rapporten voor {client.name}</h3>
+                <h3 style={{ margin: 0 }}>Volgende stap</h3>
                 <p className="hint" style={{ margin: "0.25rem 0 0" }}>
-                  Maak een nieuw maandrapport of open een eerder opgeslagen rapport. Een opgeslagen
-                  rapport openen kost nooit AI-tegoed.
+                  Maak het klantrapport of open een eerder rapport.
                 </p>
               </div>
               <div className="row-actions wrap">
@@ -436,7 +435,7 @@ export default function ReportsPage({
                     type="button"
                     onClick={() => setShowBuilder((v) => !v)}
                   >
-                    {showBuilder ? "Verberg rapportmaker" : "Nieuw rapport maken"}
+                    {showBuilder ? "Sluit rapportmaker" : "Maak klantrapport"}
                   </button>
                 ) : null}
                 {canTechAdmin && onOpenSettings ? (
@@ -451,81 +450,20 @@ export default function ReportsPage({
               </div>
             </div>
 
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-                gap: "0.85rem",
-              }}
-            >
-              <div
-                style={{
-                  background: "#1a2533",
-                  border: "1px solid rgba(242, 240, 236, 0.14)",
-                  borderRadius: "10px",
-                  padding: "0.85rem 0.95rem",
-                }}
-              >
-                <strong style={{ display: "block", marginBottom: "0.3rem" }}>
-                  1. Welk rapport kun je maken?
-                </strong>
-                <p style={{ margin: 0, fontSize: "0.93rem", lineHeight: 1.5 }}>
-                  Een <strong>Klantrapport</strong> voor {client.name} óf een zelfstandig{" "}
-                  <strong>Algemeen trendrapport</strong> met trends per socialmediakanaal.{" "}
-                  {trendPlan?.production_schedule_active
-                    ? `Productieplanning staat aan. Volgende run: ${trendPlan.next_run?.label_nl || "1e van de maand om 06:00"} .`
-                    : "De maandplanning draait nu alleen in simulatie. Er wordt nog geen echt trendrapport automatisch aangemaakt."}
-                </p>
-              </div>
-
-              <div
-                style={{
-                  background: "#1a2533",
-                  border: "1px solid rgba(242, 240, 236, 0.14)",
-                  borderRadius: "10px",
-                  padding: "0.85rem 0.95rem",
-                }}
-              >
-                <strong style={{ display: "block", marginBottom: "0.3rem" }}>
-                  2. Welke gegevens gebruikt HAMSTER?
-                </strong>
-                <p style={{ margin: 0, fontSize: "0.93rem", lineHeight: 1.5 }}>
-                  Klantstrategie, eigen berichten (vaste periode 21e t/m 20e vergeleken met de maand
-                  ervoor), alle kalenderjaarberichten t/m de einddatum voor formats en patronen,
-                  berichtencontrole, Figma-planning en het algemene trendrapport van dezelfde maand.
-                </p>
-              </div>
-
-              <div
-                style={{
-                  background: "#1a2533",
-                  border: "1px solid rgba(242, 240, 236, 0.14)",
-                  borderRadius: "10px",
-                  padding: "0.85rem 0.95rem",
-                }}
-              >
-                <strong style={{ display: "block", marginBottom: "0.3rem" }}>
-                  3. Wat moet je zelf nog doen?
-                </strong>
-                <p style={{ margin: 0, fontSize: "0.93rem", lineHeight: 1.5 }}>
-                  Controleer hieronder of de verplichte bronnen op <em>Klaar</em> staan, voeg zo
-                  nodig eigen afspraken toe en keur na afloop het conceptrapport goed.
-                  {awaitingReviewCount > 0 ? (
-                    <>
-                      {" "}
-                      Er {awaitingReviewCount === 1 ? "staat nu 1 conceptrapport" : `staan nu ${awaitingReviewCount} conceptrapporten`}{" "}
-                      klaar voor controle.
-                    </>
-                  ) : null}
-                </p>
-              </div>
-            </div>
+            {awaitingReviewCount > 0 ? (
+              <p className="banner" style={{ margin: 0 }}>
+                {awaitingReviewCount === 1
+                  ? "Er staat 1 rapport klaar om goed te keuren."
+                  : `Er staan ${awaitingReviewCount} rapporten klaar om goed te keuren.`}
+              </p>
+            ) : null}
           </section>
 
-          {canEdit && showBuilder ? (
+          {showBuilder ? (
             <NewAnalysisWizard
               key={`wizard-${client.id}`}
               client={client}
+              canAct={canEdit}
               initialMode={builderMode}
               isCollapsible={clientGroups.length > 0 || trendGroups.length > 0}
               onClose={() => setShowBuilder(false)}
@@ -548,8 +486,7 @@ export default function ReportsPage({
           ) : null}
           {!canEdit ? (
             <p className="hint">
-              Je bekijkt rapporten als {role === "viewer" ? "gewone gebruiker" : "lezer"}. Nieuwe
-              rapporten maken of beheerinstellingen openen mag een editor of beheerder.
+              Rapporten maken is nog niet beschikbaar voor deze weergave.
             </p>
           ) : null}
 
@@ -1972,16 +1909,7 @@ function ReportDetail({
       );
       return;
     }
-    let name = String(editorName || "").trim();
-    if (!name) {
-      name = window.prompt("Jouw naam (wordt bij deze goedkeuring bewaard):") || "";
-      name = name.trim();
-      if (!name) {
-        setError("Vul je naam in om het rapport goed te keuren.");
-        return;
-      }
-      setEditorName(name);
-    }
+    const name = "HAMSTER";
     const ok = window.confirm(
       `Rapport #${report.id} goedkeuren?\n\nHiermee zet je de status op Goedgekeurd.`
     );
@@ -2001,7 +1929,7 @@ function ReportDetail({
       .then(async (payload) => {
         setDetail(payload);
         await reloadList();
-        setNotice(`Rapport #${report.id} is goedgekeurd door ${name}.`);
+        setNotice(`Rapport #${report.id} is goedgekeurd.`);
       })
       .catch((exc) => setError(exc.message))
       .finally(() => setBusy(false));
@@ -2096,9 +2024,6 @@ function ReportDetail({
               {month}
               <span aria-hidden="true"> · </span>
               <span className={`report-status-badge is-${badge.code}`}>{statusShort}</span>
-              {review.is_approved && (review.reviewer_name || editorName)
-                ? ` · goedgekeurd door ${review.reviewer_name || editorName}`
-                : ""}
             </p>
             <p className="hint report-hero-actions-hint">
               {badge.code === "generation_failed" || report.status === "failed" ? (

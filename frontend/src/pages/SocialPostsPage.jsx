@@ -4,9 +4,60 @@ import PerformancePage from "./PerformancePage.jsx";
 import PostsPage from "./PostsPage.jsx";
 
 const TABS = [
-  ["all_posts", "Alle berichten"],
+  ["all_posts", "Posts"],
   ["performance", "Resultaten"],
 ];
+
+function ClientPlanningLinks({ clientId, canEdit, onOpenSetup }) {
+  const [links, setLinks] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      api(`/api/clients/${clientId}/strategy`).catch(() => null),
+      api(`/api/clients/${clientId}/figma-planning`).catch(() => null),
+    ])
+      .then(([strategy, figma]) => {
+        if (cancelled) return;
+        const fields = strategy?.strategy_fields || {};
+        const connection = figma?.connection || {};
+        setLinks({
+          canva: String(fields.canva_strategy_url || fields.canva_url || "").trim(),
+          figma: String(connection.source_url || "").trim(),
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setLinks({ canva: "", figma: "" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [clientId]);
+  if (!links) return null;
+  if (!links.canva && !links.figma && !canEdit) return null;
+  return (
+    <section className="card row-actions wrap" aria-label="Planning en ontwerpen">
+      <strong>Planning & ontwerpen</strong>
+      {links.figma ? (
+        <a className="secondary" href={links.figma} target="_blank" rel="noreferrer">
+          Open Figma-planning
+        </a>
+      ) : canEdit ? (
+        <button className="secondary" type="button" onClick={onOpenSetup}>
+          Figma-link toevoegen
+        </button>
+      ) : null}
+      {links.canva ? (
+        <a className="secondary" href={links.canva} target="_blank" rel="noreferrer">
+          Open Canva-ontwerp
+        </a>
+      ) : canEdit ? (
+        <button className="secondary" type="button" onClick={onOpenSetup}>
+          Canva-link toevoegen
+        </button>
+      ) : null}
+    </section>
+  );
+}
 
 function monthBounds(yyyyMm) {
   if (!yyyyMm || !/^\d{4}-\d{2}$/.test(yyyyMm)) return { from: "", to: "" };
@@ -66,8 +117,13 @@ export default function SocialPostsPage({
   onSynced,
   periodSelection = "",
   onPeriodChange,
+  postDrill = null,
+  onDrill,
 }) {
   const [tab, setTab] = useState(initialTab);
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
   const [period, setPeriod] = useState(periodSelection || "");
   const [skipPeriodFilter, setSkipPeriodFilter] = useState(false);
   const [channelStatus, setChannelStatus] = useState(null);
@@ -349,8 +405,7 @@ export default function SocialPostsPage({
             <div className="stack" style={{ gap: "0.35rem" }}>
               <strong style={{ fontSize: "1.05rem" }}>Status voor {client.name} niet beschikbaar</strong>
               <p style={{ margin: 0 }}>
-                De koppelingsstatus kon niet worden geladen. Vernieuw de pagina of vraag een editor om
-                hulp.
+                De koppelingsstatus kon niet worden geladen. Vernieuw de pagina.
               </p>
             </div>
           ) : channelStatus ? (
@@ -411,13 +466,10 @@ export default function SocialPostsPage({
         </section>
       ) : null}
 
-      {topNotice ? <p className="banner" style={{ margin: 0 }}>{topNotice}</p> : null}
-      {topError ? <p className="banner error" style={{ margin: 0 }}>{topError}</p> : null}
       {adminDetailsCombined && canEdit ? (
         <details>
           <summary className="hint" style={{ cursor: "pointer" }}>
-            Technische foutdetails (alleen voor beheer)
-          </summary>
+            Technische foutdetails          </summary>
           <pre
             className="hint"
             style={{
@@ -435,26 +487,27 @@ export default function SocialPostsPage({
         </details>
       ) : null}
 
-      {/* Subnavigatie: Alle berichten & Resultaten */}
-      <div className="subnav-tabs" role="tablist" aria-label="Socialmediaberichten">
-        {TABS.map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            aria-selected={tab === id}
-            className={tab === id ? "subnav-tab is-active" : "subnav-tab"}
-            onClick={() => selectTab(id)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      {hideTopStatus ? null : (
+        <div className="subnav-tabs" role="tablist" aria-label="Posts en resultaten">
+          {TABS.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={tab === id}
+              className={tab === id ? "subnav-tab is-active" : "subnav-tab"}
+              onClick={() => selectTab(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {tab === "all_posts" ? (
         <>
           {/* Wekelijkse controle (punt 19) */}
-          <section className="card stack logs-weekly-card" style={{ gap: "0.85rem" }}>
+          {false ? <section className="card stack logs-weekly-card" style={{ gap: "0.85rem" }}>
             <div
               className="row-actions wrap"
               style={{ justifyContent: "space-between", alignItems: "flex-start" }}
@@ -505,8 +558,7 @@ export default function SocialPostsPage({
                 </div>
               ) : (
                 <p className="hint" style={{ margin: 0 }}>
-                  Alleen lezen ({role === "viewer" ? "gewone gebruiker" : role}): afronden mag een
-                  editor.
+                  De wekelijkse controle kan nu niet worden afgerond.
                 </p>
               )}
             </div>
@@ -712,12 +764,12 @@ export default function SocialPostsPage({
                     />
                   </label>
                   <label>
-                    Verantwoordelijke (optioneel, bijv. Jet of Mo)
+                    Verantwoordelijke (optioneel)
                     <input
                       type="text"
                       value={weeklyDraft?.responsible_name || ""}
                       disabled={weeklyBusy || !weeklyDraft}
-                      placeholder="bijv. Jet"
+                      placeholder="naam"
                       onChange={(e) =>
                         setWeeklyDraft((cur) =>
                           cur ? { ...cur, responsible_name: e.target.value } : cur,
@@ -745,16 +797,25 @@ export default function SocialPostsPage({
                 </div>
               </form>
             ) : null}
-          </section>
+          </section> : null}
 
+          <ClientPlanningLinks clientId={client.id} canEdit={canEdit} onOpenSetup={onOpenConnect} />
           <PostsPage
-            key={`all-posts-${client.id}`}
+            key={`all-posts-${client.id}-${postDrill?.token || 0}`}
             client={client}
+            canEdit={canEdit}
+            onFetchPosts={canEdit ? runPrimaryFetch : undefined}
+            fetchingPosts={fetchingTop}
+            fetchError={topError}
+            fetchNotice={topNotice}
             focusPostId={internalFocus.id ?? focusPostId}
             focusSeq={internalFocus.seq}
             onClearFocus={onClearFocus}
-            initialDateFrom={logsFrom}
-            initialDateTo={logsTo}
+            initialDateFrom={postDrill?.from || logsFrom}
+            initialDateTo={postDrill?.to || logsTo}
+            initialPlatform={postDrill?.platform || ""}
+            initialQuery={postDrill?.q || ""}
+            initialContentSoort={postDrill?.contentSoort || ""}
             reloadToken={postsReloadToken}
             missingFilterSignal={missingFilterSignal}
             onOpenConnect={onOpenConnect}
@@ -783,6 +844,7 @@ export default function SocialPostsPage({
             selectTab("all_posts", { fromPost: true });
             onOpenPost?.(postId);
           }}
+          onOpenFiltered={(drill) => onDrill?.(drill)}
           onSynced={async () => {
             await loadChannelAndWeekly(client.id);
             await onSynced?.();

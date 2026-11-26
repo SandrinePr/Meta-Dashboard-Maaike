@@ -355,6 +355,9 @@ def build_post_input_snapshot(conn, client_id: int, post_id: int) -> dict[str, A
         "pending_questions": strategy.get("pending_questions"),
         "start_answer_keys": list((strategy.get("start_answers") or {}).keys()),
         "has_start_answers": bool(strategy.get("start_answers")),
+        "feedback_post_instruction": str(
+            (strategy.get("start_answers") or {}).get("feedback_post_instruction") or ""
+        ).strip(),
     }
     if not strategy_summary["has_start_answers"]:
         context_gaps.append("Klantstrategie/startantwoorden ontbreken.")
@@ -503,6 +506,11 @@ def run_claude_post_analysis(conn, client_id: int, post_id: int) -> dict[str, An
         "Antwoord uitsluitend als JSON met keys: insight, action, rating, notes.\n\n"
         + json.dumps(snapshot, ensure_ascii=False)
     )
+    instruction = str(
+        (snapshot.get("strategy_summary") or {}).get("feedback_post_instruction") or ""
+    ).strip()
+    if instruction:
+        user_text = f"Klantinstructie voor feedback op posts:\n{instruction}\n\n" + user_text
     started = _now()
     try:
         response = requests.post(

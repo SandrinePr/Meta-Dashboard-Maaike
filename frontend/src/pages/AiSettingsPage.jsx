@@ -110,7 +110,7 @@ export default function AiSettingsPage({ onOpenPrompts }) {
         <p className={gemini.configured ? "banner" : "banner error"}>
           {gemini.configured
             ? `Gekoppeld · model ${gemini.model} · host ${gemini.base_host || "—"}`
-            : "Nog niet volledig ingesteld (AI_BASE_URL / AI_API_KEY / AI_MODEL). Vraag een beheerder om de serverinstellingen te controleren."}
+            : "Nog niet volledig ingesteld (AI_BASE_URL / AI_API_KEY / AI_MODEL). Controleer de serverinstellingen."}
         </p>
         {(gemini.used_for || []).length ? (
           <ul className="plain-list">

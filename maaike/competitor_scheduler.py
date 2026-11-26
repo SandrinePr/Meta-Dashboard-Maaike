@@ -292,6 +292,10 @@ def refresh_client_competitors(
         "Koppel eerst het Facebook- en Instagram-account van deze klant om berichten van concurrenten op te halen."
     )
     secret = load_page_secret(conn, client_id)
+    if is_verified_link(client) and (secret is None or not secret[1] or not secret[2]):
+        raise ValueError(
+            "Het account staat als gekoppeld, maar de toestemming om posts van concurrenten op te halen ontbreekt. Koppel Facebook en Instagram opnieuw."
+        )
     if not is_verified_link(client) or secret is None or not secret[1] or not secret[2]:
         raise ValueError(meta_missing_msg)
 

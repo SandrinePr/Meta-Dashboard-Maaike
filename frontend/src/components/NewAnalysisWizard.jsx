@@ -55,6 +55,7 @@ export default function NewAnalysisWizard({
   onOpenFigmaPlanning,
   onOpenSocialPosts,
   onOpenSettings,
+  canAct = true,
 }) {
   const def = defaultReportMonth();
   const [mode, setMode] = useState(initialMode || "client");
@@ -288,8 +289,8 @@ export default function NewAnalysisWizard({
             {mode === "trend" ? <span className="pill ok">Gekozen</span> : null}
           </div>
           <p className="hint" style={{ margin: "0.35rem 0 0" }}>
-            Zelfstandig rapport met trends per socialmediakanaal voor alle klanten. Wordt op de 1e
-            van iedere maand automatisch aangemaakt.
+            Zelfstandig rapport met trends per socialmediakanaal voor alle klanten. Een klantrapport
+            van dezelfde maand start pas als dit rapport echt klaarstaat, niet als simulatie.
           </p>
         </button>
       </div>
@@ -475,7 +476,7 @@ export default function NewAnalysisWizard({
                       </p>
                     </div>
 
-                    {src.cta_label && !isReady ? (
+                    {canAct && src.cta_label && !isReady ? (
                       <div style={{ alignSelf: "center" }}>
                         <button
                           className={src.required ? "primary" : "secondary"}
@@ -498,7 +499,7 @@ export default function NewAnalysisWizard({
             <textarea
               rows={2}
               value={userNotes}
-              disabled={Boolean(busy)}
+              disabled={Boolean(busy) || !canAct}
               onChange={(e) => setUserNotes(e.target.value)}
               placeholder="Bijvoorbeeld: extra focus op vacatures, lopende campagne of afgesproken wijziging."
             />
@@ -510,7 +511,7 @@ export default function NewAnalysisWizard({
               <strong>Je kunt de analyse nog niet starten.</strong>{" "}
               {sourcesOverview.summary_nl ||
                 "Vul eerst de verplichte bronnen aan voordat HAMSTER dit klantrapport kan maken."}
-              {missingRequired.some((s) => (s.id || s.key) === "trend") ? (
+              {canAct && missingRequired.some((s) => (s.id || s.key) === "trend") ? (
                 <div style={{ marginTop: "0.55rem" }}>
                   <button
                     className="primary"
@@ -539,6 +540,7 @@ export default function NewAnalysisWizard({
             </div>
           )}
 
+          {canAct ? (
           <div className="row-actions wrap">
             {aiReady ? (
               <button
@@ -571,6 +573,11 @@ export default function NewAnalysisWizard({
               </button>
             ) : null}
           </div>
+          ) : (
+            <p className="hint" style={{ margin: 0 }}>
+              Starten is nu niet beschikbaar. De bronnen kun je wel lezen.
+            </p>
+          )}
         </div>
       ) : null}
 
@@ -604,9 +611,9 @@ export default function NewAnalysisWizard({
               ))}
             </div>
             <p className="hint" style={{ margin: "0.55rem 0 0" }}>
-              Automatische planning: HAMSTER maakt dit rapport op de <strong>1e van iedere maand</strong>{" "}
-              automatisch aan (tijdzone <code>Europe/Amsterdam</code>) en koppelt het daarna aan elk
-              klantrapport van diezelfde maand.
+              De automatische maandplanning staat uit zolang de productieregel uit staat. Een
+              simulatie telt niet als bron voor een klantrapport. Maak het echte trendrapport;
+              daarna koppelt HAMSTER het aan klantrapporten van die maand.
             </p>
           </div>
 
@@ -629,6 +636,7 @@ export default function NewAnalysisWizard({
             </label>
           )}
 
+          {canAct ? (
           <div className="row-actions wrap">
             {aiReady && !usableTrend ? (
               <button
@@ -653,6 +661,11 @@ export default function NewAnalysisWizard({
                   : "Algemeen trendrapport maken (simulatie zonder AI-kosten)"}
             </button>
           </div>
+          ) : (
+            <p className="hint" style={{ margin: 0 }}>
+              Dit trendrapport maken is nu niet beschikbaar.
+            </p>
+          )}
         </div>
       ) : null}
     </section>

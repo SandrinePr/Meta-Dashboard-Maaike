@@ -142,8 +142,7 @@ export default function NextStepBanner({
     step.action &&
     step.label &&
     !alreadyThere &&
-    !(step.action === "fetch" && role === "viewer") &&
-    !(step.action === "setup" && role === "viewer");
+    true;
 
   return (
     <section className={toneClass} aria-label="Vervolgstap">

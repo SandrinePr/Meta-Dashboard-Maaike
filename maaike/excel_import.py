@@ -496,7 +496,17 @@ def extract_external_id(platform_key: str, url: str | None) -> str | None:
 
 
 def _parse_performance(ws, wsv, *, source_file: str) -> list[ParsedRow]:
-    headers = {str(ws.cell(1, c).value or "").strip(): c for c in range(1, ws.max_column + 1)}
+    raw_headers = {str(ws.cell(1, c).value or "").strip(): c for c in range(1, ws.max_column + 1)}
+    aliases = {
+        "Post-URL": "Post: URL van post",
+        "Contentformat": "Content format",
+        "Contentsoort": "Content soort",
+        "Insight": "Insight: waarom gebeurde dit?",
+        "Actie": "Actie: wat doen we de volgende keer anders?",
+    }
+    headers = {}
+    for name, col in raw_headers.items():
+        headers[aliases.get(name, name)] = col
     required = [
         "Platform",
         "Post: URL van post",
@@ -559,8 +569,14 @@ def _parse_performance(ws, wsv, *, source_file: str) -> list[ParsedRow]:
             metrics[metric_name] = _parse_metric(values.get(excel_name), data_values.get(excel_name))
             if metrics[metric_name].kind == "invalid":
                 issues.append(f"Ongeldige waarde voor {excel_name}: {values.get(excel_name)!r}")
-        format_code = _as_text(values.get("Content format"))
-        content_soort = _as_text(values.get("Content soort"))
+        def blank_mark(value):
+            text = _as_text(value)
+            if text in {"—", "-", "–"}:
+                return None
+            return text
+
+        format_code = blank_mark(values.get("Content format"))
+        content_soort = blank_mark(values.get("Content soort"))
         rows.append(
             ParsedRow(
                 excel_row=r,
@@ -573,7 +589,7 @@ def _parse_performance(ws, wsv, *, source_file: str) -> list[ParsedRow]:
                 permalink_raw=permalink_raw,
                 permalink_norm=permalink_norm,
                 external_id=external_id,
-                contentpijler=_as_text(values.get("Contentpijler")),
+                contentpijler=blank_mark(values.get("Contentpijler")),
                 hook=_as_text(values.get("Hook")),
                 metrics=metrics,
                 rating_text=rating_text,

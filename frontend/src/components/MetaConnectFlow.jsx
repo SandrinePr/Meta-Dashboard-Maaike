@@ -179,9 +179,8 @@ export default function MetaConnectFlow({
         : null}
       {!meta.ready ? (
         <p className="banner warn-soft">
-          Meta-login is nog niet klaar (app-instellingen ontbreken). Vraag een beheerder om de
-          technische Meta-instellingen te controleren. Je kunt wel al de klantnaam en andere
-          gegevens invullen.
+          Meta-login is nog niet klaar (app-instellingen ontbreken). Controleer de technische
+          Meta-instellingen. Je kunt wel al de klantnaam en andere gegevens invullen.
         </p>
       ) : null}
       <div className="row-actions">
